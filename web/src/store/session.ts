@@ -1,7 +1,7 @@
 import { api, ApiError } from "../api.ts";
 import type { Account, Features, Settings, Snippet, Split, User, Workspace } from "../types.ts";
 import { createStore, useStore } from "./createStore.ts";
-import { navigate } from "./route.ts";
+import { getRoute, navigate } from "./route.ts";
 import { toast } from "./toasts.ts";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -144,6 +144,17 @@ export async function updateSettings(patch: Partial<Settings>): Promise<void> {
   }
 }
 
+const viewKey = (account: string | null) => `ss-view:${account ?? "all"}`;
+
+/** Remember the mailbox each account was last looking at. */
+export function rememberView(path: string) {
+  try {
+    localStorage.setItem(viewKey(session.get().accountFilter), path);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function setAccountFilter(id: string | null) {
   session.set({ accountFilter: id });
   try {
@@ -151,6 +162,17 @@ export function setAccountFilter(id: string | null) {
     else localStorage.removeItem("ss-account");
   } catch {
     /* ignore */
+  }
+  // Each account comes back to the mailbox it was last in.
+  const name = getRoute().name;
+  if (name === "mail" || name === "thread" || name === "settings") {
+    let path: string | null = null;
+    try {
+      path = localStorage.getItem(viewKey(id));
+    } catch {
+      /* ignore */
+    }
+    navigate(path && path.startsWith("/") && !path.startsWith("/t/") ? path : "/");
   }
 }
 

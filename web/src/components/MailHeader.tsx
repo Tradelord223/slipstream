@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SEARCH_HINTS } from "../lib/searchHints.ts";
 import { viewTitle } from "../lib/views.ts";
 import { act } from "../store/actions.ts";
 import { useCounts } from "../store/counts.ts";
@@ -7,24 +8,16 @@ import { goView } from "../store/nav.ts";
 import { navigate, type MailView } from "../store/route.ts";
 import { useSession } from "../store/session.ts";
 import { openPalette, ui, useUi } from "../store/ui.ts";
+import { AssistantButton } from "./AssistantButton.tsx";
+import { LabelDot } from "./labels/LabelChip.tsx";
+import { openLabelDialog } from "./labels/LabelDialogs.tsx";
+import { useStore } from "../store/createStore.ts";
+import { labelStore, loadRules, useLabels, useLabelsSupported } from "../store/labels.ts";
 import { Icon } from "./Icon.tsx";
 import { Keys } from "./Keycap.tsx";
 import { MenuButton } from "./PageHeader.tsx";
 import { AddSplitDialog } from "./SplitEditor.tsx";
 
-const HINTS: { token: string; note: string }[] = [
-  { token: "from:", note: "sender" },
-  { token: "to:", note: "recipient" },
-  { token: "has:attachment", note: "with files" },
-  { token: "is:unread", note: "unread" },
-  { token: "is:starred", note: "starred" },
-  { token: "label:", note: "a label" },
-  { token: "before:", note: "2026-10-01" },
-  { token: "after:", note: "2026-09-01" },
-  { token: "newer:7d", note: "last week" },
-  { token: "in:sent", note: "sent mail" },
-  { token: "in:all", note: "everywhere" },
-];
 
 export function MailHeader({ view }: { view: MailView }) {
   const selected = useList((s) => s.selected);
@@ -43,8 +36,15 @@ export function MailHeader({ view }: { view: MailView }) {
         <SearchField view={view} />
       ) : (
         <>
-          {view.kind === "inbox" && splits.length > 0 ? <SplitTabs view={view} /> : <h1 className="view-title">{viewTitle(view, splits)}</h1>}
+          {view.kind === "inbox" && splits.length > 0 ? (
+            <SplitTabs view={view} />
+          ) : view.kind === "label" ? (
+            <LabelHeading name={view.name} />
+          ) : (
+            <h1 className="view-title">{viewTitle(view, splits)}</h1>
+          )}
           <span className="grow" />
+          {view.kind === "label" && <LabelRuleButton name={view.name} />}
           {filter !== "all" && (
             <button className="filter-chip" onClick={clearFilter} aria-label="Clear filter">
               {filter === "unread" ? "Unread only" : "Starred only"}
@@ -56,9 +56,36 @@ export function MailHeader({ view }: { view: MailView }) {
             <span className="search-trigger-label">Search</span>
             <Keys binding="/" />
           </button>
+          <AssistantButton />
         </>
       )}
     </header>
+  );
+}
+
+/** A label's own screen: its colour beside its name. */
+function LabelHeading({ name }: { name: string }) {
+  const color = useLabels().find((l) => l.name.toLowerCase() === name.toLowerCase())?.color;
+  return (
+    <h1 className="view-title label-title">
+      <LabelDot color={color} size={10} />
+      <span className="ellipsis">{name}</span>
+    </h1>
+  );
+}
+
+/** Opens this label's auto-label rule, or offers to make one. */
+function LabelRuleButton({ name }: { name: string }) {
+  const supported = useLabelsSupported();
+  const rule = useStore(labelStore, (s) => s.rules?.find((r) => r.label.toLowerCase() === name.toLowerCase()));
+  useEffect(() => {
+    if (supported && labelStore.get().rules === null) void loadRules();
+  }, [supported]);
+  if (!supported) return null;
+  return (
+    <button className="btn btn-sm btn-quiet label-rule-btn" onClick={() => openLabelDialog({ kind: "rule", rule, label: name })}>
+      <Icon name="zap" size={14} /> {rule ? "Auto-label rule" : "Auto-label…"}
+    </button>
   );
 }
 
@@ -193,7 +220,7 @@ function SearchField({ view }: { view: MailView }) {
         <div className="search-hints" aria-label="Search operators">
           <div className="search-hints-title">Narrow it down</div>
           <div className="hint-list">
-            {HINTS.map((h) => (
+            {SEARCH_HINTS.map((h) => (
               <button key={h.token} type="button" className="hint" onMouseDown={(e) => e.preventDefault()} onClick={() => addToken(h.token)}>
                 <code>{h.token}</code>
                 <span>{h.note}</span>

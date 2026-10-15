@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { AssistantButton } from "../components/AssistantButton.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { Link } from "../components/Link.tsx";
 import { useViewport } from "../lib/hooks.ts";
@@ -8,6 +9,7 @@ import { AccountsSettings } from "./settings/AccountsSettings.tsx";
 import { AgentsSettings } from "./settings/AgentsSettings.tsx";
 import { ConnectSettings } from "./settings/ConnectSettings.tsx";
 import { AiSettings } from "./settings/AiSettings.tsx";
+import { LabelsSettings } from "./settings/LabelsSettings.tsx";
 import { GeneralSettings } from "./settings/GeneralSettings.tsx";
 import { ShortcutsSettings } from "./settings/ShortcutsSettings.tsx";
 import { SnippetsSettings } from "./settings/SnippetsSettings.tsx";
@@ -18,6 +20,7 @@ const SECTIONS = [
   { id: "general", label: "General" },
   { id: "accounts", label: "Accounts" },
   { id: "splits", label: "Splits" },
+  { id: "labels", label: "Labels" },
   { id: "snippets", label: "Snippets" },
   { id: "shortcuts", label: "Shortcuts" },
   { id: "team", label: "Team" },
@@ -47,6 +50,8 @@ export function SettingsView({ section }: { section: string }) {
           </button>
         )}
         <h1 className="view-title">Settings</h1>
+        <span className="grow" />
+        <AssistantButton />
       </header>
       <div className="settings-body">
         <nav className="settings-nav" aria-label="Settings sections" ref={nav}>
@@ -61,6 +66,7 @@ export function SettingsView({ section }: { section: string }) {
           {current.id === "general" && <GeneralSettings />}
           {current.id === "accounts" && <AccountsSettings />}
           {current.id === "splits" && <SplitsSettings />}
+          {current.id === "labels" && <LabelsSettings />}
           {current.id === "snippets" && <SnippetsSettings />}
           {current.id === "shortcuts" && <ShortcutsSettings />}
           {current.id === "team" && <TeamSettings />}

@@ -12,21 +12,6 @@ import type { RemoteMode, RemoteStatus } from "../../types.ts";
 export function ConnectSettings() {
   const origin = location.origin;
 
-  const openSpec = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    // The spec needs the client header, so a plain link would be refused; open the fetched copy instead.
-    const win = window.open("", "_blank");
-    try {
-      const spec = await api.openApiSpec();
-      const url = URL.createObjectURL(new Blob([JSON.stringify(spec, null, 2)], { type: "application/json" }));
-      if (win) win.location.href = url;
-      else toast.error("Your browser blocked the new tab.");
-    } catch (err) {
-      win?.close();
-      toast.error(err instanceof Error ? err.message : "Couldn't open the OpenAPI document");
-    }
-  };
-
   return (
     <div className="settings-list">
       <section className="panel-block" aria-label="Connect an assistant">
@@ -46,7 +31,7 @@ export function ConnectSettings() {
             hint={
               <>
                 Every action over HTTP. Read the{" "}
-                <a href={openApiUrl(origin)} onClick={(e) => void openSpec(e)} target="_blank" rel="noopener noreferrer">
+                <a href={openApiUrl(origin)} target="_blank" rel="noopener noreferrer">
                   OpenAPI document
                 </a>
                 .

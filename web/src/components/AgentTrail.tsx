@@ -40,7 +40,7 @@ const DID: Record<string, string> = {
 };
 
 const WAITING: Record<string, string> = {
-  "drafts.send": "is waiting for your OK to send a reply",
+  "drafts.send": "is waiting for your OK to send",
   "triage.trash": "is waiting for your OK to trash this",
   "triage.spam": "is waiting for your OK to report this as spam",
   "mail.unsubscribe": "is waiting for your OK to unsubscribe",

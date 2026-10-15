@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Composer } from "../components/Composer.tsx";
 import { AgentTrail } from "../components/AgentTrail.tsx";
+import { AssistantButton } from "../components/AssistantButton.tsx";
 import { ContextPane } from "../components/ContextPane.tsx";
 import { EmptyState } from "../components/InboxZero.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { Keys } from "../components/Keycap.tsx";
+import { LabelChip } from "../components/labels/LabelChip.tsx";
 import { MessageCard } from "../components/MessageCard.tsx";
 import { useDismiss, useViewport } from "../lib/hooks.ts";
 import { act } from "../store/actions.ts";
@@ -99,9 +101,7 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
               <h1 className="thread-subject">{detail.thread.subject || "(no subject)"}</h1>
               <div className="thread-labels">
                 {detail.thread.labels.map((l) => (
-                  <span className="chip" key={l}>
-                    {l}
-                  </span>
+                  <LabelChip key={l} name={l} />
                 ))}
               </div>
               <AgentTrail threadId={detail.thread.id} draftId={detail.draftId} />
@@ -207,6 +207,7 @@ function ThreadBar({ subject, detail }: { subject: string; detail?: ThreadDetail
           </button>
         </>
       )}
+      <AssistantButton />
     </header>
   );
 }

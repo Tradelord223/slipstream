@@ -8,6 +8,7 @@ import { session, setAccountFilter } from "../store/session.ts";
 import { cachedThread, loadThread } from "../store/threads.ts";
 import { moveMessage, toggleExpandAll, toggleFocusedMessage } from "../store/threadView.ts";
 import { toast, undoLast } from "../store/toasts.ts";
+import { toggleAssistant } from "../store/assistant.ts";
 import { closePalette, openPalette, toggleContext, toggleRail, ui } from "../store/ui.ts";
 import type { ComposeKind } from "../lib/compose.ts";
 
@@ -185,6 +186,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "shortcuts", title: "Keyboard shortcuts", group: "General", keys: ["?"], scopes: ["list", "thread", "page"], run: () => ui.set({ shortcuts: true }) },
   { id: "rail.toggle", title: "Toggle sidebar", group: "General", keys: ["\\"], scopes: ["list", "thread", "page"], run: toggleRail },
   { id: "context.toggle", title: "Toggle contact pane", group: "General", keys: [], scopes: ["thread"], run: toggleContext },
+  { id: "assistant.toggle", title: "Show or hide Claude", group: "General", keys: ["mod+."], scopes: ["global"], run: toggleAssistant },
   { id: "settings", title: "Settings", group: "General", keys: ["mod+,"], scopes: ["global"], run: () => navigate("/settings/general") },
   { id: "split.next", title: "Next split", group: "Move", keys: ["tab"], scopes: ["list"], needsListFocus: true, run: () => cycleSplit(1) },
   { id: "split.prev", title: "Previous split", group: "Move", keys: ["shift+tab"], scopes: ["list"], needsListFocus: true, run: () => cycleSplit(-1) },
@@ -200,7 +202,8 @@ export const COMMANDS: CommandDef[] = [
   goto("all", "Go to All mail", "a", () => goView({ kind: "search", q: "in:all" })),
   goto("review", "Go to Review", "r", () => navigate("/review")),
   { id: "go.activity", title: "Go to Activity", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/activity") },
-  { id: "go.agents", title: "Go to Agents", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/settings/agents") },
+  goto("agent", "Go to Agent", "c", () => navigate("/agent")),
+  { id: "go.agents", title: "Go to agent settings", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/settings/agents") },
   { id: "agents.create", title: "Create agent token", group: "General", keys: [], scopes: ["global"], run: openCreateAgent },
 
   ...Array.from({ length: 9 }, (_, i): CommandDef => ({

@@ -9,7 +9,7 @@ import { useNow } from "../lib/hooks.ts";
 import { activityTick, undoActivity } from "../store/agents.ts";
 import { useStore } from "../store/createStore.ts";
 import { openThread } from "../store/nav.ts";
-import { navigate } from "../store/route.ts";
+import { navigate, useRoute } from "../store/route.ts";
 import type { ActivityItem, AgentInfo } from "../types.ts";
 
 const PAGE = 100;
@@ -17,12 +17,22 @@ type Who = "all" | "you" | string;
 
 export function ActivityView() {
   const tick = useStore(activityTick, (s) => s.n);
-  const [who, setWho] = useState<Who>("all");
+  const route = useRoute();
+  const fromUrl = route.name === "activity" ? route.agentId : undefined;
+  const [who, setWho] = useState<Who>(fromUrl ?? "all");
   const [limit, setLimit] = useState(PAGE);
   const [items, setItems] = useState<ActivityItem[] | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [undoing, setUndoing] = useState<string | null>(null);
+
+  // "View activity" on an assistant's conversation arrives as /activity?agent=<id>.
+  useEffect(() => {
+    if (!fromUrl) return;
+    setItems(null);
+    setLimit(PAGE);
+    setWho(fromUrl);
+  }, [fromUrl]);
 
   useEffect(() => {
     api

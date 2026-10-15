@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { ago } from "../lib/format.ts";
 import { useNow, useDismiss } from "../lib/hooks.ts";
 import { Keys } from "./Keycap.tsx";
+import { LabelTree } from "./labels/LabelTree.tsx";
 import { Icon, Logo, type IconName } from "./Icon.tsx";
 import { Link } from "./Link.tsx";
 import { useReview } from "../store/agents.ts";
@@ -12,7 +13,7 @@ import { setAccountFilter, signOut, useSession } from "../store/session.ts";
 import { ui } from "../store/ui.ts";
 
 interface NavItem {
-  key: MailView["kind"] | "shared" | "review" | "activity";
+  key: MailView["kind"] | "shared" | "review" | "activity" | "agent";
   label: string;
   icon: IconName;
   to: string;
@@ -25,7 +26,6 @@ export function Rail() {
   const route = useRoute();
   const listView = useList((s) => s.view);
   const counts = useCounts();
-  const labels = useSession((s) => s.labels);
   const workspace = useSession((s) => s.workspace);
   const waiting = useReview((s) => s.pending?.length ?? 0);
   const unseen = useReview((s) => s.unseen);
@@ -41,11 +41,12 @@ export function Rail() {
     ...(workspace ? [{ key: "shared" as const, label: "Shared", icon: "users" as IconName, to: "/shared" }] : []),
   ];
   const agentItems: NavItem[] = [
+    { key: "agent", label: "Agent", icon: "sparkle", to: "/agent" },
     { key: "review", label: "Review", icon: "shield", to: "/review", count: waiting, notice: unseen },
     { key: "activity", label: "Activity", icon: "pulse", to: "/activity" },
   ];
   const isActive = (k: NavItem["key"]) =>
-    k === "shared" ? route.name === "shared" : k === "review" ? route.name === "review" : k === "activity" ? route.name === "activity" : activeView?.kind === k;
+    k === "shared" ? route.name === "shared" : k === "review" ? route.name === "review" : k === "activity" ? route.name === "activity" : k === "agent" ? route.name === "agent" : activeView?.kind === k;
   const renderItem = (it: NavItem) => (
     <li key={it.key}>
       <Link
@@ -80,24 +81,7 @@ export function Rail() {
       <ul className="nav nav-agents" role="list" aria-label="Agents">
         {agentItems.map(renderItem)}
       </ul>
-      {labels.length > 0 && (
-        <>
-          <div className="nav-heading">Labels</div>
-          <ul className="nav nav-labels" role="list">
-            {labels.map((l) => {
-              const active = activeView?.kind === "label" && activeView.name.toLowerCase() === l.toLowerCase();
-              return (
-                <li key={l}>
-                  <Link to={viewPath({ kind: "label", name: l })} className="nav-item" aria-current={active ? "page" : undefined} onClick={() => ui.set({ sheetOpen: false })}>
-                    <Icon name="tag" />
-                    <span className="nav-label">{l}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </>
-      )}
+      <LabelTree />
       <div className="rail-foot">
         <Link to="/settings/general" className="nav-item" aria-current={route.name === "settings" ? "page" : undefined} onClick={() => ui.set({ sheetOpen: false })}>
           <Icon name="settings" />
@@ -122,7 +106,6 @@ function AccountSwitcher() {
   const choose = (id: string | null) => {
     setAccountFilter(id);
     setOpen(false);
-    if (location.pathname.startsWith("/t/") || location.pathname.startsWith("/settings")) navigate("/");
   };
 
   return (

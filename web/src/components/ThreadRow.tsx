@@ -1,3 +1,4 @@
+import { LabelChip } from "./labels/LabelChip.tsx";
 import { memo, type MouseEvent } from "react";
 import { listTime, senderLine } from "../lib/format.ts";
 import { formatDue } from "../lib/when.ts";
@@ -72,9 +73,7 @@ export const ThreadRow = memo(function ThreadRow(p: Props) {
       </span>
       <span className="row-meta">
         {t.labels.slice(0, 2).map((l) => (
-          <span className="chip" key={l}>
-            {l}
-          </span>
+          <LabelChip key={l} name={l} />
         ))}
         {t.starred && <Icon name="star" size={13} className="row-star" />}
         {t.hasAttachments && <Icon name="paperclip" size={14} className="row-clip" />}

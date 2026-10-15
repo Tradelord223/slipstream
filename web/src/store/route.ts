@@ -17,7 +17,8 @@ export type Route =
   | { name: "thread"; id: string }
   | { name: "shared"; id?: string }
   | { name: "review"; tab: "waiting" | "decided" }
-  | { name: "activity" }
+  | { name: "activity"; agentId?: string }
+  | { name: "agent" }
   | { name: "settings"; section: string }
   | { name: "login" }
   | { name: "setup" }
@@ -71,7 +72,8 @@ export function parseRoute(path: string, search: string): Route {
     case "t": return seg[1] ? { name: "thread", id: seg[1] } : { name: "mail", view: { kind: "inbox" } };
     case "shared": return { name: "shared", id: seg[1] };
     case "review": return { name: "review", tab: q.get("tab") === "decided" ? "decided" : "waiting" };
-    case "activity": return { name: "activity" };
+    case "activity": return { name: "activity", agentId: q.get("agent") ?? undefined };
+    case "agent": return { name: "agent" };
     case "settings": return { name: "settings", section: seg[1] ?? "general" };
     case "login": return { name: "login" };
     case "setup": return { name: "setup" };

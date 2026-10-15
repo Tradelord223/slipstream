@@ -1,6 +1,7 @@
 import { useViewport } from "../lib/hooks.ts";
 import { useReview } from "../store/agents.ts";
 import { toggleRail, ui, useUi } from "../store/ui.ts";
+import { AssistantButton } from "./AssistantButton.tsx";
 import { Icon } from "./Icon.tsx";
 
 /** Opens the rail on phones and tablets; brings it back on desktop when it's hidden. Carries the amber dot when a request is waiting unseen. */
@@ -30,6 +31,7 @@ export function PageHeader({ title, children }: { title: string; children?: Reac
       <h1 className="view-title">{title}</h1>
       <span className="grow" />
       {children}
+      <AssistantButton />
     </header>
   );
 }
