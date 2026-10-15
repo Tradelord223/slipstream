@@ -241,6 +241,7 @@ export function mailRoutes(ctx: AppContext) {
         google: Boolean(ctx.config.google.clientId),
         microsoft: Boolean(ctx.config.microsoft.clientId),
         undoSendSeconds: ctx.config.undoSendSeconds,
+        sourceUrl: ctx.config.sourceUrl,
       },
     });
   });

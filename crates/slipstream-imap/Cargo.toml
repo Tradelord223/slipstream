@@ -2,7 +2,7 @@
 name = "slipstream-imap"
 version = "0.0.1"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-only"
 publish = false
 description = "Spike: a Rust IMAP/SMTP provider with the same contract as server/src/providers/imap.ts"
 
