@@ -16,7 +16,7 @@ export interface Config {
   allowedHosts: Set<string>;
   undoSendSeconds: number;
   google: { clientId?: string; clientSecret?: string };
-  microsoft: { clientId?: string; tenant: string };
+  microsoft: { clientId?: string; clientSecret?: string; tenant: string };
   anthropicApiKey?: string;
   /** Seed a demo account on first boot (local mode only). */
   demo: boolean;
@@ -50,7 +50,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     allowedHosts,
     undoSendSeconds: Number(env("SLIPSTREAM_UNDO_SEND_SECONDS") ?? 10),
     google: { clientId: env("GOOGLE_CLIENT_ID"), clientSecret: env("GOOGLE_CLIENT_SECRET") },
-    microsoft: { clientId: env("MICROSOFT_CLIENT_ID"), tenant: env("MICROSOFT_TENANT") ?? "common" },
+    microsoft: { clientId: env("MICROSOFT_CLIENT_ID"), clientSecret: env("MICROSOFT_CLIENT_SECRET"), tenant: env("MICROSOFT_TENANT") ?? "common" },
     anthropicApiKey: env("ANTHROPIC_API_KEY"),
     demo: mode === "local" && env("SLIPSTREAM_DEMO") !== "0",
     syncIntervalSeconds: Number(env("SLIPSTREAM_SYNC_SECONDS") ?? 60),
