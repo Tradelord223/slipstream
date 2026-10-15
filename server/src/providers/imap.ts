@@ -101,6 +101,7 @@ interface RawError {
   response?: string;
   responseCode?: number;
   authenticationFailed?: boolean;
+  tlsFailed?: boolean;
 }
 
 /** Turn a connection, login or protocol failure into a sentence a person can act on. */
@@ -111,6 +112,11 @@ export function friendlyError(err: unknown, protocol: "IMAP" | "SMTP", host: str
   if (e.authenticationFailed || e.code === "EAUTH") {
     return new ProviderAuthError(
       `${host} rejected the ${protocol} sign-in (${detail}). Check the username and password; many providers need an app password instead of your normal one.`,
+    );
+  }
+  if (e.tlsFailed) {
+    return new Error(
+      `${host} doesn't offer an encrypted (STARTTLS) connection on this port, and Slipstream won't send your password unencrypted. Use the server's TLS port, usually 993 for IMAP and 465 for SMTP.`,
     );
   }
   switch (e.code) {
@@ -140,7 +146,7 @@ export function friendlyError(err: unknown, protocol: "IMAP" | "SMTP", host: str
 }
 
 const fromWire = (err: unknown) =>
-  typeof err === "object" && err !== null && ("code" in err || "responseText" in err || "responseStatus" in err || "authenticationFailed" in err);
+  typeof err === "object" && err !== null && ("code" in err || "responseText" in err || "responseStatus" in err || "authenticationFailed" in err || "tlsFailed" in err);
 
 export type ImapClient = Pick<
   ImapFlow,
@@ -612,7 +618,7 @@ export class ImapProvider implements MailProvider {
 
   private async layout(c: ImapClient): Promise<Layout> {
     const gmail = c.capabilities.has("X-GM-EXT-1");
-    const map = detectMailboxes(await c.list());
+    const map = detectMailboxes(await c.list({ listOnly: true }));
     return { gmail, map, targets: syncTargets(map, gmail) };
   }
 
