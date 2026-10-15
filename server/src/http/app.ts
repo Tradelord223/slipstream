@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 import { HttpError, LOCAL_USER_ID } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 import { accountRoutes } from "./accounts.ts";
+import { aiRoutes } from "./ai.ts";
 import { authRoutes, SESSION_COOKIE } from "./auth.ts";
 import { composeRoutes } from "./compose.ts";
 import { mailRoutes } from "./mail.ts";
@@ -68,6 +69,7 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   app.route("/api", accountRoutes(ctx));
   app.route("/api", prefsRoutes(ctx));
   app.route("/api", teamRoutes(ctx));
+  app.route("/api", aiRoutes(ctx));
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
   if (staticDir && existsSync(staticDir)) {

@@ -21,6 +21,7 @@
     "seed:bench": "node server/src/bench.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
     "@hono/node-server": "^2.1.4",
     "chrono-node": "^2.10.3",
     "hono": "^4.13.13",

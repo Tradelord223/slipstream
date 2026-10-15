@@ -9,3 +9,4 @@ data/
 /AGENTS.md
 test-results/
 .bench/
+.claude/
