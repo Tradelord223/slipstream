@@ -42,6 +42,7 @@ Slipstream keeps the speed and drops the rest.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
 - **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
 - **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agent-api.md](docs/agent-api.md).
+- **A cloud agent with one API key.** Paste an Anthropic key and Claude works your inbox on Anthropic's Managed Agents, through Slipstream's own actions. Ask it anything, or give it routines ("weekdays at 8: triage and draft replies", "when client mail arrives: draft a reply"). It has hard budgets per run and per month, and sending still waits for you.
 - **claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI.
 
 ## See it
