@@ -5,3 +5,5 @@ dist
 docs/screenshots
 *.db*
 data
+target
+crates
