@@ -89,3 +89,18 @@ export function textToHtml(text: string): string {
     .map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`)
     .join("");
 }
+
+/**
+ * Plain text for a person reviewing outgoing mail: like htmlToText, but every link shows where it goes,
+ * and every image shows its source, so a reviewer can't approve a hidden destination or tracking pixel.
+ * Pass the sanitized HTML that will actually be sent.
+ */
+export function htmlToReviewText(html: string): string {
+  const withUrls = html.replace(/<a\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi, (_m, _q, href: string, inner: string) => {
+    const text = htmlToText(inner).trim();
+    const url = decodeEntities(href);
+    return text && text !== url ? `${inner} (${escapeHtml(url)})` : escapeHtml(url);
+  });
+  const withImages = withUrls.replace(/<img\b[^>]*?\bsrc\s*=\s*(["'])(.*?)\1[^>]*>/gi, (_m, _q, src: string) => ` [image: ${escapeHtml(decodeEntities(src).slice(0, 200))}] `);
+  return htmlToText(withImages);
+}

@@ -8,7 +8,7 @@ import type { AppContext } from "./context.ts";
 import { Db } from "./db/index.ts";
 import { Events } from "./events.ts";
 import { createApp } from "./http/app.ts";
-import { createPublicApp, remotePort } from "./http/remote.ts";
+import { createPublicApp, remotePort, watchRemoteOrigin } from "./http/remote.ts";
 import { newId, SecretBox } from "./lib/crypto.ts";
 import { Triage } from "./mail/actions.ts";
 import { MailStore } from "./mail/store.ts";
@@ -77,12 +77,14 @@ export async function start(config = loadConfig()) {
   const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   // Local mode: a loopback listener that only serves MCP + OAuth, for Tailscale Serve/Funnel or a tunnel.
   const remote = config.mode === "local" ? serve({ fetch: createPublicApp(ctx).fetch, hostname: "127.0.0.1", port: remotePort(ctx) }) : null;
+  const stopWatching = watchRemoteOrigin(ctx);
   const where = config.mode === "local" ? `http://127.0.0.1:${config.port}` : config.publicUrl;
   console.log(`\n  Slipstream is running (${config.mode} mode)\n  → ${where}\n  data: ${config.dataDir}\n`);
 
   const shutdown = async () => {
     server.close();
     remote?.close();
+    stopWatching();
     ctx.webhooks.close();
     ctx.cloud.close();
     await ctx.sync.stop();

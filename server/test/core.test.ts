@@ -266,3 +266,30 @@ describe("search compiles plain words into one full-text match", () => {
     assert.ok(c.params.includes('"lane"* "grouping"*'));
   });
 });
+
+describe("agent undo goes through approval", () => {
+  test("undoing an untrash after the exact window is a trash, and needs review past the bulk limit", async () => {
+    const env = makeEnv();
+    try {
+      const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", addAccount(env.ctx, LOCAL_USER_ID))!;
+      env.ctx.store.ingest(account, {
+        messages: [1, 2, 3].map((i) => msg({ from: ana, subject: `Keep ${i}`, remoteThreadId: `k${i}` })),
+        cursor: null,
+        done: true,
+      });
+      const ids = env.ctx.db.all<{ id: string }>("SELECT id FROM threads").map((r) => r.id);
+      const { agent } = env.ctx.agents.create(LOCAL_USER_ID, "Undoer", ["read", "triage"], { bulkThreshold: 2 });
+      const actor = { kind: "agent" as const, user: env.ctx.users.get(LOCAL_USER_ID)!, agent };
+      const res = await env.ctx.commands.execute(actor, "triage.untrash", { threadIds: ids });
+      assert.equal(res.status, "done");
+      const activityId = (res as { activityId: string }).activityId;
+      // Past the exact-undo window: only the inverse command is left.
+      env.ctx.db.run("UPDATE activity SET undo_token = NULL WHERE id = ?", activityId);
+      const undo = await env.ctx.commands.undo(actor, activityId);
+      assert.equal((undo as { status?: string }).status, "pending_approval");
+      assert.equal(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM threads WHERE in_trash = 1")!.n, 0, "nothing trashed without review");
+    } finally {
+      env.cleanup();
+    }
+  });
+});

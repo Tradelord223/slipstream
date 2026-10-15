@@ -18,17 +18,57 @@ export function remotePort(ctx: AppContext): number {
   return Number(process.env.SLIPSTREAM_REMOTE_PORT ?? ctx.config.port + 1);
 }
 
-/** The origin remote clients see: the team server's URL, a configured tunnel URL, or the Tailscale name. */
+/**
+ * The origin remote clients see: the team server's URL, a configured tunnel URL, or this machine's
+ * Tailscale name. Request headers never decide it (they'd let a client pick the issuer and audience),
+ * unless the operator opts in with SLIPSTREAM_TRUST_PROXY=1 behind a proxy they control.
+ */
 export function makeOriginOf(ctx: AppContext, listener: "main" | "public"): OriginOf {
   return (c) => {
     if (ctx.config.mode === "team" || listener === "main") return ctx.config.publicUrl;
     const configured = process.env.SLIPSTREAM_REMOTE_URL?.replace(/\/$/, "");
     if (configured) return configured;
     if (sharedOrigin) return sharedOrigin;
-    const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? `127.0.0.1:${remotePort(ctx)}`;
-    const proto = c.req.header("x-forwarded-proto") ?? (host.endsWith(".ts.net") ? "https" : "http");
-    return `${proto}://${host}`;
+    if (process.env.SLIPSTREAM_TRUST_PROXY === "1") {
+      const host = c.req.header("x-forwarded-host") ?? c.req.header("host");
+      const proto = c.req.header("x-forwarded-proto") ?? "https";
+      if (host) return `${proto}://${host}`;
+    }
+    return `http://127.0.0.1:${remotePort(ctx)}`;
   };
+}
+
+/** Learn this machine's Tailscale address at boot and every few minutes, so discovery is right from the first request. */
+export function watchRemoteOrigin(ctx: AppContext): () => void {
+  if (ctx.config.mode !== "local") return () => {};
+  const refresh = () =>
+    void tailscaleState(remotePort(ctx))
+      .then((t) => {
+        const active = t.funnel ?? t.serve;
+        sharedOrigin = active?.url ?? null;
+      })
+      .catch(() => {});
+  refresh();
+  const timer = setInterval(refresh, 5 * 60_000);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+/** Hosts the public listener answers to: loopback, Tailscale names, and the configured public origin. */
+function allowedPublicHost(ctx: AppContext, host: string): boolean {
+  const port = remotePort(ctx);
+  if (host === `127.0.0.1:${port}` || host === `localhost:${port}` || host === `[::1]:${port}`) return true;
+  const name = host.replace(/:\d+$/, "").toLowerCase();
+  if (name.endsWith(".ts.net")) return true;
+  for (const origin of [process.env.SLIPSTREAM_REMOTE_URL, sharedOrigin]) {
+    if (!origin) continue;
+    try {
+      if (new URL(origin).host.toLowerCase() === host.toLowerCase()) return true;
+    } catch {
+      /* ignore a malformed setting */
+    }
+  }
+  return process.env.SLIPSTREAM_TRUST_PROXY === "1";
 }
 
 /** Bearer-only auth for /mcp on the public listener. */
@@ -57,6 +97,8 @@ export function createPublicApp(ctx: AppContext): Hono<Env> {
     return c.json({ error: "Something went wrong" }, 500);
   });
   app.use("*", async (c, next) => {
+    // DNS rebinding: a page on another domain pointing its name at 127.0.0.1 gets nothing here.
+    if (!allowedPublicHost(ctx, c.req.header("host") ?? "")) return c.text("Unknown host", 421);
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Frame-Options", "DENY");

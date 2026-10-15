@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { after, before, describe, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -72,6 +73,22 @@ describe("remote assistants over OAuth", () => {
     const unauth = await fetch(`${pub}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(unauth.status, 401);
     assert.match(unauth.headers.get("www-authenticate") ?? "", new RegExp(`resource_metadata="${pub}/.well-known/oauth-protected-resource"`));
+  });
+
+  test("request headers can't choose the issuer, and unknown hosts are refused", async () => {
+    const md = await (await fetch(`${pub}/.well-known/oauth-authorization-server`, { headers: { "x-forwarded-host": "evil.example", "x-forwarded-proto": "https" } })).json();
+    assert.equal(md.issuer, pub);
+    // fetch() won't send a custom Host header; use a raw request.
+    const u = new URL(pub);
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest({ host: u.hostname, port: u.port, path: "/.well-known/oauth-authorization-server", headers: { host: "rebound.example:80" } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(status, 421);
   });
 
   test("the public listener never serves the dashboard or its API", async () => {

@@ -2,7 +2,8 @@ import { z } from "zod";
 import { explainAiError, summarizeThread } from "../ai.ts";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext } from "../context.ts";
-import { htmlToText, stripQuoted, textToHtml } from "../lib/text.ts";
+import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
+import { htmlToReviewText, htmlToText, stripQuoted, textToHtml } from "../lib/text.ts";
 import type { TriageKind } from "../mail/actions.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
 import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, sendDraft, updateDraft } from "../mail/drafts.ts";
@@ -75,6 +76,9 @@ const TRIAGE: TriageSpec[] = [
   { kind: "unspam", name: "triage.notSpam", title: "Not spam", description: "Move conversations out of spam into the inbox.", verb: (w) => `Moved ${w} out of spam` },
 ];
 
+/** Window over which an agent's trash/spam is added up against its bulk threshold. */
+const BULK_WINDOW_MS = 10 * 60_000;
+
 const nameByKind = new Map(TRIAGE.map((t) => [t.kind, t.name]));
 
 /** Command name for each triage kind (the dashboard's /api/triage routes through these). */
@@ -93,10 +97,20 @@ function triageCommand(spec: TriageSpec): Command {
     scope: "triage",
     input,
     approval: spec.bulkApproval
-      ? (_ctx, actor, i) =>
-          i.threadIds.length > actor.agent.policy.bulkThreshold
-            ? `${spec.title} on ${i.threadIds.length} conversations (more than ${actor.agent.policy.bulkThreshold})`
-            : null
+      ? (ctx, actor, i) => {
+          // Counted over a rolling window, so splitting a mass action into small calls doesn't avoid review.
+          const recent = ctx.db.get<{ n: number }>(
+            `SELECT coalesce(sum(json_array_length(thread_ids)), 0) AS n FROM activity
+             WHERE agent_id = ? AND command IN ('triage.trash', 'triage.spam') AND status = 'done' AND created_at > ?`,
+            actor.agent.id,
+            Date.now() - BULK_WINDOW_MS,
+          )!.n;
+          const total = recent + i.threadIds.length;
+          const limit = actor.agent.policy.bulkThreshold;
+          return total > limit
+            ? `${spec.title} on ${i.threadIds.length} conversations (${total} in the last 10 minutes, more than ${limit})`
+            : null;
+        }
       : undefined,
     preview: (ctx, _actor, i) => `${spec.title}: ${describeThreads(ctx, i.threadIds)}`,
     run: (ctx, actor, i) => {
@@ -416,16 +430,18 @@ export function buildCatalog(): Command[] {
       preview: (ctx, actor, i) => {
         const d = getDraft(ctx, actor.user.id, i.draftId);
         const list = (a: { name: string; email: string }[]) => a.map((x) => (x.name ? `${x.name} <${x.email}>` : x.email)).join(", ");
+        const from = ctx.db.get<{ email: string; name: string }>("SELECT email, name FROM accounts WHERE id = ?", d.accountId)!;
         return [
+          `From: ${from.name ? `${from.name} <${from.email}>` : from.email}`,
           `To: ${list(d.to)}`,
           d.cc.length ? `Cc: ${list(d.cc)}` : "",
           d.bcc.length ? `Bcc: ${list(d.bcc)}` : "",
           `Subject: ${d.subject || "(no subject)"}`,
           i.sendAt ? `Send at: ${new Date(i.sendAt).toISOString()}` : "",
           "",
-          htmlToText(d.bodyHtml),
+          htmlToReviewText(sanitizeOutgoingHtml(d.bodyHtml)),
         ]
-          .filter((l, idx) => l !== "" || idx === 5)
+          .filter((l, idx) => l !== "" || idx === 6)
           .join("\n");
       },
       run: (ctx, actor, i) => {
