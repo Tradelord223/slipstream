@@ -11,7 +11,8 @@ import type { AccountRow } from "../server/src/mail/store.ts";
 import type { IncomingMessage } from "../server/src/mail/types.ts";
 
 const COUNT = Number(process.argv[2] ?? 50_000);
-const dir = mkdtempSync(join(tmpdir(), "slipstream-bench-"));
+// BENCH_KEEP=<dir> keeps the seeded database there (for comparing other runtimes against the same data).
+const dir = process.env.BENCH_KEEP ?? mkdtempSync(join(tmpdir(), "slipstream-bench-"));
 const port = 4398;
 const config = loadConfig({
   dataDir: dir,
@@ -134,6 +135,6 @@ const firstThread = inbox[0]!.id;
 results.push(await measure("Open a conversation", () => api(`/api/threads/${firstThread}`)));
 
 ctx.db.close();
-rmSync(dir, { recursive: true, force: true });
+if (!process.env.BENCH_KEEP) rmSync(dir, { recursive: true, force: true });
 console.log(`\n(Mark done row includes the undo round-trip, so it's two writes.)`);
 if (process.env.BENCH_JSON) console.log(JSON.stringify({ count: COUNT, threads, seedMs, results }));

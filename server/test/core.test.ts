@@ -257,3 +257,11 @@ describe("copies and moves", () => {
     assert.equal(count(), 0, "gone once no copy is left at the end of the round");
   });
 });
+
+describe("search compiles plain words into one full-text match", () => {
+  test("two words, one MATCH", () => {
+    const c = compile("lane grouping from:priya");
+    assert.equal((c.where.match(/MATCH/g) ?? []).length, 1);
+    assert.ok(c.params.includes('"lane"* "grouping"*'));
+  });
+});
