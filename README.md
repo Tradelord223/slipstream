@@ -65,8 +65,8 @@ Fly.io is the recommended host: one always-on machine with a volume, about $4 a 
 |---|---|---|
 | Open a split (first 100 conversations) | 0.9 ms | 1.2 ms |
 | Unread counts for every split | 6.9 ms | 8.1 ms |
-| Full-text search, typical two-word query | 22 ms | 33 ms |
-| Full-text search, worst case (a word in nearly every message) | 54 ms | 67 ms |
+| Full-text search, typical two-word query | 4.8 ms | 5.1 ms |
+| Full-text search, worst case (a word in nearly every message) | 53 ms | 56 ms |
 | Mark done and undo it (two writes) | 0.2 ms | 0.3 ms |
 | Open a conversation | 0.05 ms | 0.08 ms |
 
