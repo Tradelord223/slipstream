@@ -5,13 +5,10 @@
 ![Slipstream inbox](docs/screenshots/inbox-dark.png)
 
 ```bash
-git clone https://github.com/Tradelord223/slipstream && cd slipstream
-npm install && npm run build
-npm link        # puts the `slipstream` command on your PATH
-slipstream
+npx slipstream-mail
 ```
 
-Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. It needs Node.js 22.18 or newer.
+Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. It needs Node.js 22.18 or newer. To keep the `slipstream` command around for the CLI and MCP bridge, install it once with `npm install -g slipstream-mail`.
 
 ## Why
 
