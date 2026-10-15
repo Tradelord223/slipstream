@@ -1,6 +1,6 @@
 # Self-hosting Slipstream for a team
 
-On your own laptop, Slipstream runs with no setup at all (`npx slipstream-mail`). Run it on a server when a team wants shared snippets, shared conversations with comments, and one place everyone signs in to.
+On your own laptop, Slipstream runs with no setup at all (see the README's quick start). Run it on a server when a team wants shared snippets, shared conversations with comments, and one place everyone signs in to.
 
 Each person's mailboxes stay private to them on the server. Teammates only see what someone deliberately shares.
 

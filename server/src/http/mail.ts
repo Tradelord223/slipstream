@@ -1,4 +1,7 @@
 import { Hono } from "hono";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
@@ -242,11 +245,24 @@ export function mailRoutes(ctx: AppContext) {
         microsoft: Boolean(ctx.config.microsoft.clientId),
         undoSendSeconds: ctx.config.undoSendSeconds,
         sourceUrl: ctx.config.sourceUrl,
+        cli: ctx.config.mode === "local" ? localCli() : null,
       },
     });
   });
 
   return app;
+}
+
+/**
+ * How to run this install's CLI and stdio MCP bridge from another program (Claude Desktop, Cursor):
+ * absolute paths, so it works whatever that program's PATH is. Local mode only.
+ */
+function localCli(): { command: string; args: string[] } | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [join(here, "cli.js"), join(here, "../dist/cli.js"), join(here, "../../dist/cli.js"), join(here, "../cli.ts")]) {
+    if (existsSync(candidate)) return { command: process.execPath, args: [candidate] };
+  }
+  return null;
 }
 
 export function emitThreads(ctx: AppContext, userId: string, threadIds: string[]) {

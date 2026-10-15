@@ -5,7 +5,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.18"
   },
   "bin": {
     "slipstream": "bin/slipstream.js"

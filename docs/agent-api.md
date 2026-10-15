@@ -52,10 +52,10 @@ claude mcp add --transport http slipstream http://127.0.0.1:4380/mcp \
 ### Claude Desktop and other stdio MCP clients
 
 ```json
-{ "mcpServers": { "slipstream": { "command": "npx", "args": ["slipstream-mail", "mcp"] } } }
+{ "mcpServers": { "slipstream": { "command": "slipstream", "args": ["mcp"] } } }
 ```
 
-On a local install, `slipstream mcp` creates its own agent ("Local MCP") the first time it runs, and it appears in Settings → Agents. Elsewhere, set `SLIPSTREAM_URL` and `SLIPSTREAM_TOKEN`. The bridge goes through the running server, so its actions are attributed, scoped and approvable like any other agent's.
+Settings → Connect shows this snippet with the full paths for your machine, which you'll want when the app launching it (Claude Desktop, for example) doesn't share your terminal's PATH. On a local install, `slipstream mcp` creates its own agent ("Local MCP") the first time it runs, and it appears in Settings → Agents. Elsewhere, set `SLIPSTREAM_URL` and `SLIPSTREAM_TOKEN`. The bridge goes through the running server, so its actions are attributed, scoped and approvable like any other agent's.
 
 ### HTTP API
 
@@ -73,11 +73,11 @@ curl -H "Authorization: Bearer ss_agent_…" -H "content-type: application/json"
 ### Command line
 
 ```bash
-npx slipstream-mail commands                       # list everything
-npx slipstream-mail mail.search --query "is:unread" --limit 5
-npx slipstream-mail triage.remind --threadIds '["thr_…"]' --until 2026-10-16T09:00:00-04:00
-npx slipstream-mail drafts.create --threadId thr_… --body "Sounds good — Thursday works."
-npx slipstream-mail mail.read --help               # a command's input schema
+slipstream commands                       # list everything
+slipstream mail.search --query "is:unread" --limit 5
+slipstream triage.remind --threadIds '["thr_…"]' --until 2026-10-16T09:00:00-04:00
+slipstream drafts.create --threadId thr_… --body "Sounds good — Thursday works."
+slipstream mail.read --help               # a command's input schema
 ```
 
 ### Webhooks

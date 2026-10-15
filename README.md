@@ -5,14 +5,17 @@
 ![Slipstream inbox](docs/screenshots/inbox-dark.png)
 
 ```bash
-npx slipstream-mail
+git clone https://github.com/Tradelord223/slipstream && cd slipstream
+npm install && npm run build
+npm link        # puts the `slipstream` command on your PATH
+slipstream
 ```
 
-That's it: Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. Needs Node.js 22.13+.
+Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. It needs Node.js 22.18 or newer.
 
 ## Why
 
-Premium "fast email" clients proved that email can feel calm and quick: one key to finish a conversation, reminders that bring mail back when you need it, an inbox you actually clear. They also cost $30–40 a seat every month, only work with Gmail and Microsoft 365, keep your mailbox credentials on their servers, and put tracking pixels in the mail you send.
+Premium "fast email" clients proved that email can feel calm and quick: one key to finish a conversation, reminders that bring mail back when you need it, an inbox you actually clear. They also typically cost $25–40 a seat every month, connect only to Gmail and Microsoft 365, and run your mail through their own servers. Some add read-receipt tracking pixels to the mail you send.
 
 Slipstream keeps the speed and drops the rest.
 
@@ -37,7 +40,7 @@ Slipstream keeps the speed and drops the rest.
 - **Snippets with variables.** Type `;` in a draft to insert one; `{first_name}` fills itself in. Share them with your team.
 - **Instant Intro.** On an introduction, `Cmd+Shift+I` thanks the introducer and moves them to Bcc.
 - **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `after:`, `label:` and more, over everything you've synced or imported.
-- **Get Me To Zero.** Clear a backlog older than a day, a week or a month in one undoable step.
+- **Get Me To Zero.** Clear the whole backlog, or everything older than a week or a month, in one undoable step.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
 - **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
@@ -66,7 +69,7 @@ fly secrets set SLIPSTREAM_SECRET="$(openssl rand -base64 32)"
 fly deploy
 ```
 
-Fly.io is the recommended host: one always-on machine with a volume, about $4 a month. Docker Compose works on any server; Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](docs/self-hosting.md).
+Fly.io is the recommended host: one always-on machine with a volume, about $4 a month at October 2026 prices. Docker Compose works on any server; Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](docs/self-hosting.md).
 
 ## Fast, measured
 
@@ -98,8 +101,8 @@ npm run typecheck
 npm run build && npm start
 ```
 
-The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. No native dependencies anywhere. More in [docs/architecture.md](docs/architecture.md); agents, MCP and remote access in [docs/agent-api.md](docs/agent-api.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
+The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. The server has no native npm dependencies (SQLite comes with Node). More in [docs/architecture.md](docs/architecture.md); agents, MCP and remote access in [docs/agent-api.md](docs/agent-api.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
 
 ## License
 
-[AGPL-3.0](LICENSE). Use it, run it for your company, change it. If you offer a modified Slipstream to others as a service, share your changes.
+Slipstream is licensed under the [GNU AGPL v3.0](LICENSE). Use it, run it for your company, change it. If you run a modified Slipstream for other people over a network, the AGPL asks you to offer them its source; set `SLIPSTREAM_SOURCE_URL` so the app's source link points at your version. Bundled third-party software and fonts keep their own licenses, listed in `THIRD_PARTY_LICENSES.txt` in every build.

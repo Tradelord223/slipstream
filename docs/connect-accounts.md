@@ -32,7 +32,7 @@ Google treats full mailbox access as a *restricted* scope. A public, verified ap
    - Self-hosted: type **Web application** with redirect URI `https://<your-host>/api/oauth/google/callback`.
 5. Start Slipstream with the client:
    ```bash
-   GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… npx slipstream-mail
+   GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… slipstream
    ```
 6. Settings → Accounts → **Connect Gmail**.
 

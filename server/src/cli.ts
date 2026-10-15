@@ -56,7 +56,7 @@ async function call(path: string, token: string, body?: unknown): Promise<{ stat
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new Error(`Can't reach Slipstream at ${baseUrl()}. Start it with \`npx slipstream-mail\`.`);
+    throw new Error(`Can't reach Slipstream at ${baseUrl()}. Start it with \`slipstream\` (or \`npm start\` in the repo).`);
   }
   return { status: res.status, json: await res.json().catch(() => null) };
 }
