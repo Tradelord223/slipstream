@@ -80,6 +80,9 @@ Fly.io is the recommended host: one always-on machine with a volume, about $4 a 
 | Full-text search, worst case (a word in nearly every message) | 53 ms | 56 ms |
 | Mark done and undo it (two writes) | 0.2 ms | 0.3 ms |
 | Open a conversation | 0.05 ms | 0.08 ms |
+| Agent: search over HTTP (`/api/v1/mail.search`, with auth) | 3.7 ms | 4.2 ms |
+| Agent: search over MCP (`tools/call mail_search`) | 3.9 ms | 4.5 ms |
+| Agent: whole-inbox digest in one call (`mail.digest`) | 9.8 ms | 12.2 ms |
 
 Provider round-trips never block you: actions apply locally first and reach Gmail, Outlook or your IMAP server a few seconds later, after the undo window.
 
