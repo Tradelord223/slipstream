@@ -55,7 +55,8 @@ Slipstream keeps the speed and drops the rest.
 
 | | |
 |---|---|
-| ![Claude in the sidebar, working on the open conversation](docs/screenshots/assistant-dark.png) | ![Review: approve or reject what agents want to do](docs/screenshots/review-dark.png) |
+| ![Autopilot: every new conversation sorted, with its reason](docs/screenshots/autopilot-dark.png) | ![Models & accounts: ChatGPT, Claude Code, Codex or your own keys](docs/screenshots/models-dark.png) |
+| ![The assistant in the sidebar, working on the open conversation](docs/screenshots/assistant-dark.png) | ![Review: approve or reject what agents want to do](docs/screenshots/review-dark.png) |
 | ![The cloud agent: chats, routines and budget](docs/screenshots/agent-dark.png) | ![Labels with colors, nesting and auto-label rules](docs/screenshots/labels-dark.png) |
 | ![Conversation](docs/screenshots/thread-dark.png) | ![Compose with snippets](docs/screenshots/compose-dark.png) |
 | ![Remind me](docs/screenshots/remind-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |

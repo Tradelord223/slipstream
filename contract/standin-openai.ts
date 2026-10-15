@@ -22,14 +22,16 @@ function nextStep(input: Item[]): Item[] {
 
   if (ask.includes("<conversation id=")) {
     if (outputs.length) return [say("Sorted.")];
-    const ids = [...ask.matchAll(/<conversation id="([^"]+)" category="([^"]+)"/g)].map((m) => ({ id: m[1]!, category: m[2]! }));
+    const blocks = [...ask.matchAll(/<conversation id="([^"]+)" category="([^"]+)"[^>]*>\nFrom: (.*?) ‹([^›]*)›\n[\s\S]*?Subject: (.*)/g)];
     return [
       call("autopilot_decide", {
-        decisions: ids.map((c) =>
-          c.category === "important"
-            ? { threadId: c.id, action: "keep", needsReply: true, summary: "Someone wrote to you", reason: "A person is waiting on you", confidence: 0.9 }
-            : { threadId: c.id, action: "done", priority: "low", summary: "Automated mail", reason: "Sent by a machine; nothing to do", confidence: 0.9 },
-        ),
+        decisions: blocks.map(([, id, category, name, email, subject]) => {
+          const first = (name || email!).split(" ")[0];
+          const domain = email!.split("@")[1] ?? email;
+          return category === "important"
+            ? { threadId: id, action: "keep", needsReply: true, summary: subject, reason: `${first} wrote to you about “${subject}” and is waiting on an answer`, confidence: 0.86 + (subject!.length % 10) / 100 }
+            : { threadId: id, action: "done", priority: "low", summary: subject, reason: `Automated ${category === "news" ? "newsletter" : "notice"} from ${domain}; nothing to do`, confidence: 0.92 };
+        }),
       }),
     ];
   }

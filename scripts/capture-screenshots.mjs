@@ -35,11 +35,17 @@ function chromePath() {
 // A stand-in for Anthropic's Managed Agents, so the cloud agent has something to talk to (any API key works).
 const fake = new FakeManagedAgents();
 const fakeUrl = await fake.listen(4398);
+// A stand-in OpenAI model, so the OpenAI API engine and Autopilot have something sensible to run on.
+const { standInOpenAI } = await import("../contract/standin-openai.ts");
+const openai = standInOpenAI().server;
+await new Promise((r) => openai.listen(4399, "127.0.0.1", r));
 
 const dataDir = mkdtempSync(join(tmpdir(), "slipstream-shots-"));
 const server = spawn(process.execPath, ["server/src/main.ts"], {
   cwd: root,
-  env: { ...process.env, SLIPSTREAM_DATA_DIR: dataDir, SLIPSTREAM_PORT: String(port), SLIPSTREAM_SYNC_SECONDS: "600", SLIPSTREAM_ANTHROPIC_BASE_URL: fakeUrl },
+  env: { ...process.env, SLIPSTREAM_DATA_DIR: dataDir, SLIPSTREAM_PORT: String(port), SLIPSTREAM_SYNC_SECONDS: "600", SLIPSTREAM_ANTHROPIC_BASE_URL: fakeUrl, OPENAI_API_KEY: "stand-in", SLIPSTREAM_OPENAI_BASE_URL: "http://127.0.0.1:4399/v1",
+    // Scripted stand-ins: screenshots must never show (or use) the machine's own Claude Code or Codex sign-in.
+    SLIPSTREAM_CLAUDE_BIN: join(root, "contract/fixtures/scripted-claude.mjs"), SLIPSTREAM_CODEX_BIN: join(root, "contract/fixtures/scripted-codex.mjs") },
   stdio: "ignore",
 });
 
@@ -267,11 +273,6 @@ try {
       },
       [open, run],
     );
-  await visit("/", ".row");
-  await sidebar(true);
-  await visit("/", ".cl-form");
-  await shot(page, "agent-setup-dark");
-  await sidebar(false);
   const runs = await seedCloud();
   await visit("/review", ".rv-card");
   await shot(page, "review-dark");
@@ -304,6 +305,20 @@ try {
   await visit(`/t/${priya.id}`, ".tr-ask");
   await shot(page, "assistant-dark");
   await sidebar(false);
+
+  // Models & accounts, and Autopilot sorting the demo inbox (suggest mode, so its proposals show).
+  await visit("/settings/models", ".eng");
+  await shot(page, "models-dark");
+  await call("PUT", "/api/autopilot", { enabled: true, mode: "suggest", engine: "loop:openai", playbook: 'Receipts and order confirmations get "Receipts". Mail from clients stays in my inbox.' });
+  await call("POST", "/api/autopilot/backfill", { days: 30 });
+  for (let i = 0; i < 100; i++) {
+    const o = await call("GET", "/api/autopilot");
+    if (o.items.length && !o.running && o.items.every((x) => x.stage === "decided")) break;
+    await sleep(200);
+  }
+  await sleep(1500);
+  await visit("/autopilot", ".ap-main");
+  await shot(page, "autopilot-dark");
   await agentsDark.close();
 
   const mobileReview = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: "dark", timezoneId: "America/New_York" });
@@ -330,5 +345,6 @@ try {
 } finally {
   server.kill("SIGTERM");
   fake.close();
+  openai.close();
   rmSync(dataDir, { recursive: true, force: true });
 }
