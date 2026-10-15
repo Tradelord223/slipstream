@@ -2,7 +2,7 @@
 import { build } from "esbuild";
 
 await build({
-  entryPoints: { server: "server/src/main.ts", mcp: "server/src/mcp.ts" },
+  entryPoints: { server: "server/src/main.ts", cli: "server/src/cli.ts" },
   outdir: "dist",
   // Both entries share modules; splitting keeps one copy of each.
   splitting: true,

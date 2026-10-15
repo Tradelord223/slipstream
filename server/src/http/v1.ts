@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { Hono } from "hono";
 import { z } from "zod";
 import { policySchema, SCOPES } from "../agents/agents.ts";
+import { WEBHOOK_EVENTS } from "../agents/webhooks.ts";
 import { HttpError } from "../auth/users.ts";
 import type { Actor } from "../commands/registry.ts";
 import type { AppContext, Env } from "../context.ts";
@@ -88,6 +89,27 @@ export function v1Routes(ctx: AppContext) {
     const agent = agents.get(c.get("user").id, c.req.param("id"));
     if (!agent || !agents.revoke(c.get("user").id, agent.id)) throw new HttpError(404, "Agent not found");
     commands.record(c.get("actor"), "agents.revoke", `Revoked "${agent.name}"`, {});
+    return c.json({ ok: true });
+  });
+
+  // ---- Webhooks (people only) -----------------------------------------------
+
+  app.get("/webhooks", (c) => {
+    humanOnly(c.get("actor"));
+    return c.json({ webhooks: ctx.webhooks.list(c.get("user").id), events: WEBHOOK_EVENTS });
+  });
+  app.post("/webhooks", async (c) => {
+    humanOnly(c.get("actor"));
+    const body = z.object({ url: z.url(), events: z.array(z.enum([...WEBHOOK_EVENTS, "*"])).default(["*"]) }).parse(await c.req.json());
+    return c.json(ctx.webhooks.create(c.get("user").id, body.url, body.events));
+  });
+  app.post("/webhooks/:id/test", async (c) => {
+    humanOnly(c.get("actor"));
+    return c.json(await ctx.webhooks.test(c.get("user").id, c.req.param("id")));
+  });
+  app.delete("/webhooks/:id", (c) => {
+    humanOnly(c.get("actor"));
+    ctx.webhooks.remove(c.get("user").id, c.req.param("id"));
     return c.json({ ok: true });
   });
 

@@ -14,6 +14,7 @@ import { MailStore } from "./mail/store.ts";
 import { SyncEngine } from "./mail/sync.ts";
 import { DEMO_IDENTITY } from "./providers/demo.ts";
 import { Agents } from "./agents/agents.ts";
+import { Webhooks } from "./agents/webhooks.ts";
 import { buildCatalog } from "./commands/catalog.ts";
 import { Commands } from "./commands/service.ts";
 
@@ -27,7 +28,8 @@ export function createContext(config: Config): AppContext {
   const sync = new SyncEngine(config, db, store, events, secrets);
   const agents = new Agents(db);
   const commands = new Commands(buildCatalog());
-  const ctx: AppContext = { config, db, events, secrets, store, triage, users, sync, agents, commands };
+  const ctx = { config, db, events, secrets, store, triage, users, sync, agents, commands } as AppContext;
+  ctx.webhooks = new Webhooks(ctx);
   commands.bind(ctx);
   return ctx;
 }
@@ -66,6 +68,7 @@ export async function start(config = loadConfig()) {
   const staticDir = [join(here, "web"), join(here, "../../dist/web")].find((d) => existsSync(join(d, "index.html")));
   const app = createApp(ctx, staticDir);
   ctx.sync.start();
+  ctx.webhooks.start();
 
   const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   const where = config.mode === "local" ? `http://127.0.0.1:${config.port}` : config.publicUrl;

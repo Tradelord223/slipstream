@@ -5,11 +5,12 @@ if (major < 22 || (major === 22 && minor < 13)) {
   console.error(`Slipstream needs Node.js 22.13 or newer (you have ${process.versions.node}).`);
   process.exit(1);
 }
-if (process.argv[2] === "mcp") {
-  // Mail MCP server over stdio for AI assistants (read, search, draft; never sends).
-  const { startMcp } = await import("../dist/mcp.js");
-  await startMcp();
-} else {
+const sub = process.argv[2];
+if (!sub || sub === "serve") {
   const { start } = await import("../dist/server.js");
   await start();
+} else {
+  // Everything else talks to a running Slipstream: commands, and `mcp` (stdio bridge for AI assistants).
+  const { cli } = await import("../dist/cli.js");
+  await cli(process.argv.slice(2));
 }
