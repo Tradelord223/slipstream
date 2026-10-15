@@ -241,7 +241,8 @@ async fn read_line(s: &mut TcpStream) -> std::io::Result<String> {
 /// Greeting, CAPABILITY, STARTTLS; nothing secret is sent. Returns the stream still plain, ready to upgrade.
 async fn plain_phase(s: &mut TcpStream, host: &str) -> Result<()> {
     let greeting = read_line(s).await.map_err(|e| map_io(e, host))?;
-    if !greeting.starts_with("* OK") && !greeting.starts_with("* PREAUTH") {
+    // PREAUTH would mean "already signed in", where STARTTLS is invalid: refuse rather than carry on in plaintext.
+    if !greeting.starts_with("* OK") {
         return Err(ProviderError::other(format!("IMAP {host}: unexpected greeting ({greeting})")));
     }
     s.write_all(b"s1 CAPABILITY\r\n").await.map_err(|e| map_io(e, host))?;
@@ -352,6 +353,8 @@ pub struct Fetched {
     pub seq: u32,
     pub uid: u32,
     pub flags: HashSet<String>,
+    /// FLAGS was present in the response (an empty flag list is a real answer; a missing one is not).
+    pub has_flags: bool,
     pub labels: Option<Vec<String>>,
     pub thread_id: Option<String>,
     /// Epoch milliseconds.
@@ -410,6 +413,58 @@ pub fn imap_date(ms: i64, with_time: bool) -> String {
     }
 }
 
+/// Which FETCH responses answer the command. Servers may interleave unsolicited FETCHes for other messages
+/// (another client changed a flag): `* 37 FETCH (FLAGS (\\Seen) MODSEQ (812))`, often without a UID. Counting those
+/// as results would invent updates and, in the window check, false expunges.
+struct Keep {
+    /// UID ranges asked for, `*` as u32::MAX; None for a sequence-number fetch.
+    uids: Option<Vec<(u32, u32)>>,
+    /// Sequence fetch: ignore responses below this sequence number.
+    min_seq: u32,
+    flags: bool,
+    labels: bool,
+    source: bool,
+}
+
+impl Keep {
+    fn new(set: &str, by_uid: bool, items: &str) -> Keep {
+        let up = items.to_ascii_uppercase();
+        let mut uids = None;
+        let mut min_seq = 0;
+        if by_uid {
+            uids = Some(
+                set.split(',')
+                    .filter_map(|part| {
+                        let num = |s: &str| if s == "*" { Some(u32::MAX) } else { s.parse::<u32>().ok() };
+                        let mut it = part.split(':');
+                        let lo = num(it.next()?)?;
+                        let hi = it.next().map_or(Some(lo), num)?;
+                        Some((lo.min(hi), lo.max(hi)))
+                    })
+                    .collect(),
+            );
+        } else {
+            min_seq = set.split(':').next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        }
+        Keep { uids, min_seq, flags: up.contains("FLAGS"), labels: up.contains("X-GM-LABELS"), source: up.contains("BODY.PEEK[]") }
+    }
+
+    fn filter(&self, all: Vec<Fetched>) -> Vec<Fetched> {
+        let mut seen = HashSet::new();
+        all.into_iter()
+            .filter(|f| {
+                f.uid != 0
+                    && f.seq >= self.min_seq
+                    && self.uids.as_ref().is_none_or(|r| r.iter().any(|(lo, hi)| f.uid >= *lo && f.uid <= *hi))
+                    && (!self.flags || f.has_flags)
+                    && (!self.labels || f.labels.is_some())
+                    && (!self.source || f.source.is_some())
+                    && seen.insert(f.uid)
+            })
+            .collect()
+    }
+}
+
 /// What a raw command produced besides its status line.
 #[derive(Default)]
 struct Raw {
@@ -422,7 +477,7 @@ impl Conn {
     /// Run a tagged command and read its responses until the matching tagged status. Used where async-imap
     /// has no accessor (X-GM-THRID) and where its streams would end quietly on a dead socket and look like an
     /// empty result: here a missing tagged status is always `Disconnected`, never "nothing found".
-    async fn raw(&mut self, command: String) -> Result<Raw> {
+    async fn raw(&mut self, command: String, keep: Option<&Keep>) -> Result<Raw> {
         let host = self.host.clone();
         let id = self.session.run_command(command).await.map_err(imap_err("command"))?;
         let mut out = Raw::default();
@@ -442,7 +497,12 @@ impl Conn {
                 }
                 Response::Done { tag, status, outcome } if *tag == id => {
                     return match status {
-                        Status::Ok => Ok(out),
+                        Status::Ok => {
+                            if let Some(keep) = keep {
+                                out.fetched = keep.filter(std::mem::take(&mut out.fetched));
+                            }
+                            Ok(out)
+                        }
                         _ => Err(ProviderError::other(format!("IMAP {:?}: {}", status, outcome.information.as_deref().unwrap_or("command failed")))),
                     };
                 }
@@ -454,12 +514,14 @@ impl Conn {
     /// `UID FETCH <set> <items> [(CHANGEDSINCE n)]`
     pub async fn uid_fetch(&mut self, set: &str, items: &str, changed_since: Option<u64>) -> Result<Vec<Fetched>> {
         let tail = changed_since.map(|m| format!(" (CHANGEDSINCE {m})")).unwrap_or_default();
-        Ok(self.raw(format!("UID FETCH {set} {items}{tail}")).await?.fetched)
+        let keep = Keep::new(set, true, items);
+        Ok(self.raw(format!("UID FETCH {set} {items}{tail}"), Some(&keep)).await?.fetched)
     }
 
     /// `FETCH <sequence set> <items>`
     pub async fn seq_fetch(&mut self, set: &str, items: &str) -> Result<Vec<Fetched>> {
-        Ok(self.raw(format!("FETCH {set} {items}")).await?.fetched)
+        let keep = Keep::new(set, false, items);
+        Ok(self.raw(format!("FETCH {set} {items}"), Some(&keep)).await?.fetched)
     }
 
     /// SELECT or EXAMINE. A reply without UIDVALIDITY (which RFC 3501 requires) is a truncated one.
@@ -474,7 +536,7 @@ impl Conn {
     }
 
     pub async fn uid_search(&mut self, query: &str) -> Result<Vec<u32>> {
-        let mut uids = self.raw(format!("UID SEARCH {query}")).await?.search;
+        let mut uids = self.raw(format!("UID SEARCH {query}"), None).await?.search;
         uids.sort_unstable();
         uids.dedup();
         Ok(uids)
@@ -482,7 +544,7 @@ impl Conn {
 
     /// `UID STORE <set> <op> (<values>)`; `op` should end in .SILENT so no echoes come back.
     pub async fn uid_store(&mut self, set: &str, op: &str, values: &[String]) -> Result<()> {
-        self.raw(format!("UID STORE {set} {op} ({})", values.join(" "))).await.map(|_| ())
+        self.raw(format!("UID STORE {set} {op} ({})", values.join(" ")), None).await.map(|_| ())
     }
 
     pub async fn uid_move(&mut self, set: &str, dest: &str) -> Result<()> {
@@ -495,7 +557,7 @@ impl Conn {
 
     /// UID EXPUNGE (needs UIDPLUS): removes only the named messages.
     pub async fn uid_expunge(&mut self, set: &str) -> Result<()> {
-        self.raw(format!("UID EXPUNGE {set}")).await.map(|_| ())
+        self.raw(format!("UID EXPUNGE {set}"), None).await.map(|_| ())
     }
 
     pub async fn create(&mut self, path: &str) -> Result<()> {
@@ -508,7 +570,7 @@ impl Conn {
     }
 
     pub async fn list(&mut self) -> Result<Vec<ListedMailbox>> {
-        let listed = self.raw("LIST \"\" \"*\"".to_string()).await?.listed;
+        let listed = self.raw("LIST \"\" \"*\"".to_string(), None).await?.listed;
         if listed.is_empty() {
             // Every account has at least INBOX.
             return Err(ProviderError::Disconnected(format!("IMAP {}: empty mailbox list", self.host)));
@@ -562,7 +624,10 @@ fn fetched_from(seq: u32, attrs: &[AttributeValue<'_>]) -> Fetched {
     for a in attrs {
         match a {
             AttributeValue::Uid(u) => f.uid = *u,
-            AttributeValue::Flags(fl) => f.flags = fl.iter().map(|s| s.to_string()).collect(),
+            AttributeValue::Flags(fl) => {
+                f.has_flags = true;
+                f.flags = fl.iter().map(|s| s.to_string()).collect();
+            }
             AttributeValue::GmailLabels(l) => f.labels = Some(l.iter().map(|s| s.to_string()).collect()),
             AttributeValue::GmailThrId(t) => f.thread_id = Some(t.to_string()),
             AttributeValue::InternalDate(d) => f.internal_date = parse_internal_date(d),

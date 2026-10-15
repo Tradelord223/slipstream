@@ -46,6 +46,8 @@ pub struct Data {
     pub condstore: bool,
     pub appended: Vec<(String, Vec<u8>, Vec<String>)>,
     pub fail_append: bool,
+    /// Before the answer to every FETCH, write unsolicited FETCH responses for other messages, as Dovecot and Gmail do.
+    pub unsolicited_fetch: bool,
     /// After login, swallow every command without answering (a wedged server).
     pub hang: bool,
     /// Every command verb received, in order (LOGIN included).
@@ -79,7 +81,7 @@ impl Fake {
             caps.insert("CONDSTORE".into());
         }
         Fake {
-            data: Arc::new(Mutex::new(Data { boxes: vec![], capabilities: caps, condstore, appended: vec![], fail_append: false, hang: false, log: vec![], lines: vec![] })),
+            data: Arc::new(Mutex::new(Data { boxes: vec![], capabilities: caps, condstore, appended: vec![], fail_append: false, hang: false, unsolicited_fetch: false, log: vec![], lines: vec![] })),
             changed: Arc::new(watch::channel(0).0),
             kill: Arc::new(watch::channel(0).0),
         }
@@ -653,6 +655,13 @@ fn handle(fake: &Fake, st: &mut SessionState, mode: &TlsMode, tag: &str, command
                 return Out { bytes: out, action };
             }
             let set = uid_set(&rest[0].s(), if use_uid { max_uid } else { count });
+            if d.unsolicited_fetch {
+                // One with no UID at all; for sequence fetches also one about the oldest message, outside the asked-for range.
+                send!("* 37 FETCH (FLAGS (\\Seen) MODSEQ (812))".into());
+                if let (false, Some(first)) = (use_uid, d.boxes[bi].messages.first()) {
+                    send!(format!("* 1 FETCH (UID {} FLAGS (\\Seen \\Flagged))", first.uid));
+                }
+            }
             let lines: Vec<Vec<u8>> = d.boxes[bi]
                 .messages
                 .iter()

@@ -17,6 +17,8 @@ pub struct Sink {
     pub messages: Arc<Mutex<Vec<Received>>>,
     /// RCPT TO addresses containing this text get a 550.
     pub refuse_rcpt: Arc<Mutex<Option<String>>>,
+    /// MAIL FROM addresses containing this text get a 535 (the server rejects the account).
+    pub reject_auth_for: Arc<Mutex<Option<String>>>,
 }
 
 impl Sink {
@@ -57,7 +59,12 @@ async fn talk(tcp: tokio::net::TcpStream, sink: Sink) -> std::io::Result<()> {
             w.write_all(b"250-sink\r\n250 8BITMIME\r\n").await?;
         } else if up.starts_with("MAIL FROM:") {
             cur = Received { from: addr_of(&line), ..Default::default() };
-            w.write_all(b"250 ok\r\n").await?;
+            let reject = sink.reject_auth_for.lock().unwrap().clone();
+            if reject.is_some_and(|x| cur.from.contains(&x)) {
+                w.write_all(b"535 5.7.8 Authentication credentials invalid\r\n").await?;
+            } else {
+                w.write_all(b"250 ok\r\n").await?;
+            }
         } else if up.starts_with("RCPT TO:") {
             let to = addr_of(&line);
             let refuse = sink.refuse_rcpt.lock().unwrap().clone();

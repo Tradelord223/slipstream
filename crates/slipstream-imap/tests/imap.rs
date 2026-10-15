@@ -920,3 +920,66 @@ async fn a_wedged_server_times_out_instead_of_hanging_the_sync() {
     let st = drain(&mut r.provider, st.cursor).await;
     assert_eq!(mids(&st), ["<b@example.com>"]);
 }
+
+#[tokio::test]
+async fn unsolicited_fetch_responses_are_not_results_even_in_a_mailbox_bigger_than_the_window() {
+    let f = Fake::generic(false);
+    for i in 0..520 {
+        f.deliver("INBOX", mail(&format!("m{i}")), Extra::default());
+    }
+    let mut r = rig(f).await;
+    let mut st = drain(&mut r.provider, None).await;
+    assert_eq!(st.messages.len(), 520);
+    st = drain(&mut r.provider, st.cursor).await; // seed the window and signatures
+    r.fake.with(|d| d.unsolicited_fetch = true);
+    r.fake.deliver("INBOX", mail("fresh"), Extra::default());
+    st = drain(&mut r.provider, st.cursor).await;
+    assert_eq!(ids(&st), ["INBOX:1:521"]);
+    assert!(st.flags.is_empty(), "no phantom flag updates: {:?}", st.flags);
+    assert!(st.deleted.is_empty(), "a uid-0 entry would make the window look like the whole mailbox: {:?}", st.deleted);
+    let cur = Cursor::parse(st.cursor.as_deref());
+    assert!(!cur.boxes["INBOX"].window.as_deref().unwrap_or("").starts_with('0'), "{:?}", cur.boxes["INBOX"].window);
+    st = drain(&mut r.provider, st.cursor).await;
+    assert_eq!((st.messages.len(), st.flags.len(), st.deleted.len()), (0, 0, 0));
+}
+
+#[tokio::test]
+async fn unsolicited_fetch_responses_do_not_disturb_changedsince() {
+    let f = Fake::generic(true);
+    f.deliver("INBOX", mail("a"), Extra::default());
+    f.deliver("INBOX", mail("b"), Extra::default());
+    let mut r = rig(f).await;
+    let mut st = drain(&mut r.provider, None).await;
+    st = drain(&mut r.provider, st.cursor).await;
+    r.fake.with(|d| d.unsolicited_fetch = true);
+    r.fake.change("INBOX", 2, |m| {
+        m.flags.insert("\\Seen".into());
+    });
+    st = drain(&mut r.provider, st.cursor).await;
+    assert_eq!(st.flags, vec![FlagUpdate { remote_id: "INBOX:1:2".into(), unread: Some(false), starred: Some(false), folders: None, labels: None }]);
+    st = drain(&mut r.provider, st.cursor).await;
+    assert!(st.flags.is_empty() && st.messages.is_empty() && st.deleted.is_empty());
+}
+
+#[tokio::test]
+async fn the_production_connector_syncs_over_implicit_tls_to_a_self_signed_loopback_server() {
+    // ImapProvider::new is what examples/sync uses: native-roots connector, loopback exemption, IP server name.
+    let f = Fake::generic(true);
+    f.deliver("INBOX", mail("a"), Extra::default());
+    let (server_cfg, _) = tls_pair();
+    let server = serve(&f, TlsMode::Implicit(server_cfg)).await;
+    let mut p = ImapProvider::new(ctx(), settings("127.0.0.1", server.port, true));
+    let st = drain(&mut p, None).await;
+    assert_eq!(mids(&st), ["<a@example.com>"]);
+    p.close().await;
+    assert!(f.log().contains(&"LOGOUT".to_string()), "close logs out");
+}
+
+#[tokio::test]
+async fn a_rejected_smtp_login_needs_reauthorization() {
+    let (mut r, sink) = smtp_rig(Fake::generic(false), "127.0.0.1").await;
+    *sink.reject_auth_for.lock().unwrap() = Some("me@example.com".into());
+    let err = r.provider.apply(RemoteAction::Send { message: outgoing() }).await.unwrap_err();
+    assert!(matches!(err, ProviderError::Auth(_)), "{err:?}");
+    assert!(r.fake.with(|d| d.appended.is_empty()));
+}
