@@ -1,0 +1,51 @@
+{
+  "name": "slipstream-mail",
+  "version": "0.1.0",
+  "description": "A keyboard-first, local-first email client. Your mail on your machine, or your team's server.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "slipstream": "bin/slipstream.js"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "dev:server": "node --watch server/src/main.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "vite build --config web/vite.config.ts && node scripts/build-server.js",
+    "start": "node dist/server.js",
+    "test": "node --test --test-reporter=spec \"server/test/**/*.test.ts\"",
+    "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "seed:bench": "node server/src/bench.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.4",
+    "chrono-node": "^2.10.3",
+    "hono": "^4.13.13",
+    "imapflow": "^2.4.0",
+    "mailparser": "^3.9.38",
+    "nodemailer": "^10.1.0",
+    "sanitize-html": "^2.18.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@types/mailparser": "^3.9.0",
+    "@types/node": "^26.6.5",
+    "@types/nodemailer": "^8.0.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/sanitize-html": "^2.16.2",
+    "@vitejs/plugin-react": "^6.1.2",
+    "dompurify": "^3.4.17",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.64.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
