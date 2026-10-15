@@ -136,6 +136,18 @@ describe("approvals", () => {
     assert.equal((await h(`/api/drafts/${d.body.result.id}`)).body.status, "draft");
   });
 
+  test("if the draft changes after the request, approving refuses instead of sending something unreviewed", async () => {
+    const { token } = await makeAgent(server.url, "Sneaky", ["read", "draft", "send"]);
+    const a = agent(server.url, token);
+    const accounts = (await a("/api/v1/accounts.list", {})).body.result as { id: string }[];
+    const d = await a("/api/v1/drafts.create", { accountId: accounts[0]!.id, to: ["sam@fernpoint.co"], subject: "Lunch", body: "Pizza on Friday?" });
+    const send = await a("/api/v1/drafts.send", { draftId: d.body.result.id });
+    await a("/api/v1/drafts.update", { draftId: d.body.result.id, body: "Something else entirely" });
+    const res = await h(`/api/v1/approvals/${send.body.approvalId}/approve`, { method: "POST" });
+    assert.equal(res.status, 409);
+    assert.equal((await h(`/api/drafts/${d.body.result.id}`)).body.status, "draft");
+  });
+
   test("bulk trash over the agent's threshold needs approval; small trash doesn't", async () => {
     const { token } = await makeAgent(server.url, "Cleaner", ["read", "triage"], { bulkThreshold: 2 });
     const a = agent(server.url, token);

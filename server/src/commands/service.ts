@@ -212,7 +212,13 @@ export class Commands {
         events.emitToUser(userId, { type: "approval", approvalId, status: "approved" });
         return { status: "done", result, activityId: null };
       }
-      const result = await this.execute({ kind: "agent", user, agent }, row.command, JSON.parse(row.input), { approvalId });
+      // What runs must be what the person saw: if the preview would read differently now (say the agent
+      // edited the draft after asking), refuse rather than send something that wasn't reviewed.
+      const cmd = this.get(row.command);
+      const agentActor = { kind: "agent" as const, user, agent };
+      if (cmd.preview && cmd.preview(this.ctx, agentActor, cmd.input.parse(JSON.parse(row.input))) !== row.preview)
+        throw new HttpError(409, "This changed after it was sent for review. Ask the agent to request it again.");
+      const result = await this.execute(agentActor, row.command, JSON.parse(row.input), { approvalId });
       db.run("UPDATE approvals SET result = ? WHERE id = ?", JSON.stringify(result), approvalId);
       events.emitToUser(userId, { type: "approval", approvalId, status: "approved" });
       return result;

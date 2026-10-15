@@ -365,6 +365,9 @@ export function buildCatalog(): Command[] {
       input: z.object({ draftId: z.string(), ...draftFields }),
       run: (ctx, actor, i) => {
         const d = getDraft(ctx, actor.user.id, i.draftId);
+        // Once a send is queued (and possibly approved), agents can't change what goes out.
+        if (actor.kind === "agent" && d.status !== "draft" && d.status !== "failed")
+          throw new HttpError(409, "This draft is queued to send. Cancel the send before editing it.");
         const draft = updateDraft(ctx, actor.user.id, d.id, {
           accountId: d.accountId,
           to: i.to.length ? i.to.map(toAddr) : d.to,
@@ -383,7 +386,9 @@ export function buildCatalog(): Command[] {
       scope: "draft",
       input: z.object({ draftId: z.string() }),
       run: (ctx, actor, i) => {
-        const subject = getDraft(ctx, actor.user.id, i.draftId).subject;
+        const current = getDraft(ctx, actor.user.id, i.draftId);
+        if (actor.kind === "agent" && current.status === "scheduled") throw new HttpError(409, "This draft is queued to send. Cancel the send first.");
+        const subject = current.subject;
         deleteDraft(ctx, actor.user.id, i.draftId);
         return { result: { ok: true }, summary: `Discarded the draft "${subject || "(no subject)"}"` };
       },
