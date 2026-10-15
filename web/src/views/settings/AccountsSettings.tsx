@@ -134,7 +134,7 @@ function Connect() {
             {`GOOGLE_CLIENT_ID=<your client id>\nGOOGLE_CLIENT_SECRET=<your client secret>`}
           </pre>
           <p>
-            Set the authorized redirect URI to <code>{origin}/api/oauth/google/callback</code>. Full steps are in <code>docs/connect-accounts.md</code>.
+            Set the authorized redirect URI to <code>{origin}/api/oauth/google/callback</code>. Full steps are in <a href="https://github.com/Tradelord223/slipstream/blob/main/docs/connect-accounts.md" target="_blank" rel="noopener noreferrer">the connection guide</a>.
           </p>
         </div>
       )}
@@ -143,7 +143,7 @@ function Connect() {
           <p>Outlook needs an app registration of your own in Microsoft Entra. Start Slipstream with:</p>
           <pre>{`MICROSOFT_CLIENT_ID=<your application id>`}</pre>
           <p>
-            Set the redirect URI to <code>http://localhost:{port}/api/oauth/microsoft/callback</code> when running locally. Full steps are in <code>docs/connect-accounts.md</code>.
+            Set the redirect URI to <code>http://localhost:{port}/api/oauth/microsoft/callback</code> when running locally. Full steps are in <a href="https://github.com/Tradelord223/slipstream/blob/main/docs/connect-accounts.md" target="_blank" rel="noopener noreferrer">the connection guide</a>.
           </p>
         </div>
       )}

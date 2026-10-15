@@ -115,6 +115,8 @@ export const api = {
   snippetUsed: (id: string) => post<{ ok: true }>(`/api/snippets/${id}/used`),
 
   saveSettings: (s: Record<string, unknown>) => put<{ ok: true }>("/api/settings", s),
+  summarize: (threadId: string) => post<{ summary: string }>("/api/ai/summarize", { threadId }),
+  aiDraft: (body: { threadId?: string; instruction: string; currentDraft?: string }) => post<{ text: string }>("/api/ai/draft", body),
   saveAiKey: (apiKey: string) => put<{ ok: true }>("/api/settings/ai-key", { apiKey }),
   createSplit: (name: string, query: string) => post<{ id: string; name: string; query: string; builtin: boolean }>("/api/splits", { name, query }),
   updateSplit: (id: string, name: string, query: string) => put<{ ok: true }>(`/api/splits/${id}`, { name, query }),

@@ -16,7 +16,7 @@ export function TeamSettings() {
           <h3 className="block-title">Teams run on a self-hosted server</h3>
           <p className="block-lead">
             This copy of Slipstream is yours alone and everything stays on this machine. To share conversations, comment on them and share snippets, run Slipstream on a server for your team.
-            The steps are in <code>docs/self-hosting.md</code>.
+            The steps are in <a href="https://github.com/Tradelord223/slipstream/blob/main/docs/self-hosting.md" target="_blank" rel="noopener noreferrer">the self-hosting guide</a>.
           </p>
         </section>
       </div>

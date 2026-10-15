@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { bytes, htmlToText } from "../lib/format.ts";
+import { api } from "../api.ts";
+import { bytes, escapeHtml, htmlToText } from "../lib/format.ts";
 import { fuzzyFilter } from "../lib/fuzzy.ts";
 import { useDismiss } from "../lib/hooks.ts";
 import { Keys } from "./Keycap.tsx";
@@ -8,9 +9,10 @@ import { Dialog } from "./Dialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { RecipientField } from "./RecipientField.tsx";
 import {
-  attachFiles, closeCompose, compose, composeBus, discardDraft, edit, insertSnippet, removeAttachment, sendCompose, sendLater, useCompose,
+  attachFiles, closeCompose, compose, composeBus, discardDraft, edit, getEditor, insertSnippet, removeAttachment, sendCompose, sendLater, useCompose,
 } from "../store/compose.ts";
 import { useSession } from "../store/session.ts";
+import { toast } from "../store/toasts.ts";
 
 export type Placement = "dock" | "modal" | "inline" | "full";
 
@@ -36,6 +38,7 @@ function ComposerBody({ placement }: { placement: Placement }) {
   const fromSelect = useRef<HTMLSelectElement>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const isReply = s.kind !== "new";
 
@@ -50,6 +53,9 @@ function ComposerBody({ placement }: { placement: Placement }) {
       } else if (name === "snippets") {
         editor.current?.saveSelection();
         setPickerOpen(true);
+      } else if (name === "ai") {
+        editor.current?.saveSelection();
+        setAiOpen(true);
       } else if (name === "from") {
         fromSelect.current?.focus();
         try {
@@ -171,6 +177,7 @@ function ComposerBody({ placement }: { placement: Placement }) {
         </ul>
       )}
 
+      {aiOpen && <AiBar editor={editor} onClose={() => setAiOpen(false)} />}
       {linkOpen && <LinkBar editor={editor} onClose={() => setLinkOpen(false)} />}
 
       <div className="composer-followup">
@@ -262,6 +269,66 @@ function SendButton() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Cmd+J: ask for a draft, get plain paragraphs back at the caret. */
+function AiBar({ editor, onClose }: { editor: React.RefObject<EditorApi | null>; onClose: () => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.focus(), []);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    try {
+      const st = compose.get();
+      const current = new DOMParser().parseFromString(st.bodyHtml, "text/html").body.innerText ?? "";
+      const { text: out } = await api.aiDraft({ threadId: st.threadId ?? undefined, instruction: text.trim(), currentDraft: current.trim() || undefined });
+      const html = out
+        .trim()
+        .split(/\n{2,}/)
+        .map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`)
+        .join("");
+      editor.current?.restoreSelection();
+      getEditor()?.insertHtml(html);
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't write that draft");
+      setBusy(false);
+      input.current?.focus();
+    }
+  };
+  return (
+    <form className="link-bar" onSubmit={submit}>
+      <Icon name="sparkle" />
+      <input
+        ref={input}
+        className="field"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="What should it say?"
+        aria-label="What should it say?"
+        disabled={busy}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            onClose();
+            editor.current?.restoreSelection();
+          }
+        }}
+      />
+      {busy ? <span className="spinner" role="status" aria-label="Writing" /> : (
+        <button type="submit" className="btn btn-sm btn-primary" disabled={!text.trim()}>
+          Write
+        </button>
+      )}
+      <button type="button" className="btn btn-sm btn-quiet" onClick={onClose}>
+        Cancel
+      </button>
+    </form>
   );
 }
 

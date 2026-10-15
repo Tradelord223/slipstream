@@ -553,3 +553,18 @@ a.attachment:hover {
     bottom: 60px;
   }
 }
+
+.summary-text {
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+}
+.summary-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 13px;
+}

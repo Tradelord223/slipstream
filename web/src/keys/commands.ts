@@ -161,7 +161,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "compose.pop", title: "Pop out or dock", group: "Compose", keys: ["mod+shift+p"], scopes: ["compose"], run: () => compose.set((s) => ({ mode: s.mode === "modal" ? "dock" : "modal", inline: false })), when: () => compose.get().open },
   { id: "compose.intro", title: "Instant Intro", group: "Compose", keys: ["mod+shift+i"], scopes: ["compose"], run: () => void instantIntro(), when: () => compose.get().open && Boolean(compose.get().threadId) },
   { id: "compose.snippets", title: "Insert snippet…", group: "Compose", keys: ["mod+;"], scopes: ["compose"], run: () => emitCompose("snippets"), when: () => compose.get().open },
-  { id: "compose.ai", title: "Write with AI", group: "Compose", keys: ["mod+j"], scopes: ["compose"], run: () => toast.info("AI drafting is coming soon"), when: () => hasAi() && compose.get().open },
+  { id: "compose.ai", title: "Write with AI", group: "Compose", keys: ["mod+j"], scopes: ["compose"], run: () => emitCompose("ai"), when: () => hasAi() && compose.get().open },
   { id: "format.bold", title: "Bold", group: "Compose", keys: ["mod+b"], scopes: ["compose"], run: () => format("bold"), when: () => compose.get().open },
   { id: "format.italic", title: "Italic", group: "Compose", keys: ["mod+i"], scopes: ["compose"], run: () => format("italic"), when: () => compose.get().open },
   { id: "format.underline", title: "Underline", group: "Compose", keys: ["mod+u"], scopes: ["compose"], run: () => format("underline"), when: () => compose.get().open },

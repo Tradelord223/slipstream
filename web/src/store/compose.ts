@@ -409,4 +409,4 @@ export async function instantIntro() {
 // ---- Commands that need the composer UI (link prompt, pickers, file chooser) -----------
 
 export const composeBus = new EventTarget();
-export const emitCompose = (name: "link" | "snippets" | "attach" | "from") => composeBus.dispatchEvent(new CustomEvent("compose", { detail: name }));
+export const emitCompose = (name: "link" | "snippets" | "attach" | "from" | "ai") => composeBus.dispatchEvent(new CustomEvent("compose", { detail: name }));

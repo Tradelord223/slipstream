@@ -94,12 +94,7 @@ export function ContextPane({ detail }: { detail: ThreadDetail }) {
         </div>
       </section>
 
-      {ai && (
-        <section className="ctx-section" data-ai-summary>
-          <h3>Summary</h3>
-          <p className="muted">A short summary of this conversation will appear here.</p>
-        </section>
-      )}
+      {ai && <SummaryCard threadId={detail.thread.id} />}
 
       {workspace && <TeamSection detail={detail} />}
 
@@ -211,6 +206,51 @@ function TeamSection({ detail }: { detail: ThreadDetail }) {
           Post
         </button>
       </form>
+    </section>
+  );
+}
+
+const summaries = new Map<string, string>();
+
+/** Plain-text summary on request; never called until the button is pressed. */
+function SummaryCard({ threadId }: { threadId: string }) {
+  const [text, setText] = useState<string | null>(summaries.get(threadId) ?? null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setText(summaries.get(threadId) ?? null);
+    setError(null);
+    setBusy(false);
+  }, [threadId]);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { summary } = await api.summarize(threadId);
+      summaries.set(threadId, summary);
+      setText(summary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't summarize this conversation");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="ctx-section" data-ai-summary>
+      <h3>Summary</h3>
+      {text && <p className="summary-text">{text}</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {busy ? (
+        <span className="summary-busy" role="status">
+          <span className="spinner" /> Reading the conversation…
+        </span>
+      ) : (
+        <button className="btn btn-sm" onClick={() => void run()}>
+          <Icon name="sparkle" /> {text ? "Summarize again" : "Summarize"}
+        </button>
+      )}
     </section>
   );
 }
