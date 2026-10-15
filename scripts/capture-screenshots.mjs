@@ -54,6 +54,47 @@ async function waitForServer() {
 const call = (method, path, body) =>
   fetch(base + path, { method, headers: { "x-slipstream": "1", "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then((r) => r.json());
 
+/** An agent acting through its own token, the way an assistant would. */
+const asAgent = (token) => (command, input) =>
+  fetch(`${base}/api/v1/${command}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(input ?? {}) }).then((r) => r.json());
+
+/** Two assistants with a few things done and three requests waiting in Review. Runs after the inbox shots, since it moves mail. */
+async function seedAgents() {
+  const threads = (await call("GET", "/api/threads?view=inbox&limit=50")).threads;
+  const bySubject = (text) => threads.find((t) => t.subject.includes(text));
+  const sweep = await call("POST", "/api/agents", { name: "Morning sweep", scopes: ["read", "triage", "settings"], policy: { bulkThreshold: 10, settings: "approve" } });
+  const drafter = await call("POST", "/api/agents", { name: "Reply drafter", scopes: ["read", "draft", "send"], policy: { send: "always" } });
+  const sweeper = asAgent(sweep.token);
+  const writer = asAgent(drafter.token);
+
+  const shipped = bySubject("Your order has shipped");
+  const mugs = bySubject("Studio mugs");
+  const invoice = bySubject("invoice for October");
+  const tools = bySubject("Tools that get out");
+  if (shipped) await sweeper("triage.done", { threadIds: [shipped.id] });
+  if (invoice) await sweeper("triage.label", { threadIds: [invoice.id], label: "Receipts" });
+  if (tools) await sweeper("triage.markRead", { threadIds: [tools.id] });
+  const starred = tools && (await sweeper("triage.star", { threadIds: [tools.id] }));
+  if (starred?.activityId) await call("POST", `/api/v1/activity/${starred.activityId}/undo`);
+
+  if (mugs) {
+    const draft = await writer("drafts.create", {
+      threadId: mugs.id,
+      body: "Hi Marco,\n\nTwelve mugs in the oat glaze works for us. Could you send the glaze card and a delivery estimate for the first week of November?\n\nThanks,\nJordan",
+    });
+    if (draft.result?.id) await writer("drafts.send", { draftId: draft.result.id });
+  }
+  const second = await writer("drafts.create", {
+    to: [{ name: "Priya Raman", email: "priya@fernpoint.co" }],
+    cc: ["sam@fernpoint.co"],
+    subject: "Thursday walkthrough",
+    body: "Hi Priya,\n\nThursday at 2pm works. I'll bring the round 2 dashboard notes and we can go through the lane grouping together.\n\nSee you then,\nJordan",
+  });
+  if (second.result?.id) await writer("drafts.send", { draftId: second.result.id });
+  await sweeper("triage.trash", { threadIds: threads.slice(0, 11).map((t) => t.id) });
+  await sweeper("splits.create", { name: "Receipts", query: "label:receipts" });
+}
+
 try {
   await waitForServer();
   mkdirSync(out, { recursive: true });
@@ -147,6 +188,41 @@ try {
   await sleep(700);
   await shot(page, "mobile-thread");
   await mobile.close();
+
+  // Agents: Review, Activity, Settings -> Agents and Connect.
+  await seedAgents();
+  await call("POST", "/api/webhooks", { url: "https://hooks.fernpoint.example/slipstream", events: ["approval"] });
+  const agentsDark = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" });
+  page = await agentsDark.newPage();
+  await page.route("**/api/remote", (r) =>
+    r.fulfill({ json: { tailscale: { installed: true, running: true, dnsName: "studio.tail4f2a.ts.net", serve: { url: "https://studio.tail4f2a.ts.net" }, funnel: null }, publicListener: { port } } }),
+  );
+  const visit = async (path, ready) => {
+    await page.goto(base + path);
+    await page.waitForSelector(ready, { timeout: 10000 });
+    await page.evaluate(() => document.fonts.ready);
+    await sleep(700);
+  };
+  await visit("/review", ".rv-card");
+  await shot(page, "review-dark");
+  await visit("/activity", ".act-row");
+  await shot(page, "activity-dark");
+  await visit("/settings/agents", ".ag-row");
+  await shot(page, "agents-dark");
+  await visit("/settings/connect", ".snip");
+  await page.evaluate(() => document.querySelector(".settings-content")?.scrollTo(0, 99999));
+  await sleep(300);
+  await shot(page, "connect-dark");
+  await agentsDark.close();
+
+  const mobileReview = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: "dark" });
+  page = await mobileReview.newPage();
+  await page.goto(base + "/review");
+  await page.waitForSelector(".rv-card");
+  await page.evaluate(() => document.fonts.ready);
+  await sleep(700);
+  await shot(page, "mobile-review");
+  await mobileReview.close();
   await browser.close();
   console.log(`Screenshots written to ${out}`);
 } finally {

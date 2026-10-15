@@ -79,7 +79,16 @@ function SharedList() {
               </span>
               <span className="row-body">
                 <span className="row-subject">{s.subject}</span>
-                <span className="row-snippet">{s.lastComment ? ` — ${s.lastComment}` : ""}</span>
+                <span className="row-snippet">
+                  {s.lastComment ? (
+                    <>
+                      <span className="row-sep" aria-hidden="true">
+                        {" — "}
+                      </span>
+                      {s.lastComment}
+                    </>
+                  ) : null}
+                </span>
               </span>
               <span className="row-meta">
                 {s.assignee && <span className="chip">{s.assignee.name}</span>}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Composer } from "../components/Composer.tsx";
+import { AgentTrail } from "../components/AgentTrail.tsx";
 import { ContextPane } from "../components/ContextPane.tsx";
 import { EmptyState } from "../components/InboxZero.tsx";
 import { Icon } from "../components/Icon.tsx";
@@ -103,6 +104,7 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
                   </span>
                 ))}
               </div>
+              <AgentTrail threadId={detail.thread.id} draftId={detail.draftId} />
               {messages.map((m, i) => (
                 <MessageCard
                   key={m.id}

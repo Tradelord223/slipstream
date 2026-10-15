@@ -8,7 +8,7 @@ import { Dialog } from "./Dialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { Keys } from "./Keycap.tsx";
 
-const GROUP_ORDER = ["Move", "Triage", "Select", "Write", "Compose", "Go to", "General", "Accounts"];
+const GROUP_ORDER = ["Move", "Triage", "Select", "Review", "Write", "Compose", "Go to", "General", "Accounts"];
 
 export function ShortcutsSheet() {
   const open = useUi((s) => s.shortcuts);
@@ -24,8 +24,8 @@ function Sheet() {
 
   const groups = useMemo(() => {
     // The arrow keys duplicate j and k; list them on the same row.
-    const alias: Record<string, string> = { "nav.next": "nav.nextArrow", "nav.prev": "nav.prevArrow" };
-    const hidden = new Set(["nav.nextArrow", "nav.prevArrow", "compose.replyAllList"]);
+    const alias: Record<string, string> = { "nav.next": "nav.nextArrow", "nav.prev": "nav.prevArrow", "review.next": "review.nextArrow", "review.prev": "review.prevArrow" };
+    const hidden = new Set(["nav.nextArrow", "nav.prevArrow", "review.nextArrow", "review.prevArrow", "compose.replyAllList"]);
     const rows = COMMANDS.filter((c) => (c.id !== "compose.ai" || ai) && !c.id.startsWith("account.") && !hidden.has(c.id))
       .map((c) => {
         const extra = alias[c.id] ? COMMANDS.find((x) => x.id === alias[c.id]) : undefined;

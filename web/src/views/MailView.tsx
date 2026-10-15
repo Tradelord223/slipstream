@@ -132,7 +132,12 @@ function DraftsList() {
             </span>
             <span className="row-body">
               <span className="row-subject">{d.subject || "(no subject)"}</span>
-              <span className="row-snippet"> — {htmlToText(d.bodyHtml).slice(0, 140)}</span>
+              <span className="row-snippet">
+                <span className="row-sep" aria-hidden="true">
+                  {" — "}
+                </span>
+                {htmlToText(d.bodyHtml).slice(0, 140)}
+              </span>
             </span>
             <span className="row-meta">
               {d.status === "scheduled" && d.sendAt && (

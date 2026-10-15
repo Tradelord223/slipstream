@@ -1,4 +1,5 @@
 import type { ServerEvent } from "../types.ts";
+import { bumpActivity, refreshApprovals } from "./agents.ts";
 import { onDraftEvent } from "./compose.ts";
 import { createStore, useStore } from "./createStore.ts";
 import { refreshCounts } from "./counts.ts";
@@ -33,13 +34,15 @@ export function connectEvents() {
       hadError = false;
       reload(true);
       refreshCounts(true);
+      refreshApprovals(true);
+      bumpActivity();
       void refreshSession();
     }
   });
   es.onerror = () => {
     hadError = true;
   };
-  for (const type of ["threads", "sync", "drafts", "team", "import"] as const) {
+  for (const type of ["threads", "sync", "drafts", "team", "import", "activity", "approval"] as const) {
     es.addEventListener(type, (ev) => {
       try {
         handle(JSON.parse((ev as MessageEvent<string>).data) as ServerEvent);
@@ -73,6 +76,13 @@ function handle(e: ServerEvent) {
     }
     case "drafts":
       onDraftEvent(e);
+      break;
+    case "approval":
+      refreshApprovals();
+      bumpActivity();
+      break;
+    case "activity":
+      bumpActivity();
       break;
     case "team":
       teamTick.set((s) => ({ n: s.n + 1 }));

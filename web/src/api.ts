@@ -1,4 +1,5 @@
 import type {
+  ActivityItem, AgentInfo, AgentInput, Approval, ExecuteResult, RemoteMode, RemoteStatus, Webhook,
   Address, Bootstrap, ContactInfo, Contact, Counts, Draft, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
   ThreadPage, TriageKind, TriageResult, SharedComment,
 } from "./types.ts";
@@ -46,6 +47,7 @@ async function request<T>(method: string, path: string, body?: unknown, opts: { 
   return (await res.json()) as T;
 }
 
+const patch = <T>(path: string, body?: unknown) => request<T>("PATCH", path, body ?? {});
 const get = <T>(path: string, signal?: AbortSignal) => request<T>("GET", path, undefined, { signal });
 const post = <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {});
 const put = <T>(path: string, body?: unknown) => request<T>("PUT", path, body ?? {});
@@ -143,6 +145,26 @@ export const api = {
   comment: (id: string, body: string) => post<SharedComment>(`/api/shared/${id}/comments`, { body }),
   updateShared: (id: string, body: { assigneeId?: string | null; status?: "open" | "resolved" }) =>
     request<{ ok: true }>("PATCH", `/api/shared/${id}`, body),
+
+  // Agents: the Review queue, activity, tokens, webhooks and remote access.
+  approvals: (status: "pending" | "decided", signal?: AbortSignal) => get<{ approvals: Approval[] }>(`/api/v1/approvals${qs({ status })}`, signal),
+  approve: (id: string) => post<ExecuteResult>(`/api/v1/approvals/${encodeURIComponent(id)}/approve`),
+  reject: (id: string) => post<{ ok: true }>(`/api/v1/approvals/${encodeURIComponent(id)}/reject`),
+  activity: (p: { limit?: number; agentId?: string; threadId?: string }, signal?: AbortSignal) =>
+    get<{ activity: ActivityItem[] }>(`/api/v1/activity${qs({ limit: p.limit, agentId: p.agentId, threadId: p.threadId })}`, signal),
+  undoActivity: (id: string) => post<{ threadIds: string[] }>(`/api/v1/activity/${encodeURIComponent(id)}/undo`),
+  agents: () => get<{ agents: AgentInfo[] }>("/api/agents"),
+  createAgent: (body: AgentInput) => post<{ agent: AgentInfo; token: string }>("/api/agents", body),
+  updateAgent: (id: string, body: Partial<AgentInput>) => patch<{ agent: AgentInfo }>(`/api/agents/${encodeURIComponent(id)}`, body),
+  revokeAgent: (id: string) => del<{ ok: true }>(`/api/agents/${encodeURIComponent(id)}`),
+  webhooks: () => get<{ webhooks: Webhook[]; events: string[] }>("/api/webhooks"),
+  createWebhook: (url: string, events: string[]) => post<{ id: string; secret: string }>("/api/webhooks", { url, events }),
+  testWebhook: (id: string) => post<{ status: number }>(`/api/webhooks/${encodeURIComponent(id)}/test`),
+  deleteWebhook: (id: string) => del<{ ok: true }>(`/api/webhooks/${encodeURIComponent(id)}`),
+  remote: () => get<RemoteStatus>("/api/remote"),
+  setRemote: (mode: RemoteMode) => post<RemoteStatus>("/api/remote/tailscale", { mode }),
+  /** The OpenAPI document needs the client header, so a plain link can't open it. */
+  openApiSpec: () => get<unknown>("/api/v1/openapi.json"),
 };
 
 export interface DraftInput {

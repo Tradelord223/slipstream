@@ -21,6 +21,8 @@ export default defineConfig({
     open: false,
     fs: { allow: [fileURLToPath(new URL("..", import.meta.url)), realpathSync(fileURLToPath(new URL("../node_modules", import.meta.url)))] },
     proxy: {
+      // The MCP endpoint, so the snippets on the Connect page work against the dev server too.
+      "/mcp": { target: apiTarget, changeOrigin: true },
       "/api": {
         target: apiTarget,
         // The server only answers to its own Host and Origin; present the dev page as if it were served from there.

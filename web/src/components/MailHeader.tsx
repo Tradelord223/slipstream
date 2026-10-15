@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { viewTitle } from "../lib/views.ts";
-import { useViewport } from "../lib/hooks.ts";
 import { act } from "../store/actions.ts";
 import { useCounts } from "../store/counts.ts";
 import { clearFilter, clearSelection, useList } from "../store/list.ts";
 import { goView } from "../store/nav.ts";
 import { navigate, type MailView } from "../store/route.ts";
 import { useSession } from "../store/session.ts";
-import { openPalette, toggleRail, ui, useUi } from "../store/ui.ts";
+import { openPalette, ui, useUi } from "../store/ui.ts";
 import { Icon } from "./Icon.tsx";
 import { Keys } from "./Keycap.tsx";
+import { MenuButton } from "./PageHeader.tsx";
 import { AddSplitDialog } from "./SplitEditor.tsx";
 
 const HINTS: { token: string; note: string }[] = [
@@ -27,24 +27,12 @@ const HINTS: { token: string; note: string }[] = [
 ];
 
 export function MailHeader({ view }: { view: MailView }) {
-  const viewport = useViewport();
-  const railOpen = useUi((s) => s.railOpen);
   const selected = useList((s) => s.selected);
   const splits = useSession((s) => s.splits);
   const filter = useList((s) => s.filter);
   const searchOpen = useUi((s) => s.searchOpen) || view.kind === "search";
 
-  const menu = viewport === "desktop" ? (
-    !railOpen && (
-      <button className="icon-btn" aria-label="Show sidebar" onClick={toggleRail}>
-        <Icon name="sidebar" />
-      </button>
-    )
-  ) : (
-    <button className="icon-btn tap" aria-label="Open menu" onClick={() => ui.set({ sheetOpen: true })}>
-      <Icon name="menu" size={18} />
-    </button>
-  );
+  const menu = <MenuButton />;
 
   if (selected.size > 0) return <BulkBar count={selected.size} leading={menu} />;
 

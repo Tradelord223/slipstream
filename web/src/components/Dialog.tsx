@@ -13,6 +13,7 @@ export function Dialog({
   className = "",
   placement = "center",
   initialFocus,
+  lockScrim = false,
 }: {
   label: string;
   onClose: () => void;
@@ -21,6 +22,8 @@ export function Dialog({
   placement?: "center" | "top";
   /** Selector for the element that gets focus first; defaults to the first focusable. */
   initialFocus?: string;
+  /** A click outside doesn't close it (Escape still does), for steps that can't be redone. */
+  lockScrim?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -61,7 +64,12 @@ export function Dialog({
   };
 
   return (
-    <div className={`scrim ${placement === "top" ? "scrim-top" : ""}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className={`scrim ${placement === "top" ? "scrim-top" : ""}`} onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // A locked dialog ignores the click but keeps focus inside, so Escape still reaches it.
+        if (lockScrim) e.preventDefault();
+        else onClose();
+      }}>
       <div ref={ref} className={`dialog ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
         <h2 id={titleId} className="sr-only">
           {label}

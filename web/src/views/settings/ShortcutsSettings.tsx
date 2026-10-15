@@ -7,7 +7,7 @@ import { bindingsOf, conflictsFor } from "../../keys/registry.ts";
 import { updateSettings, useSession } from "../../store/session.ts";
 import { ui } from "../../store/ui.ts";
 
-const GROUP_ORDER = ["Move", "Triage", "Select", "Write", "Compose", "Go to", "General"];
+const GROUP_ORDER = ["Move", "Triage", "Select", "Review", "Write", "Compose", "Go to", "General"];
 
 export function ShortcutsSettings() {
   const keymap = useSession((s) => s.settings.keymap);
