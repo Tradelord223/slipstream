@@ -49,7 +49,31 @@ export interface ParseOptions {
 
 /** Parse RFC 5322 bytes into Slipstream's normalized message. */
 export async function parseRawMessage(raw: Buffer | string, opts: ParseOptions): Promise<IncomingMessage> {
+  return (await parseRaw(raw, opts)).message;
+}
+
+/** Like parseRawMessage, plus access to any raw header (e.g. Takeout's X-Gmail-Labels, X-GM-THRID). */
+export async function parseRaw(
+  raw: Buffer | string,
+  opts: ParseOptions,
+): Promise<{ message: IncomingMessage; header: (name: string) => string | undefined }> {
   const parsed = await simpleParser(raw, { skipImageLinks: true, skipTextToHtml: true, keepCidLinks: true });
+  return { message: toIncoming(parsed, opts), header: (name) => header(parsed, name.toLowerCase()) };
+}
+
+/**
+ * Attachment bytes by the index handle parseRaw assigns ("idx:N"). Providers that only keep raw
+ * messages remotely (Gmail raw, IMAP) re-fetch the source and call this for downloads.
+ */
+export async function extractAttachment(raw: Buffer | string, remoteId: string): Promise<Buffer> {
+  const index = Number(/^idx:(\d+)$/.exec(remoteId)?.[1] ?? NaN);
+  const parsed = await simpleParser(raw, { skipImageLinks: true, skipTextToHtml: true, keepCidLinks: true });
+  const att = parsed.attachments[index];
+  if (!att) throw new Error("Attachment not found in message");
+  return att.content;
+}
+
+function toIncoming(parsed: ParsedMail, opts: ParseOptions): IncomingMessage {
   const from = addresses(parsed.from)[0] ?? { name: "", email: "" };
   const refs = parsed.references ? (Array.isArray(parsed.references) ? parsed.references : [parsed.references]) : [];
   const precedence = header(parsed, "precedence")?.toLowerCase();
@@ -85,7 +109,8 @@ export async function parseRawMessage(raw: Buffer | string, opts: ParseOptions):
     listUnsubscribe: listUnsubscribe(parsed),
     bulk,
     outgoing: self ? from.email === self : undefined,
-    attachments: parsed.attachments.map((a) => ({
+    attachments: parsed.attachments.map((a, i) => ({
+      remoteId: `idx:${i}`,
       filename: a.filename ?? "attachment",
       mimeType: a.contentType,
       size: a.size,
