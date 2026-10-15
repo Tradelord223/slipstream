@@ -169,7 +169,7 @@ export type ImapClient = Pick<
   | "mailbox"
 >;
 
-export type SmtpTransport = Pick<Transporter,"sendMail" | "close">;
+export type SmtpTransport = Pick<Transporter, "sendMail" | "close">;
 
 /** Test seams: swap the network clients for fakes. */
 export interface ImapDeps {
@@ -550,6 +550,8 @@ export class ImapProvider implements MailProvider {
   private queued = new Map<string, number[]>();
   /** Last flags sent per mailbox window, so an unchanged message isn't re-announced every round. */
   private signatures = new Map<string, Map<number, string>>();
+  /** Gmail: remote ids of messages we moved out of a mailbox, to retire even if they're outside the change window. */
+  private moved = new Set<string>();
 
   constructor(ctx: ProviderContext, deps: ImapDeps = {}) {
     this.ctx = ctx;
@@ -631,7 +633,9 @@ export class ImapProvider implements MailProvider {
     const total = n * 2;
     while (cursor.step < total) {
       this.ctx.signal?.throwIfAborted();
-      const checking = cursor.step < n;
+      // Elsewhere the store drops a copy that arrives while its twin still exists, so deletions must come first.
+      // Gmail threads by X-GM-THRID, which keeps a thread alive across a move, so there additions go first.
+      const checking = (cursor.step < n) === !layout.gmail;
       const target = layout.targets[cursor.step % n]!;
       const res = await this.run((c) => (checking ? this.checkChanges(c, target, layout.gmail, cursor) : this.fetchNew(c, target, layout.gmail, cursor)));
       const content = res.messages.length > 0 || res.flagUpdates.length > 0 || res.deleted.length > 0;
@@ -653,10 +657,7 @@ export class ImapProvider implements MailProvider {
     return { messages: [], cursor: serializeCursor(cursor), done: true };
   }
 
-  /**
-   * Flag changes and expunges in mailboxes we already follow. These go out before any new mail in the round, so a
-   * message moved between mailboxes is deleted from its old place before it is added to its new one.
-   */
+  /** Flag changes and expunges in mailboxes we already follow. */
   private async checkChanges(c: ImapClient, target: SyncTarget, gmail: boolean, cursor: Cursor): Promise<StepResult> {
     const st = cursor.boxes[target.path];
     if (!st || st.initial) return emptyStep();
@@ -681,6 +682,11 @@ export class ImapProvider implements MailProvider {
         firstSeq === 1,
       )) {
         res.deleted.push(remoteIdFor(target.path, validity, uid));
+      }
+      for (const id of this.moved) {
+        if (!id.startsWith(`${target.path}:${validity}:`)) continue;
+        this.moved.delete(id);
+        if (!res.deleted.includes(id)) res.deleted.push(id);
       }
 
       const live = known.filter((m) => !m.flags?.has("\\Deleted"));
@@ -823,9 +829,11 @@ export class ImapProvider implements MailProvider {
     // Without MOVE imapflow would copy and expunge, and expunging from Gmail's All Mail deletes for good.
     if (layout.gmail && !c.capabilities.has("MOVE")) throw new PermanentProviderError("Gmail's IMAP server did not offer MOVE");
     let dest = typeof to === "string" ? to : undefined;
-    await this.eachMailbox(c, from.filter((p) => p !== dest), thread, async (_path, uids) => {
+    await this.eachMailbox(c, from.filter((p) => p !== dest), thread, async (path, uids, mb) => {
       dest ??= await (to as () => Promise<string>)();
       await c.messageMove(uids, dest, { uid: true });
+      // Gmail's old rows would otherwise linger beyond the newest-500 window and show up as duplicates.
+      if (layout.gmail) for (const uid of uids) this.moved.add(remoteIdFor(path, String(mb.uidValidity), uid));
     });
   }
 
