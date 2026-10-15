@@ -41,7 +41,7 @@ Slipstream keeps the speed and drops the rest.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
 - **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
-- **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agents.md](docs/agents.md).
+- **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agent-api.md](docs/agent-api.md).
 - **claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI.
 
 ## See it
@@ -94,7 +94,7 @@ npm run typecheck
 npm run build && npm start
 ```
 
-The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. No native dependencies anywhere. More in [docs/architecture.md](docs/architecture.md); agents, MCP and remote access in [docs/agents.md](docs/agents.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
+The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. No native dependencies anywhere. More in [docs/architecture.md](docs/architecture.md); agents, MCP and remote access in [docs/agent-api.md](docs/agent-api.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
 
 ## License
 

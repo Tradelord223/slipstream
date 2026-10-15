@@ -112,9 +112,10 @@ describe("approvals", () => {
     assert.equal(send.status, 202);
     assert.equal(send.body.status, "pending_approval");
 
-    const queue = (await h("/api/v1/approvals")).body.approvals as { id: string; preview: string; agent: { name: string } }[];
+    const queue = (await h("/api/v1/approvals")).body.approvals as { id: string; preview: string; agent: { name: string }; threadIds: string[] }[];
     const item = queue.find((q) => q.id === send.body.approvalId)!;
     assert.equal(item.agent.name, "Drafter");
+    assert.deepEqual(item.threadIds, [t.id], "the approval knows its conversation");
     assert.match(item.preview, /To: .*sam@fernpoint\.co/);
     assert.match(item.preview, /Good to go/);
     assert.equal((await h(`/api/drafts/${draft.body.result.id}`)).body.status, "draft", "nothing sent before approval");

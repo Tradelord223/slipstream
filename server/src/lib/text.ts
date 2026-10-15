@@ -39,11 +39,14 @@ export function htmlToText(html: string): string {
       .replace(/<(script|style|head|title)[\s\S]*?<\/\1>/gi, " ")
       .replace(/<!--[\s\S]*?-->/g, " ")
       .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|div|li|tr|h[1-6]|blockquote|table)>/gi, "\n")
+      .replace(/<\/(p|h[1-6]|blockquote|table)>/gi, "\n\n")
+      .replace(/<\/(div|li|tr)>/gi, "\n")
+      .replace(/<(p|div|li|tr|td|th|h[1-6]|blockquote|table|tbody|thead|ul|ol)\b[^>]*>/gi, "")
       .replace(/<[^>]+>/g, " "),
   )
     .replace(/[ \t\f\v ]+/g, " ")
-    .replace(/\n\s*\n\s*\n+/g, "\n\n")
+    .replace(/ ?\n ?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 

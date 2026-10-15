@@ -425,4 +425,7 @@ export const migrations: string[] = [
     created_at INTEGER NOT NULL
   );
   `,
+  /* 7: approvals know which conversations they touch */ `
+  ALTER TABLE approvals ADD COLUMN thread_ids TEXT NOT NULL DEFAULT '[]';
+  `,
 ];

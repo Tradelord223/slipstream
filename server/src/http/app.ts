@@ -20,7 +20,7 @@ import { oauthRoutes } from "../remote/oauth.ts";
 /** Paths reachable without a session in team mode. */
 const PUBLIC_API = new Set(["/api/auth/login", "/api/auth/signup", "/api/auth/state", "/api/auth/invite"]);
 /** Browser navigations (no custom header possible): OAuth redirects and downloads use GET with a session cookie. */
-const NAVIGATION_GET = [/^\/api\/oauth\/(google|microsoft)\/(start|callback)$/, /^\/api\/attachments\/[\w-]+$/, /^\/api\/events$/];
+const NAVIGATION_GET = [/^\/api\/oauth\/(google|microsoft)\/(start|callback)$/, /^\/api\/attachments\/[\w-]+$/, /^\/api\/events$/, /^\/api\/v1\/openapi\.json$/];
 
 export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   const app = new Hono<Env>();

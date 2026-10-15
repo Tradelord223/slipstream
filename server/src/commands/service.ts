@@ -25,6 +25,7 @@ interface ActivityRow {
 
 interface ApprovalRow {
   id: string;
+  thread_ids: string;
   user_id: string;
   agent_id: string;
   command: string;
@@ -144,6 +145,18 @@ export class Commands {
     return id;
   }
 
+  /** Conversations an input refers to: threadIds, threadId, or a draft's conversation. */
+  private threadsOf(userId: string, input: unknown): string[] {
+    const i = (input ?? {}) as { threadIds?: unknown; threadId?: unknown; draftId?: unknown };
+    if (Array.isArray(i.threadIds)) return i.threadIds.filter((x): x is string => typeof x === "string");
+    if (typeof i.threadId === "string") return [i.threadId];
+    if (typeof i.draftId === "string") {
+      const d = this.ctx.db.get<{ thread_id: string | null }>("SELECT thread_id FROM drafts WHERE id = ? AND user_id = ?", i.draftId, userId);
+      return d?.thread_id ? [d.thread_id] : [];
+    }
+    return [];
+  }
+
   private requestApproval(
     actor: Extract<Actor, { kind: "agent" }>,
     cmd: Pick<Command, "name" | "title" | "preview">,
@@ -154,16 +167,17 @@ export class Commands {
     const { db, events } = this.ctx;
     const id = newId("apr");
     const preview = fixedPreview ?? (cmd.preview ? cmd.preview(this.ctx, actor, input) : JSON.stringify(input, null, 2));
+    const threadIds = JSON.stringify(this.threadsOf(actor.user.id, input));
     const now = Date.now();
     db.tx(() => {
       db.run(
-        "INSERT INTO approvals (id, user_id, agent_id, command, input, preview, reason, created_at) VALUES (?,?,?,?,?,?,?,?)",
-        id, actor.user.id, actor.agent.id, cmd.name, JSON.stringify(input), preview, reason, now,
+        "INSERT INTO approvals (id, user_id, agent_id, command, input, preview, reason, thread_ids, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        id, actor.user.id, actor.agent.id, cmd.name, JSON.stringify(input), preview, reason, threadIds, now,
       );
       db.run(
-        `INSERT INTO activity (id, user_id, agent_id, actor_name, command, summary, status, approval_id, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
-        newId("act"), actor.user.id, actor.agent.id, actor.agent.name, cmd.name, `Asked to ${cmd.title.toLowerCase()}`, "pending", id, now,
+        `INSERT INTO activity (id, user_id, agent_id, actor_name, command, summary, thread_ids, status, approval_id, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        newId("act"), actor.user.id, actor.agent.id, actor.agent.name, cmd.name, `Asked to ${cmd.title.toLowerCase()}`, threadIds, "pending", id, now,
       );
     });
     events.emitToUser(actor.user.id, { type: "approval", approvalId: id, status: "pending" });
@@ -186,6 +200,8 @@ export class Commands {
       title: this.byName.get(r.command)?.title ?? this.handlers.get(r.command)?.title ?? r.command,
       preview: r.preview,
       reason: r.reason,
+      input: JSON.parse(r.input) as unknown,
+      threadIds: JSON.parse(r.thread_ids) as string[],
       status: r.status,
       error: r.error,
       createdAt: r.created_at,
