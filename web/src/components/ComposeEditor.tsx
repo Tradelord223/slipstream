@@ -72,7 +72,6 @@ export const ComposeEditor = forwardRef<EditorApi, { initialHtml: string; focusA
         if (replace && sel) {
           sel.removeAllRanges();
           sel.addRange(replace);
-          sel.deleteFromDocument();
         } else if (saved.current && sel && !node.contains(sel.anchorNode)) {
           sel.removeAllRanges();
           sel.addRange(saved.current);

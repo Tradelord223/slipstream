@@ -6,7 +6,7 @@ import type { Address, Draft, DraftAttachment, Snippet, ThreadDetail } from "../
 import { createStore, useStore } from "./createStore.ts";
 import { removeLocally, undo as undoTriage } from "./actions.ts";
 import { reload } from "./list.ts";
-import { getRoute } from "./route.ts";
+import { getRoute, navigate } from "./route.ts";
 import { myEmails, session } from "./session.ts";
 import { cachedThread, loadThread } from "./threads.ts";
 import { settleSending, toast } from "./toasts.ts";
@@ -95,6 +95,10 @@ function start(patch: Partial<ComposeState>) {
 export function startNew(seed: { to?: Address[]; subject?: string } = {}) {
   if (compose.get().open) {
     focusCompose();
+    return;
+  }
+  if (session.get().accounts.length === 0) {
+    toast.action("Connect an account before writing a message", "Add account", () => navigate("/settings/accounts"));
     return;
   }
   const signature = session.get().settings.signature;

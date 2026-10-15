@@ -361,9 +361,18 @@ a.attachment:hover {
 }
 .ctx-card {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 4px 12px;
   align-items: center;
+}
+.ctx-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  min-height: 26px;
 }
 .ctx-who {
   min-width: 0;
@@ -382,8 +391,6 @@ a.attachment:hover {
   white-space: nowrap;
 }
 .ctx-stats {
-  grid-column: 1 / -1;
-  margin-top: 10px;
   color: var(--text-2);
   font-size: 12.5px;
 }
@@ -408,8 +415,12 @@ a.attachment:hover {
   border-color: var(--amber);
   background: var(--amber-soft);
 }
-.vip.on svg {
+.vip.on svg,
+.star-btn[aria-pressed="true"] svg {
   fill: var(--amber);
+}
+.icon-btn.star-btn[aria-pressed="true"] {
+  color: var(--amber);
 }
 .ctx-section h3 {
   font-size: 12.5px;

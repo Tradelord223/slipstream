@@ -108,14 +108,21 @@ export function openView(key: string, view: MailView, params: ListParams | null)
   if (params) void fetchFirst(params, 100);
 }
 
+/** A refetch re-reads at most this many rows; anything further down keeps its last known state until scrolled to. */
+const REFRESH_CAP = 1000;
+
 async function fetchFirst(params: ListParams, count: number) {
   const mine = ++seq;
   controller?.abort();
   controller = new AbortController();
   try {
-    const { rows, next } = await fetchRows(params, count, controller.signal);
+    const { rows, next } = await fetchRows(params, Math.min(count, REFRESH_CAP), controller.signal);
     if (mine !== seq) return;
-    commit(rows, { next, status: "ready", error: null });
+    if (count > REFRESH_CAP && next) {
+      const edge = rows[rows.length - 1]!;
+      const tail = list.get().rows.filter((t) => t.sortAt < edge.sortAt || (t.sortAt === edge.sortAt && t.id < edge.id));
+      commit([...rows, ...tail], { next: tail.length ? list.get().next : next, status: "ready", error: null });
+    } else commit(rows, { next, status: "ready", error: null });
   } catch (err) {
     if ((err as Error).name === "AbortError" || mine !== seq) return;
     list.set({ status: "error", error: err instanceof Error ? err.message : "Couldn't load your mail" });

@@ -151,7 +151,7 @@ function ComposerBody({ placement }: { placement: Placement }) {
       </div>
 
       <div className="composer-body">
-        <ComposeEditor ref={editor} initialHtml={s.initialBody} focusAtStart={bodyFocus} onLink={() => setLinkOpen(true)} />
+        <ComposeEditor ref={editor} initialHtml={s.bodyHtml || s.initialBody} focusAtStart={bodyFocus} onLink={() => setLinkOpen(true)} />
       </div>
 
       {s.attachments.length > 0 && (
@@ -173,15 +173,7 @@ function ComposerBody({ placement }: { placement: Placement }) {
 
       {linkOpen && <LinkBar editor={editor} onClose={() => setLinkOpen(false)} />}
 
-      <footer className="composer-foot">
-        <SendButton />
-        <button type="button" className="icon-btn" aria-label="Attach files" title="Attach files (Shift+⌘U)" onClick={() => fileInput.current?.click()}>
-          <Icon name="paperclip" />
-        </button>
-        <button type="button" className="icon-btn" aria-label="Insert snippet" title="Snippets (⌘;)" onClick={() => (editor.current?.saveSelection(), setPickerOpen(true))}>
-          <Icon name="zap" />
-        </button>
-        <input ref={fileInput} type="file" multiple hidden onChange={(e) => (void attachFiles([...(e.target.files ?? [])]), (e.target.value = ""))} />
+      <div className="composer-followup">
         <label className="followup">
           <input type="checkbox" checked={s.followUpDays !== null} onChange={(e) => edit({ followUpDays: e.target.checked ? 3 : null })} />
           <span>Remind me if no reply in</span>
@@ -197,6 +189,17 @@ function ComposerBody({ placement }: { placement: Placement }) {
           />
           <span>days</span>
         </label>
+      </div>
+
+      <footer className="composer-foot">
+        <SendButton />
+        <button type="button" className="icon-btn" aria-label="Attach files" title="Attach files (Shift+⌘U)" onClick={() => fileInput.current?.click()}>
+          <Icon name="paperclip" />
+        </button>
+        <button type="button" className="icon-btn" aria-label="Insert snippet" title="Snippets (⌘;)" onClick={() => (editor.current?.saveSelection(), setPickerOpen(true))}>
+          <Icon name="zap" />
+        </button>
+        <input ref={fileInput} type="file" multiple hidden onChange={(e) => (void attachFiles([...(e.target.files ?? [])]), (e.target.value = ""))} />
         <span className="grow" />
         <span className="save-state muted" role="status">
           {s.save === "saving" ? "Saving…" : s.save === "saved" ? "Draft saved" : s.save === "error" ? "Couldn't save" : ""}

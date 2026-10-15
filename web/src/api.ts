@@ -75,6 +75,7 @@ export const api = {
     request<{ user: unknown }>("POST", "/api/auth/signup", body, { quiet401: true }),
   invite: (token: string) => request<{ workspace: string; email: string | null }>("GET", `/api/auth/invite${qs({ token })}`, undefined, { quiet401: true }),
   logout: () => post<{ ok: true }>("/api/auth/logout"),
+  joinWorkspace: (invite: string) => post<{ workspace: unknown }>("/api/auth/join", { invite }),
 
   threads: (p: ListParams, signal?: AbortSignal) =>
     get<ThreadPage>(`/api/threads${qs({ view: p.view, split: p.split, q: p.q, account: p.account, before: p.before, limit: p.limit })}`, signal),

@@ -16,8 +16,9 @@ import { connectEvents, disconnectEvents } from "./store/events.ts";
 import { focusId, openView, useList } from "./store/list.ts";
 import { navigate, useRoute, type MailView as MailViewType } from "./store/route.ts";
 import { loadSession, session, useSession } from "./store/session.ts";
+import { toast } from "./store/toasts.ts";
 import { ui, useUi } from "./store/ui.ts";
-import { AuthView } from "./views/AuthView.tsx";
+import { AuthView, JoinSignedIn } from "./views/AuthView.tsx";
 import { MailView } from "./views/MailView.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { SharedView } from "./views/SharedView.tsx";
@@ -86,6 +87,27 @@ function Shell() {
     document.documentElement.dataset.density = density;
   }, [density]);
 
+  // Results of an OAuth round trip arrive as ?connected= or ?error=.
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const connected = q.get("connected");
+    const error = q.get("error");
+    if (!connected && !error) return;
+    if (connected) toast.info(connected === "microsoft" ? "Outlook connected" : "Gmail connected");
+    else if (error) {
+      const friendly: Record<string, string> = {
+        "google-not-configured": "Gmail isn't set up on this server yet. The steps are below.",
+        "microsoft-not-configured": "Outlook isn't set up on this server yet. The steps are below.",
+        expired: "That sign-in took too long. Try connecting again.",
+        denied: "Connecting was cancelled.",
+        access_denied: "Connecting was cancelled.",
+      };
+      toast.error(friendly[error] ?? `Couldn't connect: ${error}`);
+    }
+    navigate(location.pathname, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Which mailbox sits behind the screen: the one in the URL, or the one the open conversation came from.
   const view: MailViewType | null = route.name === "mail" ? route.view : route.name === "thread" ? (listView ?? { kind: "inbox" }) : null;
   const params = view ? viewParams(view, splits, accountFilter) : null;
@@ -108,6 +130,21 @@ function Shell() {
     if (viewport === "desktop") ui.set({ sheetOpen: false });
   }, [viewport]);
 
+  // The slide-over menu: Escape closes it, focus moves into it and comes back.
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    document.querySelector<HTMLElement>(".sheet a, .sheet button")?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") ui.set({ sheetOpen: false });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, [sheetOpen]);
+
   const showRail = viewport === "desktop" && railOpen;
   let main: React.ReactNode;
   if (route.name === "thread") {
@@ -124,6 +161,7 @@ function Shell() {
   } else if (route.name === "mail") main = <MailView view={route.view} />;
   else if (route.name === "settings") main = <SettingsView section={route.section} />;
   else if (route.name === "shared") main = <SharedView id={route.id} />;
+  else if (route.name === "join") main = <JoinSignedIn invite={route.invite} />;
   else main = <JoinOrHome />;
 
   return (

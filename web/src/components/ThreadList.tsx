@@ -10,7 +10,7 @@ import { ThreadRow } from "./ThreadRow.tsx";
 const OVERSCAN = 8;
 
 /** A windowed list: only the rows near the viewport exist in the DOM, so 50k conversations scroll like 50. */
-export function ThreadList({ activeId }: { activeId?: string | null }) {
+export function ThreadList({ activeId, compact = false }: { activeId?: string | null; compact?: boolean }) {
   const rows = useList((s) => s.visible);
   const focusedId = useList((s) => s.focusedId);
   const selected = useList((s) => s.selected);
@@ -21,7 +21,8 @@ export function ThreadList({ activeId }: { activeId?: string | null }) {
   const density = useSession((s) => s.settings.density);
   const viewport = useViewport();
 
-  const rowH = viewport === "mobile" ? 70 : density === "compact" ? 34 : 40;
+  const twoLine = viewport === "mobile" || compact;
+  const rowH = twoLine ? 70 : density === "compact" ? 34 : 40;
   const scroller = useRef<HTMLDivElement>(null);
   const [range, setRange] = useState({ top: 0, height: 700 });
   const raf = useRef(0);
@@ -101,7 +102,7 @@ export function ThreadList({ activeId }: { activeId?: string | null }) {
   return (
     <div
       ref={scroller}
-      className="list-scroll"
+      className={`list-scroll ${twoLine ? "two-line" : ""}`}
       data-list-root
       role="listbox"
       aria-label="Conversations"

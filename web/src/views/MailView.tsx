@@ -5,29 +5,33 @@ import { MailHeader } from "../components/MailHeader.tsx";
 import { ThreadList } from "../components/ThreadList.tsx";
 import { clearFilter, reload, useList } from "../store/list.ts";
 import { openDraft, useCompose } from "../store/compose.ts";
-import type { MailView as MailViewType } from "../store/route.ts";
+import { navigate, type MailView as MailViewType } from "../store/route.ts";
+import { useSession } from "../store/session.ts";
 import { listTime } from "../lib/format.ts";
 import { htmlToText } from "../lib/format.ts";
 import type { Draft } from "../types.ts";
 import { Icon } from "../components/Icon.tsx";
 import { formatWhen } from "../lib/when.ts";
+import { useViewport } from "../lib/hooks.ts";
 
 export function MailView({ view, compact = false }: { view: MailViewType; compact?: boolean }) {
   return (
     <section className={`mail-pane ${compact ? "mail-pane-compact" : ""}`} aria-label="Conversations">
       <MailHeader view={view} />
-      {view.kind === "drafts" ? <DraftsList /> : <ListBody view={view} />}
+      {view.kind === "drafts" ? <DraftsList /> : <ListBody view={view} compact={compact} />}
     </section>
   );
 }
 
-function ListBody({ view }: { view: MailViewType }) {
+function ListBody({ view, compact }: { view: MailViewType; compact: boolean }) {
   const status = useList((s) => s.status);
   const empty = useList((s) => s.visible.length === 0);
   const error = useList((s) => s.error);
   const filter = useList((s) => s.filter);
   const rowsLoaded = useList((s) => s.rows.length);
   const hasMore = useList((s) => Boolean(s.next));
+  const noAccounts = useSession((s) => s.accounts.length === 0);
+  const team = useSession((s) => s.mode === "team");
 
   if (status === "error" && rowsLoaded === 0) {
     return (
@@ -35,6 +39,16 @@ function ListBody({ view }: { view: MailViewType }) {
         <EmptyState title="Couldn't load your mail" hint={error ?? undefined} />
         <button className="btn" onClick={() => reload(true)}>
           Try again
+        </button>
+      </div>
+    );
+  }
+  if (noAccounts && view.kind !== "search") {
+    return (
+      <div className="state-block">
+        <EmptyState title="Connect your mail to get started" hint={`Add Gmail, Outlook or any mail server, or import an archive. ${team ? "Everything stays on your server." : "Everything stays on this machine."}`} />
+        <button className="btn btn-primary" onClick={() => navigate("/settings/accounts")}>
+          Add an account
         </button>
       </div>
     );
@@ -70,7 +84,7 @@ function ListBody({ view }: { view: MailViewType }) {
         return <EmptyState title="Nothing here" />;
     }
   }
-  return <ThreadList />;
+  return <ThreadList compact={compact} />;
 }
 
 function ListSkeleton() {
@@ -90,6 +104,7 @@ function DraftsList() {
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const open = useCompose((s) => s.open);
+  const mobile = useViewport() === "mobile";
 
   useEffect(() => {
     let live = true;
@@ -106,7 +121,7 @@ function DraftsList() {
   if (!drafts) return <ListSkeleton />;
   if (drafts.length === 0) return <EmptyState title="No drafts" hint="Anything you start writing is saved here." />;
   return (
-    <div className="list-scroll" role="list" aria-label="Drafts">
+    <div className={`list-scroll ${mobile ? "two-line" : ""}`} role="list" aria-label="Drafts">
       {drafts.map((d) => {
         const to = d.to.map((a) => a.name || a.email).join(", ") || "No recipient";
         return (

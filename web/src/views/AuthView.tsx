@@ -171,3 +171,41 @@ function JoinForm({ invite }: { invite: string }) {
     </Frame>
   );
 }
+
+/** Someone already signed in opens an invite link: accept it for their account. */
+export function JoinSignedIn({ invite }: { invite: string }) {
+  const [info, setInfo] = useState<{ workspace: string } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const { busy, error, submit } = useSubmit(async () => {
+    await api.joinWorkspace(invite);
+    await loadSession();
+    navigate("/", { replace: true });
+  });
+  useEffect(() => {
+    api
+      .invite(invite)
+      .then(setInfo)
+      .catch((err: Error) => setProblem(err.message));
+  }, [invite]);
+
+  if (problem) {
+    return (
+      <Frame title="This invite can't be used" lead={problem}>
+        <button className="btn" onClick={() => navigate("/", { replace: true })}>
+          Back to your inbox
+        </button>
+      </Frame>
+    );
+  }
+  if (!info) return <Frame title="Checking your invite…">{null}</Frame>;
+  return (
+    <Frame title={`Join ${info.workspace}`} lead="You'll be able to share conversations and snippets with the team.">
+      <form className="auth-form" onSubmit={submit}>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <button className="btn btn-primary btn-wide" disabled={busy}>
+          {busy ? "Joining…" : "Join team"}
+        </button>
+      </form>
+    </Frame>
+  );
+}

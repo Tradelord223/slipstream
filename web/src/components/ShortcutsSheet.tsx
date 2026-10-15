@@ -23,8 +23,14 @@ function Sheet() {
   const close = () => ui.set({ shortcuts: false });
 
   const groups = useMemo(() => {
-    const rows = COMMANDS.filter((c) => (c.id !== "compose.ai" || ai) && !c.id.startsWith("account.") && c.id !== "compose.replyAllList")
-      .map((c) => ({ c, bindings: bindingsOf(c, keymap) }))
+    // The arrow keys duplicate j and k; list them on the same row.
+    const alias: Record<string, string> = { "nav.next": "nav.nextArrow", "nav.prev": "nav.prevArrow" };
+    const hidden = new Set(["nav.nextArrow", "nav.prevArrow", "compose.replyAllList"]);
+    const rows = COMMANDS.filter((c) => (c.id !== "compose.ai" || ai) && !c.id.startsWith("account.") && !hidden.has(c.id))
+      .map((c) => {
+        const extra = alias[c.id] ? COMMANDS.find((x) => x.id === alias[c.id]) : undefined;
+        return { c, bindings: [...bindingsOf(c, keymap), ...(extra ? bindingsOf(extra, keymap) : [])] };
+      })
       .filter((r) => r.bindings.length > 0)
       .filter((r) => !q.trim() || fuzzyScore(q, `${r.c.title} ${r.c.group} ${r.bindings.join(" ")}`) !== null);
     const by = new Map<string, typeof rows>();

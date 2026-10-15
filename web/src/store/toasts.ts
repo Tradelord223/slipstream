@@ -104,7 +104,7 @@ export function runToastAction() {
 /** Called when a sending toast resolves. */
 export function settleSending(text: string, kind: "info" | "error" = "info") {
   const cur = toastStore.get().current;
-  if (cur?.kind === "sending") {
+  if (cur && (cur.kind === "sending" || cur.text.startsWith("Sending"))) {
     undoFn = null;
     show({ kind, text }, kind === "error" ? 6000 : 3000);
   }

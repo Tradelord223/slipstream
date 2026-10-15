@@ -128,9 +128,13 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
 function ReplyDock({ detail, onReply }: { detail: ThreadDetail; onReply: (k: Exclude<ComposeKind, "new">) => void }) {
   const inline = useCompose((s) => s.open && s.inline && s.threadId === detail.thread.id);
   const viewport = useViewport();
+  const dock = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (inline) dock.current?.scrollIntoView({ block: "nearest" });
+  }, [inline]);
   if (inline && viewport !== "mobile") {
     return (
-      <div className="reply-dock">
+      <div className="reply-dock" ref={dock}>
         <Composer placement="inline" />
       </div>
     );
@@ -183,7 +187,7 @@ function ThreadBar({ subject, detail }: { subject: string; detail?: ThreadDetail
           <button className="btn btn-sm" onClick={() => act.remind({ mouse: true })}>
             <Icon name="clock" /> Remind <Keys binding="h" />
           </button>
-          <button className="icon-btn" aria-label={starred ? "Remove star" : "Star"} aria-pressed={starred} title="Star (S)" onClick={() => void act.star({ mouse: true })}>
+          <button className="icon-btn star-btn" aria-label={starred ? "Remove star" : "Star"} aria-pressed={starred} title="Star (S)" onClick={() => void act.star({ mouse: true })}>
             <Icon name="star" />
           </button>
           <button className="icon-btn" aria-label="Label" title="Label (L)" onClick={() => openPalette("label", [detail.thread.id])}>

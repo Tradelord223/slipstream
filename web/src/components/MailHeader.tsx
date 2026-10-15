@@ -150,7 +150,9 @@ function SearchField({ view }: { view: MailView }) {
   const [value, setValue] = useState(initial);
   const input = useRef<HTMLInputElement>(null);
 
+  // Focus it when the user opened search; a results page loaded by URL leaves focus on the list.
   useEffect(() => {
+    if (!ui.get().searchOpen) return;
     input.current?.focus();
     input.current?.select();
   }, []);
@@ -166,6 +168,7 @@ function SearchField({ view }: { view: MailView }) {
     e.preventDefault();
     const q = value.trim();
     if (!q) return;
+    input.current?.blur();
     ui.set({ searchOpen: false });
     navigate(`/search?q=${encodeURIComponent(q)}`);
   };

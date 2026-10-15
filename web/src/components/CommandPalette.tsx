@@ -7,7 +7,7 @@ import { cachedThread } from "../store/threads.ts";
 import { list, threadById } from "../store/list.ts";
 import { getMeToZero, goView } from "../store/nav.ts";
 import { getRoute, navigate } from "../store/route.ts";
-import { setAccountFilter, updateSettings, useSession } from "../store/session.ts";
+import { setAccountFilter, signOut, updateSettings, useSession } from "../store/session.ts";
 import { api } from "../api.ts";
 import { toast } from "../store/toasts.ts";
 import { closePalette, useUi, type PaletteMode } from "../store/ui.ts";
@@ -112,6 +112,7 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
     for (const [label, section] of [["General", "general"], ["Accounts", "accounts"], ["Splits", "splits"], ["Snippets", "snippets"], ["Shortcuts", "shortcuts"], ["Team", "team"], ["AI", "ai"]] as const) {
       out.push({ id: `settings:${section}`, title: `Settings: ${label}`, group: "Settings", run: run(() => navigate(`/settings/${section}`)) });
     }
+    if (session.mode === "team") out.push({ id: "signout", title: "Sign out", group: "Accounts", run: run(() => void signOut()) });
     out.push({ id: "theme:dark", title: "Theme: Dark", group: "Appearance", run: run(() => void updateSettings({ theme: "dark" })) });
     out.push({ id: "theme:light", title: "Theme: Light", group: "Appearance", run: run(() => void updateSettings({ theme: "light" })) });
     out.push({ id: "theme:system", title: "Theme: Match system", group: "Appearance", run: run(() => void updateSettings({ theme: "system" })) });

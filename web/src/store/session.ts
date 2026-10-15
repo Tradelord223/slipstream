@@ -1,6 +1,7 @@
 import { api, ApiError } from "../api.ts";
 import type { Account, Features, Settings, Snippet, Split, User, Workspace } from "../types.ts";
 import { createStore, useStore } from "./createStore.ts";
+import { navigate } from "./route.ts";
 import { toast } from "./toasts.ts";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -159,4 +160,14 @@ export function accountById(id: string): Account | undefined {
 
 export function myEmails(): Set<string> {
   return new Set(session.get().accounts.map((a) => a.email.toLowerCase()));
+}
+
+export async function signOut(): Promise<void> {
+  try {
+    await api.logout();
+  } catch {
+    /* the cookie is cleared server-side on success; either way we leave */
+  }
+  session.set({ status: "signin", user: null, workspace: null, accounts: [], splits: [], labels: [], snippets: [] });
+  navigate("/login", { replace: true });
 }

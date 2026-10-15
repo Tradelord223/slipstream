@@ -70,25 +70,27 @@ export function ContextPane({ detail }: { detail: ThreadDetail }) {
           <div className="ctx-name">{displayName(other)}</div>
           <div className="ctx-email">{other.email}</div>
         </div>
-        <button className={`vip ${info?.vip ? "on" : ""}`} aria-pressed={Boolean(info?.vip)} onClick={() => void toggleVip()} disabled={!info}>
-          <Icon name="vip" size={14} />
-          VIP
-        </button>
-        <div className="ctx-stats num">
-          {info ? (
-            total > 0 ? (
-              <>
-                {plural(total, "email")}
-                {info.lastSeenAt ? ` · last on ${longDay(info.lastSeenAt)}` : ""}
-              </>
+        <div className="ctx-meta">
+          <div className="ctx-stats num">
+            {info ? (
+              total > 0 ? (
+                <>
+                  {plural(total, "email")}
+                  {info.lastSeenAt ? ` · last on ${longDay(info.lastSeenAt)}` : ""}
+                </>
+              ) : (
+                "No other emails yet"
+              )
+            ) : error ? (
+              "Couldn't load history"
             ) : (
-              "No other emails yet"
-            )
-          ) : error ? (
-            "Couldn't load history"
-          ) : (
-            <span className="skeleton-line" />
-          )}
+              <span className="skeleton-line" />
+            )}
+          </div>
+          <button className={`vip ${info?.vip ? "on" : ""}`} aria-pressed={Boolean(info?.vip)} onClick={() => void toggleVip()} disabled={!info}>
+            <Icon name="vip" size={14} />
+            VIP
+          </button>
         </div>
       </section>
 

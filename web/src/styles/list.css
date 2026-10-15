@@ -39,10 +39,10 @@
   --row-bg: color-mix(in srgb, var(--panel), var(--text) 4.5%);
 }
 .row.focused {
-  --row-bg: var(--raised);
+  --row-bg: var(--row-focus);
 }
 .row.focused:hover {
-  --row-bg: color-mix(in srgb, var(--raised), var(--text) 3%);
+  --row-bg: color-mix(in srgb, var(--row-focus), var(--text) 3%);
 }
 .row.focused::before {
   content: "";
@@ -191,75 +191,73 @@
   gap: 10px;
 }
 
-@media (max-width: 719px) {
-  .row {
-    display: grid;
-    grid-template-columns: 16px 1fr auto;
-    grid-template-rows: 22px 20px 20px;
-    column-gap: 10px;
-    align-content: center;
-    padding: 0 14px 0 10px;
-    height: 70px;
-  }
-  .row-lead {
-    grid-row: 1;
-    grid-column: 1;
-  }
-  .row-sender {
-    grid-row: 1;
-    grid-column: 2;
-    width: auto;
-    font-size: 14.5px;
-  }
-  .row-time {
-    grid-row: 1;
-    grid-column: 3;
-    width: auto;
-  }
-  .row-body {
-    grid-row: 2 / span 2;
-    grid-column: 2 / span 2;
-    display: grid;
-    grid-template-rows: 20px 20px;
-    white-space: normal;
-  }
-  .row-subject,
-  .row-snippet {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .row-snippet {
-    font-size: 13px;
-  }
-  .row-meta {
-    display: none;
-  }
-  .row-actions {
-    display: none !important;
-  }
-  .row:hover .row-time {
-    visibility: visible;
-  }
-  .row-check {
-    width: 22px;
-    height: 22px;
-  }
-  .draft-row,
-  .shared-row {
-    height: 70px;
-  }
+/* Narrow lists (phones, and the list beside a conversation on tablets) use two-line rows. */
+.two-line .row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  grid-template-rows: 22px 20px 20px;
+  gap: 0 10px;
+  align-content: center;
+  padding: 0 14px 0 10px;
+  height: 70px;
 }
-
-@media (min-width: 720px) and (max-width: 1023px) {
-  .mail-pane-compact .row-sender {
-    width: 120px;
-  }
-  .mail-pane-compact .row-meta {
-    display: none;
-  }
-  .mail-pane-compact .row-time {
-    width: 64px;
-  }
+.two-line .row-lead {
+  grid-row: 1;
+  grid-column: 1;
+}
+.two-line .row-sender {
+  grid-row: 1;
+  grid-column: 2;
+  width: auto;
+  font-size: 14.5px;
+}
+.two-line .row-time {
+  grid-row: 1;
+  grid-column: 3;
+  width: auto;
+}
+.two-line .row-body {
+  grid-row: 2 / span 2;
+  grid-column: 2 / span 2;
+  display: grid;
+  grid-template-rows: 20px 20px;
+  white-space: normal;
+}
+.two-line .row-subject,
+.two-line .row-snippet {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.two-line .row-snippet {
+  font-size: 13px;
+}
+.two-line .row-meta {
+  display: none;
+}
+.two-line .row-actions {
+  display: none !important;
+}
+.two-line .row:hover .row-time {
+  visibility: visible;
+}
+.two-line .row-check {
+  width: 22px;
+  height: 22px;
+}
+.two-line .draft-row,
+.two-line .shared-row {
+  height: 70px;
+}
+.mail-pane-compact .search-trigger {
+  min-width: 0;
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+}
+.mail-pane-compact .search-trigger-label,
+.mail-pane-compact .search-trigger .keys,
+.mail-pane-compact .filter-chip {
+  display: none;
 }

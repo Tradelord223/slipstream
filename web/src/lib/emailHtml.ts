@@ -16,7 +16,8 @@ const SIMPLE_TAGS = new Set([
   "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "sub", "sup", "small", "details", "summary",
 ]);
 
-const STYLE_IS_DESIGN = /(color|background|font-family|font-size|width|margin|padding|border|display|float|position)/i;
+// Inline styling that means the sender designed the message. Spacing and quote borders (Gmail adds these to replies) do not.
+const STYLE_IS_DESIGN = /(^|;)\s*(color|background|font-family|font-size|font-weight|text-align|float|position)\s*:/i;
 const REMOTE_URL_IN_CSS = /url\(\s*(['"]?)\s*(?:https?:)?\/\/[^)]*?\1\s*\)/gi;
 const QUOTE_LEAD = /^\s*(?:On\b[\s\S]{3,300}?\bwrote:|-{2,}\s*Original Message\s*-{2,}|From:\s.+\bSent:)\s*$/i;
 
@@ -56,7 +57,7 @@ function detectKind(body: HTMLElement): BodyKind {
   for (const el of body.querySelectorAll("*")) {
     if (!SIMPLE_TAGS.has(el.tagName.toLowerCase())) return "rich";
     const style = el.getAttribute("style");
-    if (style && STYLE_IS_DESIGN.test(style)) return "rich";
+    if (style && !el.closest("blockquote") && STYLE_IS_DESIGN.test(style)) return "rich";
   }
   return "simple";
 }

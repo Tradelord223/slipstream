@@ -7,7 +7,7 @@ import { Link } from "./Link.tsx";
 import { useCounts } from "../store/counts.ts";
 import { useList } from "../store/list.ts";
 import { navigate, useRoute, viewPath, type MailView } from "../store/route.ts";
-import { setAccountFilter, useSession } from "../store/session.ts";
+import { setAccountFilter, signOut, useSession } from "../store/session.ts";
 import { ui } from "../store/ui.ts";
 
 interface NavItem {
@@ -89,6 +89,8 @@ export function Rail() {
 function AccountSwitcher() {
   const accounts = useSession((s) => s.accounts);
   const filter = useSession((s) => s.accountFilter);
+  const mode = useSession((s) => s.mode);
+  const user = useSession((s) => s.user);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, open, () => setOpen(false));
@@ -126,6 +128,15 @@ function AccountSwitcher() {
             <Icon name="plus" />
             <span className="grow">Add account</span>
           </button>
+          {mode === "team" && (
+            <>
+              <div className="menu-sep" />
+              <button className="menu-item" role="menuitem" onClick={() => void signOut()}>
+                <Icon name="logout" />
+                <span className="grow ellipsis">Sign out{user ? ` ${user.name.split(" ")[0]}` : ""}</span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

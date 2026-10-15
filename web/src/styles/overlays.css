@@ -299,6 +299,10 @@
   pointer-events: none;
   max-width: calc(100vw - 24px);
 }
+.toast-region-left {
+  left: 252px;
+  transform: none;
+}
 .toast {
   pointer-events: auto;
   display: inline-flex;

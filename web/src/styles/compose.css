@@ -196,6 +196,9 @@
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+.editor p {
+  margin: 0 0 0.75em;
+}
 .editor blockquote {
   margin: 0.4em 0;
   padding-left: 12px;
@@ -295,13 +298,17 @@
   padding: 0 6px;
   border-left: 1px solid rgba(0, 0, 0, 0.2);
 }
+.composer-followup {
+  flex: none;
+  padding: 6px 14px;
+  border-top: 1px solid var(--line-soft);
+}
 .followup {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--text-2);
   font-size: 12.5px;
-  margin-left: 6px;
 }
 .followup input[type="checkbox"] {
   accent-color: var(--accent);
@@ -338,11 +345,6 @@
   }
   .composer-full .composer-foot {
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
-  }
-  .composer-full .followup {
-    order: 9;
-    width: 100%;
-    margin: 4px 0 0 14px;
   }
   .composer-full .icon-btn {
     width: 44px;

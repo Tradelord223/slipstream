@@ -35,6 +35,7 @@ function Header({ title, children }: { title: string; children?: React.ReactNode
 }
 
 function SharedList() {
+  const viewport = useViewport();
   const [status, setStatus] = useState<"open" | "resolved">("open");
   const [items, setItems] = useState<SharedSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ function SharedList() {
       ) : items.length === 0 ? (
         <EmptyState title={status === "open" ? "Nothing shared yet" : "Nothing resolved yet"} hint={status === "open" ? "Open a conversation and choose Share with team." : undefined} />
       ) : (
-        <div className="list-scroll" role="list">
+        <div className={`list-scroll ${viewport === "mobile" ? "two-line" : ""}`} role="list">
           {items.map((s) => (
             <button key={s.id} className="row shared-row" role="listitem" onClick={() => navigate(`/shared/${s.id}`)}>
               <span className="row-lead" />

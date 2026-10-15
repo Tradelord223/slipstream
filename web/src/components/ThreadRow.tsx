@@ -93,7 +93,7 @@ export const ThreadRow = memo(function ThreadRow(p: Props) {
         <button className="icon-btn" tabIndex={-1} aria-label="Remind me" title="Remind me (H)" onClick={(e) => (e.stopPropagation(), p.onRemind(t.id))}>
           <Icon name="clock" />
         </button>
-        <button className="icon-btn" tabIndex={-1} aria-label={t.starred ? "Remove star" : "Star"} title="Star (S)" aria-pressed={t.starred} onClick={(e) => (e.stopPropagation(), p.onStar(t.id))}>
+        <button className="icon-btn star-btn" tabIndex={-1} aria-label={t.starred ? "Remove star" : "Star"} title="Star (S)" aria-pressed={t.starred} onClick={(e) => (e.stopPropagation(), p.onStar(t.id))}>
           <Icon name="star" />
         </button>
       </span>

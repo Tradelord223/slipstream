@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useViewport } from "../lib/hooks.ts";
+import { useCompose } from "../store/compose.ts";
 import { dismiss, runToastAction, undoLast, useToast } from "../store/toasts.ts";
 import { dismissTip, ui, useUi } from "../store/ui.ts";
 import { updateSettings, useSession } from "../store/session.ts";
@@ -8,6 +10,8 @@ import { Keycap } from "./Keycap.tsx";
 export function Toasts() {
   const toast = useToast();
   const [left, setLeft] = useState(0);
+  const docked = useCompose((c) => c.open && c.mode === "dock" && !c.inline);
+  const viewport = useViewport();
 
   useEffect(() => {
     if (!toast?.until) return;
@@ -18,7 +22,7 @@ export function Toasts() {
   }, [toast?.id, toast?.until]);
 
   return (
-    <div className="toast-region" aria-live="polite" aria-atomic="true">
+    <div className={`toast-region ${docked && viewport === "desktop" ? "toast-region-left" : ""}`} aria-live="polite" aria-atomic="true">
       {toast && (
         <div className={`toast toast-${toast.kind}`} key={toast.id} role={toast.kind === "error" ? "alert" : "status"}>
           <span className="toast-text">
