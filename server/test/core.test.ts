@@ -205,3 +205,55 @@ describe("labels follow the provider", () => {
     assert.equal(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM labels WHERE name = 'Urgent'")!.n, 1);
   });
 });
+
+describe("copies and moves", () => {
+  let env: TestEnv;
+  let account: AccountRow;
+  before(() => {
+    env = makeEnv();
+    account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", addAccount(env.ctx, LOCAL_USER_ID))!;
+  });
+  after(() => env.cleanup());
+
+  test("a reply wakes a snoozed conversation; a copy moving between mailboxes doesn't", async () => {
+    const first = msg({ from: ana, remoteId: "INBOX:1:1", messageIdHeader: "<s1@x>", subject: "Snoozy" });
+    env.ctx.store.ingest(account, { messages: [first], cursor: null, done: true });
+    const tid = env.ctx.db.get<{ id: string }>("SELECT thread_id AS id FROM messages WHERE message_id_header = '<s1@x>'")!.id;
+    await env.api("/api/triage", { method: "POST", json: { kind: "snooze", threadIds: [tid], until: Date.now() + 3_600_000 } });
+    env.ctx.db.run("UPDATE pending_actions SET status = 'done'");
+
+    // The provider moves the copy to Archive: removal and addition, across two pages.
+    env.ctx.store.ingest(account, { messages: [], deletedRemoteIds: ["INBOX:1:1"], cursor: null, done: false });
+    env.ctx.store.ingest(account, { messages: [{ ...first, remoteId: "Archive:1:1", folders: { inbox: false, sent: false, trash: false, spam: false } }], cursor: null, done: true });
+    let t = env.ctx.db.get<{ id: string; snoozed_until: number | null; in_inbox: number }>("SELECT id, snoozed_until, in_inbox FROM threads WHERE id = ?", tid)!;
+    assert.ok(t.snoozed_until, "still snoozed after the move");
+    assert.equal(t.in_inbox, 0);
+    assert.equal(env.ctx.db.get<{ remote_id: string }>("SELECT remote_id FROM messages WHERE message_id_header = '<s1@x>'")!.remote_id, "Archive:1:1");
+
+    // Ana replies: back in the inbox.
+    env.ctx.store.ingest(account, {
+      messages: [msg({ from: ana, remoteId: "INBOX:1:2", messageIdHeader: "<s2@x>", inReplyTo: "<s1@x>", references: ["<s1@x>"], subject: "Re: Snoozy", sentAt: Date.now() })],
+      cursor: null,
+      done: true,
+    });
+    t = env.ctx.db.get<{ id: string; snoozed_until: number | null; in_inbox: number }>("SELECT id, snoozed_until, in_inbox FROM threads WHERE id = ?", tid)!;
+    assert.equal(t.snoozed_until, null);
+    assert.equal(t.in_inbox, 1);
+  });
+
+  test("a message in both Inbox and Sent is one message; losing one copy keeps it", () => {
+    const me = { name: "Me", email: "me@example.test" };
+    const selfMail = msg({ from: me, to: [me], remoteId: "INBOX:1:9", messageIdHeader: "<self@x>", subject: "Note to self" });
+    env.ctx.store.ingest(account, {
+      messages: [selfMail, { ...selfMail, remoteId: "Sent:1:4", folders: { inbox: false, sent: true, trash: false, spam: false } }],
+      cursor: null,
+      done: true,
+    });
+    const count = () => env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE message_id_header = '<self@x>'")!.n;
+    assert.equal(count(), 1);
+    env.ctx.store.ingest(account, { messages: [], deletedRemoteIds: ["INBOX:1:9"], cursor: null, done: true });
+    assert.equal(count(), 1);
+    env.ctx.store.ingest(account, { messages: [], deletedRemoteIds: ["Sent:1:4"], cursor: null, done: true });
+    assert.equal(count(), 0, "gone once no copy is left at the end of the round");
+  });
+});

@@ -91,6 +91,7 @@ export class Triage {
           ),
         });
         const remote = this.applyLocal(id, req, now);
+        this.store.mirrorLocations(id);
         for (const action of remote) this.enqueue(id, action, undoToken, now + UNDO_WINDOW_MS);
       }
     });
@@ -128,6 +129,7 @@ export class Triage {
           m.unread, m.starred, m.in_inbox, m.in_trash, m.in_spam, m.label_ids, m.id,
         );
       }
+      for (const t of entry.before) this.store.mirrorLocations(t.id);
       for (const l of entry.labels) {
         this.db.run("DELETE FROM thread_labels WHERE thread_id = ?", l.threadId);
         for (const lid of l.labelIds) this.db.run("INSERT INTO thread_labels (thread_id, label_id) VALUES (?,?)", l.threadId, lid);

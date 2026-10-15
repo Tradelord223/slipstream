@@ -88,7 +88,7 @@ describe("ImapProvider into a MailStore", () => {
     w.db.close();
   });
 
-  it("keeps the thread, and what was set on it, when its mail moves (generic IMAP)", { todo: "needs the store to adopt a moved message's new remote id instead of deleting and re-creating the thread" }, async () => {
+  it("keeps the thread, and what was set on it, when its mail moves (generic IMAP)", async () => {
     const s = new FakeServer();
     s.add("INBOX", "\\Inbox");
     s.add("Archive", "\\Archive");

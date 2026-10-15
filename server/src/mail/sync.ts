@@ -210,6 +210,7 @@ export class SyncEngine {
           now, now, now, t.id,
         );
         this.db.run("UPDATE messages SET in_inbox = 1 WHERE thread_id = ?", t.id);
+        this.store.mirrorLocations(t.id);
         const ref = this.store.threadRef(t.id);
         this.db.run(
           "INSERT INTO pending_actions (account_id, kind, payload, run_after, created_at) VALUES (?,?,?,?,?)",
