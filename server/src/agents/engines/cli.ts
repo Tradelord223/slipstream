@@ -76,6 +76,13 @@ function findBinary(spec: CliSpec): string | null {
   return null;
 }
 
+/** Both CLIs report `usage` with input_tokens / output_tokens. */
+function reportUsage(io: RunIO, usage: unknown) {
+  const u = usage as { input_tokens?: unknown; output_tokens?: unknown } | undefined;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  if (u && (n(u.input_tokens) || n(u.output_tokens))) io.addUsage(n(u.input_tokens), n(u.output_tokens));
+}
+
 /** API keys the CLIs would prefer over the person's sign-in, which would bill an API account instead of their plan. */
 const BILLING_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"];
 
@@ -285,6 +292,7 @@ async function claudeTurn(io: RunIO, message: string, bin: string): Promise<Turn
         }
       } else if (ev.type === "result") {
         result = ev;
+        reportUsage(io, ev.usage);
       }
     };
 
@@ -347,7 +355,10 @@ async function codexTurn(io: RunIO, message: string, bin: string): Promise<TurnO
         const item = ev.item as Record<string, unknown> | undefined;
         if (item?.type === "agent_message" && str(item.text)?.trim()) io.say(str(item.text)!.trim());
         else if (item?.type === "mcp_tool_call" && str(item.tool)) io.toolLine(str(item.tool)!, item.status === "failed" || Boolean(item.error));
-      } else if (ev.type === "turn.completed") completed = true;
+      } else if (ev.type === "turn.completed") {
+        completed = true;
+        reportUsage(io, ev.usage);
+      }
       else if (ev.type === "turn.failed") failed = errorText(ev.error) ?? "Codex couldn't finish the turn.";
       // A bare error can be a transient reconnect notice; only the end of the turn decides.
       else if (ev.type === "error") lastError = errorText(ev.message) ?? lastError;

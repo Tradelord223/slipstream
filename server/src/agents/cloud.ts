@@ -76,6 +76,8 @@ interface RunRow {
   agent_id: string | null;
   state: string | null;
   origin: string;
+  input_tokens: number;
+  output_tokens: number;
 }
 
 interface RoutineRow {
@@ -507,6 +509,8 @@ export class CloudAgent {
           ctl.abort();
         }
       },
+      addUsage: (input, output) =>
+        void this.ctx.db.run("UPDATE cloud_runs SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ? WHERE id = ?", input, output, runId),
       mcpAccess: () => {
         // A short-lived token for this run's principal; revoked when the turn ends.
         const token = `${OAUTH_ACCESS_PREFIX}${randomToken(32)}`;
@@ -866,6 +870,7 @@ function shapeRun(r: RunRow) {
     transcript: JSON.parse(r.transcript) as TranscriptEntry[],
     toolCalls: r.tool_calls,
     costCents: r.cost_cents,
+    tokens: { input: r.input_tokens, output: r.output_tokens },
     error: r.error,
     createdAt: r.created_at,
     finishedAt: r.finished_at,

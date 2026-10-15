@@ -85,6 +85,8 @@ export interface RunIO {
   saveState(state: unknown): void;
   /** Add to the run's cost in US cents, when the provider reports one. */
   addCost(cents: number): void;
+  /** Add tokens the model used, when the provider reports them. */
+  addUsage(inputTokens: number, outputTokens: number): void;
   /** A run-scoped bearer token for Slipstream's own /mcp (CLI engines). Revoked when the run ends. */
   mcpAccess(): { url: string; token: string };
   signal: AbortSignal;

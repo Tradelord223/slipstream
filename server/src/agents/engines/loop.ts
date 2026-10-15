@@ -49,6 +49,7 @@ export async function runLoop<S>(io: RunIO, adapter: ModelAdapter<S>, message: s
       if (io.signal.aborted) return { outcome: "done" };
       const res = await adapter.step(state, io);
       io.saveState(state);
+      if (res.usage) io.addUsage(res.usage.inputTokens, res.usage.outputTokens);
       if (res.usage?.costCents) io.addCost(res.usage.costCents);
       if (res.text.trim()) io.say(res.text.trim());
       if (res.stop === "refusal") return { outcome: "failed", error: "The model declined this task." };

@@ -13,6 +13,8 @@
   - Agents are principals with scopes and approval policies. Every action is recorded, and everything can be undone.
   - Remote MCP: an OAuth 2.1 server for claude.ai and ChatGPT, and Tailscale Serve/Funnel sharing.
   - A managed cloud agent (Claude on Managed Agents) with routines and budgets.
+  - Agents on any model: Sign in with ChatGPT, your own Claude Code or Codex, or Claude, OpenAI, Gemini and OpenRouter keys.
+  - Autopilot: new mail sorted as it arrives, with reasons, undo, drafted replies, learning from corrections, and an eval harness with prompt-injection cases.
 - **Tests.**
   - Unit tests for the server.
   - A black-box contract suite, `contract/`, covering the agent API, MCP, OAuth and the dashboard API in local and team mode.
@@ -33,3 +35,5 @@
 - Live Gmail and Microsoft OAuth sign-in. This needs each installer's own OAuth app.
 - Tailscale Funnel on a real tailnet.
 - The cloud agent against the live Managed Agents API. Tests use a local stand-in.
+- Every engine against its live provider: ChatGPT sign-in, the four API keys, and real Claude Code and Codex runs. Tests use stand-ins for each API and scripted CLIs that call Slipstream's real MCP endpoint.
+- Autopilot's decision quality on a real model. `scripts/eval-autopilot.ts` measures it; it hasn't been run against a paid model yet.

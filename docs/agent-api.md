@@ -24,6 +24,10 @@ Slipstream is built for people and their AI agents together. Anything you can do
   You approve with Enter and reject with Backspace.
 - **Activity and undo.** Every action is recorded with who did it, from your own keystrokes to each agent's. An agent's actions also show at the top of the conversation they touched ("Inbox agent marked this done · Undo"). Undo is exact within the triage window, and after that it runs the opposite action.
 
+## Agents built in
+
+The assistant sidebar, routines and [Autopilot](autopilot.md) run on the model you choose: ChatGPT, your own Claude Code or Codex, or a Claude, OpenAI, Gemini or OpenRouter key. See [models.md](models.md). Each acts as its own agent with the same scopes, approvals and undo described here.
+
 ## The cloud agent (one API key)
 
 Want an agent without running one? Open **Agent** in the sidebar and paste an Anthropic API key. Slipstream sets up Claude on Anthropic's Managed Agents, and its only tools are Slipstream's own commands. Anthropic runs the agent loop and Slipstream answers each tool call. So the cloud agent:

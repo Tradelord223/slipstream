@@ -486,4 +486,8 @@ export const migrations: string[] = [
 
   ALTER TABLE cloud_runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'assistant';
   `,
+  /* 12: tokens a run used, for engines that report them */ `
+  ALTER TABLE cloud_runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE cloud_runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

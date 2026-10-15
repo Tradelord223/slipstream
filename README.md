@@ -27,7 +27,7 @@ Slipstream keeps the speed and drops the rest.
 | Inboxes | One unified inbox across every account, or one at a time |
 | Tracking | None. Remote images are blocked until you choose to see them |
 | Shortcuts | Every one remappable |
-| AI | Optional, your own key, no tools, hardened against prompt injection |
+| AI | Optional. Agents and Autopilot run on your ChatGPT plan, your own Claude Code or Codex, or your key for Claude, OpenAI, Gemini or OpenRouter. Quick summaries use a Claude key |
 | Agents | MCP, HTTP API, CLI and webhooks, with scoped tokens, approvals, attribution and undo |
 | Price | Free, AGPL-3.0 |
 
@@ -44,8 +44,10 @@ Slipstream keeps the speed and drops the rest.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
 - **Labels.** Colors, nesting ("Clients/Kettleby"), and auto-label rules that file new mail as it arrives. Labels you apply sync to Gmail labels, Outlook categories and IMAP keywords; renames and deletes sync to Gmail.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
-- **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
+- **AI, if you want it.** One-key summaries and reply suggestions with your own Anthropic key.
 - **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agent-api.md](docs/agent-api.md).
+- **Autopilot.** New mail is sorted as it arrives: what needs you stays, receipts and notices are labelled and cleared, later things come back when they matter, and replies are drafted in your voice for you to send. Every decision shows its reason and can be undone, and it learns from what you change. It can't send. See [docs/autopilot.md](docs/autopilot.md).
+- **Any model you already have.** Sign in with ChatGPT, use your own Claude Code or Codex, or paste a Claude, OpenAI, Gemini or OpenRouter key. Pick per conversation; every model works through the same commands, approvals and undo. See [docs/models.md](docs/models.md).
 - **A cloud agent with one API key.** Paste an Anthropic key and Claude works your inbox on Anthropic's Managed Agents, through Slipstream's own actions. Ask it anything, or give it routines ("weekdays at 8: triage and draft replies", "when client mail arrives: draft a reply"). It has hard budgets per run and per month, and sending still waits for you.
 - **claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI.
 

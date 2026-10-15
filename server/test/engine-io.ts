@@ -10,6 +10,7 @@ export interface FakeIO extends RunIO {
   toolLines: { name: string; failed: boolean }[];
   calls: { name: string; input: unknown }[];
   cents: number;
+  tokens: { input: number; output: number };
   state: unknown;
   abort(): void;
 }
@@ -52,6 +53,7 @@ export function fakeIO(opts: {
     toolLines: [],
     calls: [],
     cents: 0,
+    tokens: { input: 0, output: 0 },
     state: opts.state ?? null,
     async callTool(name, input) {
       io.calls.push({ name, input });
@@ -66,6 +68,7 @@ export function fakeIO(opts: {
     loadState: <T>() => (io.state === null ? null : (JSON.parse(JSON.stringify(io.state)) as T)),
     saveState: (s) => void (io.state = JSON.parse(JSON.stringify(s))),
     addCost: (c) => void (io.cents += c),
+    addUsage: (i, o) => void ((io.tokens.input += i), (io.tokens.output += o)),
     mcpAccess: () => opts.mcp ?? { url: "http://127.0.0.1:1/mcp", token: "ss_oat_test" },
     signal: ctl.signal,
     abort: () => ctl.abort(),
