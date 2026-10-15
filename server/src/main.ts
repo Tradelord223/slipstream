@@ -17,6 +17,7 @@ import { DEMO_IDENTITY } from "./providers/demo.ts";
 import { Agents } from "./agents/agents.ts";
 import { Webhooks } from "./agents/webhooks.ts";
 import { CloudAgent } from "./agents/cloud.ts";
+import { Autopilot } from "./agents/autopilot.ts";
 import { runRules } from "./mail/labels.ts";
 import { buildCatalog } from "./commands/catalog.ts";
 import { Commands } from "./commands/service.ts";
@@ -34,6 +35,7 @@ export function createContext(config: Config): AppContext {
   const ctx = { config, db, events, secrets, store, triage, users, sync, agents, commands } as AppContext;
   ctx.webhooks = new Webhooks(ctx);
   ctx.cloud = new CloudAgent(ctx);
+  ctx.autopilot = new Autopilot(ctx);
   commands.bind(ctx);
   return ctx;
 }
@@ -74,6 +76,7 @@ export async function start(config = loadConfig()) {
   ctx.sync.start();
   ctx.webhooks.start();
   ctx.cloud.startScheduler();
+  ctx.autopilot.start();
   // Auto-label rules: new mail is labelled within a few seconds of arriving.
   const rulesTimer = setInterval(() => {
     try {
@@ -97,6 +100,7 @@ export async function start(config = loadConfig()) {
     stopWatching();
     ctx.webhooks.close();
     ctx.cloud.close();
+    ctx.autopilot.close();
     clearInterval(rulesTimer);
     await ctx.sync.stop();
     ctx.db.close();

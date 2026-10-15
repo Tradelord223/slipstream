@@ -18,6 +18,9 @@ export interface Config {
   google: { clientId?: string; clientSecret?: string };
   microsoft: { clientId?: string; clientSecret?: string; tenant: string };
   anthropicApiKey?: string;
+  openaiApiKey?: string;
+  geminiApiKey?: string;
+  openrouterApiKey?: string;
   /** Seed a demo account on first boot (local mode only). */
   demo: boolean;
   syncIntervalSeconds: number;
@@ -65,6 +68,9 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     google: { clientId: env("GOOGLE_CLIENT_ID"), clientSecret: env("GOOGLE_CLIENT_SECRET") },
     microsoft: { clientId: env("MICROSOFT_CLIENT_ID"), clientSecret: env("MICROSOFT_CLIENT_SECRET"), tenant: env("MICROSOFT_TENANT") ?? "common" },
     anthropicApiKey: env("ANTHROPIC_API_KEY"),
+    openaiApiKey: env("OPENAI_API_KEY"),
+    geminiApiKey: env("GEMINI_API_KEY") ?? env("GOOGLE_API_KEY"),
+    openrouterApiKey: env("OPENROUTER_API_KEY"),
     demo: mode === "local" && env("SLIPSTREAM_DEMO") !== "0",
     syncIntervalSeconds: Number(env("SLIPSTREAM_SYNC_SECONDS") ?? 60),
     sourceUrl: env("SLIPSTREAM_SOURCE_URL") ?? "https://github.com/Tradelord223/slipstream",

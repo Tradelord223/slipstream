@@ -16,7 +16,7 @@ export interface Server {
   stop(): Promise<void>;
 }
 
-export async function startServer(opts: { mode?: "local" | "team" } = {}): Promise<Server> {
+export async function startServer(opts: { mode?: "local" | "team"; env?: Record<string, string> } = {}): Promise<Server> {
   const mode = opts.mode ?? "local";
   const external = mode === "team" ? process.env.SLIPSTREAM_CONTRACT_TEAM_URL : process.env.SLIPSTREAM_CONTRACT_URL;
   if (external) return { url: external.replace(/\/$/, ""), dataDir: null, stop: async () => {} };
@@ -32,6 +32,7 @@ export async function startServer(opts: { mode?: "local" | "team" } = {}): Promi
       SLIPSTREAM_MODE: mode,
       SLIPSTREAM_DEMO: "1",
       SLIPSTREAM_SYNC_SECONDS: "3600",
+      ...opts.env,
       ...(mode === "team" ? { SLIPSTREAM_SECRET: "contract-secret", SLIPSTREAM_PUBLIC_URL: `http://127.0.0.1:${port}`, SLIPSTREAM_HOST: "127.0.0.1" } : {}),
     },
     stdio: ["ignore", "ignore", "inherit"],

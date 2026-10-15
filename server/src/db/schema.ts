@@ -444,4 +444,46 @@ export const migrations: string[] = [
   /* 9: approvals created during a cloud agent run point back at it */ `
   ALTER TABLE approvals ADD COLUMN run_id TEXT;
   `,
+  /* 10: agent runs on any engine (ChatGPT, API keys, Claude Code, Codex), not only the managed agent */ `
+  ALTER TABLE cloud_runs ADD COLUMN engine TEXT NOT NULL DEFAULT 'managed:anthropic';
+  ALTER TABLE cloud_runs ADD COLUMN model TEXT;
+  ALTER TABLE cloud_runs ADD COLUMN agent_id TEXT;
+  ALTER TABLE cloud_runs ADD COLUMN state TEXT;
+  ALTER TABLE cloud_routines ADD COLUMN engine TEXT;
+  `,
+  /* 11: Autopilot: one decision per new incoming message, sender rules, and where a run came from */ `
+  CREATE TABLE autopilot_items (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    stage TEXT NOT NULL CHECK (stage IN ('queued','deciding','decided','failed')),
+    source TEXT NOT NULL DEFAULT 'model' CHECK (source IN ('model','sender')),
+    decision TEXT,
+    applied INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','accepted','dismissed','corrected')),
+    correction TEXT,
+    activity_ids TEXT NOT NULL DEFAULT '[]',
+    draft_id TEXT,
+    draft_body TEXT,
+    run_id TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    UNIQUE (thread_id, message_id)
+  );
+  CREATE INDEX autopilot_items_user ON autopilot_items (user_id, created_at DESC);
+  CREATE INDEX autopilot_items_run ON autopilot_items (run_id);
+
+  CREATE TABLE sender_rules (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pattern TEXT NOT NULL,
+    action TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (user_id, pattern)
+  );
+
+  ALTER TABLE cloud_runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'assistant';
+  `,
 ];

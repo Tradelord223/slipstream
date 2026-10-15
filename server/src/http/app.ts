@@ -15,6 +15,9 @@ import { teamRoutes } from "./team.ts";
 import { handleMcp, v1Routes } from "./v1.ts";
 import { makeOriginOf, remoteRoutes } from "./remote.ts";
 import { cloudRoutes } from "./cloud.ts";
+import { engineRoutes } from "./engines.ts";
+import { EngineError } from "../agents/engines/loop.ts";
+import { autopilotRoutes } from "./autopilot.ts";
 import { oauthRoutes } from "../remote/oauth.ts";
 
 /** Paths reachable without a session in team mode. */
@@ -29,6 +32,8 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
     if (err instanceof ZodError) return c.json({ error: "Invalid request", issues: err.issues }, 400);
+    // A model provider's answer (bad sign-in address, expired sign-in, plan limit): the person can act on it.
+    if (err instanceof EngineError) return c.json({ error: err.message }, err.kind === "unavailable" ? 503 : err.kind === "limit" ? 402 : 400);
     console.error("[slipstream] request failed:", err);
     return c.json({ error: err instanceof Error ? err.message : "Something went wrong" }, 500);
   });
@@ -107,6 +112,8 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   app.route("/api", v1Routes(ctx));
   app.route("/api", remoteRoutes(ctx));
   app.route("/api", cloudRoutes(ctx));
+  app.route("/api", engineRoutes(ctx));
+  app.route("/api", autopilotRoutes(ctx));
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
   if (staticDir && existsSync(staticDir)) {

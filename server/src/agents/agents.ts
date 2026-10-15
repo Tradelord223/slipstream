@@ -19,6 +19,12 @@ export const policySchema = z.object({
   settings: z.enum(["approve", "allow"]).default("approve"),
 });
 export type Policy = z.infer<typeof policySchema>;
+/** A change to some policy fields. (policySchema.partial() would refill the others with defaults.) */
+export const policyPatchSchema = z.object({
+  send: z.enum(["always", "external", "never"]).optional(),
+  bulkThreshold: z.number().int().min(1).max(10_000).optional(),
+  settings: z.enum(["approve", "allow"]).optional(),
+});
 
 export const TOKEN_PREFIX = "ss_agent_";
 /** Short-lived OAuth access tokens (remote MCP clients); see remote/oauth.ts. */
@@ -105,7 +111,7 @@ export class Agents {
       "UPDATE agents SET name = ?, scopes = ?, policy = ? WHERE id = ?",
       patch.name ?? current.name,
       JSON.stringify(patch.scopes ? [...new Set(patch.scopes)] : current.scopes),
-      JSON.stringify(policySchema.parse({ ...current.policy, ...patch.policy })),
+      JSON.stringify(policySchema.parse({ ...current.policy, ...Object.fromEntries(Object.entries(patch.policy ?? {}).filter(([, v]) => v !== undefined)) })),
       id,
     );
     return this.get(userId, id);

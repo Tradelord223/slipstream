@@ -3,17 +3,22 @@ import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
 import type { Actor } from "../commands/registry.ts";
 import type { AppContext } from "../context.ts";
-import { newId } from "../lib/crypto.ts";
+import { newId, randomToken, sha256 } from "../lib/crypto.ts";
 import { compile } from "../mail/query.ts";
 import { toolName } from "../http/v1.ts";
-import { policySchema, SCOPES, type Agent, type Policy, type Scope } from "./agents.ts";
+import { OAUTH_ACCESS_PREFIX, policyPatchSchema, SCOPES, type Agent, type Policy, type Scope } from "./agents.ts";
+import { EngineAccounts } from "./engines/accounts.ts";
+import { ChatGPTAuth } from "./engines/chatgpt-auth.ts";
+import { createEngines } from "./engines/index.ts";
+import { ENGINE_IDS, MAX_TOOL_RESULT_CHARS, type Engine, type EngineId, type EngineStatus, type RunIO, type ToolDef, type ToolResult } from "./engines/types.ts";
 
 /**
- * The managed cloud agent: Claude running on Anthropic's Managed Agents, linked with one API key.
+ * Agent runs, on any engine: the assistant sidebar's conversations, routines, budgets and history.
  *
- * Anthropic hosts the agent loop; the agent's only tools are Slipstream's own commands, which this
- * server answers as custom tools. So the agent acts through the same scopes, approvals, attribution
- * and undo as any other agent, needs no public address, and never sees credentials.
+ * The managed engine is Claude on Anthropic's Managed Agents (Anthropic hosts the loop; this server
+ * answers its custom tools). Every other engine (ChatGPT sign-in, API keys, your own Claude Code or
+ * Codex) runs here through engines/. Either way the agent's only tools are Slipstream's commands, so
+ * it acts through the same scopes, approvals, attribution and undo as any other agent.
  */
 
 export const CLOUD_MODEL = "claude-opus-5-5";
@@ -31,6 +36,9 @@ const configSchema = z.object({
 });
 type CloudConfig = z.infer<typeof configSchema>;
 
+export const MANAGED: EngineId = "managed:anthropic";
+const MANAGED_LABEL = "Claude (cloud)";
+
 const trigger = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("schedule"),
@@ -45,6 +53,8 @@ export const routineInput = z.object({
   instruction: z.string().trim().min(1).max(4_000),
   trigger,
   enabled: z.boolean().default(true),
+  /** Which engine runs it; null follows the default. */
+  engine: z.enum(ENGINE_IDS).nullable().optional(),
 });
 export type RoutineInput = z.infer<typeof routineInput>;
 
@@ -61,6 +71,11 @@ interface RunRow {
   error: string | null;
   created_at: number;
   finished_at: number | null;
+  engine: string;
+  model: string | null;
+  agent_id: string | null;
+  state: string | null;
+  origin: string;
 }
 
 interface RoutineRow {
@@ -74,6 +89,7 @@ interface RoutineRow {
   last_checked_at: number | null;
   last_run_at: number | null;
   created_at: number;
+  engine: string | null;
 }
 
 type TranscriptEntry = { kind: "user" | "agent" | "tool" | "note"; text: string; at: number };
@@ -127,9 +143,15 @@ export class CloudAgent {
   private ctx: AppContext;
   private active = new Map<string, { userId: string; ctl: AbortController }>();
   private timer: NodeJS.Timeout | null = null;
+  readonly accounts: EngineAccounts;
+  readonly engines: Map<EngineId, Engine>;
+  readonly chatgpt: ChatGPTAuth;
 
   constructor(ctx: AppContext) {
     this.ctx = ctx;
+    this.accounts = new EngineAccounts(ctx);
+    this.chatgpt = new ChatGPTAuth(ctx, this.accounts);
+    this.engines = createEngines(ctx, this.accounts, this.chatgpt);
   }
 
   // ---- Config ---------------------------------------------------------------
@@ -164,30 +186,98 @@ export class CloudAgent {
     return c ? this.ctx.agents.get(userId, c.principalId) : null;
   }
 
-  /** Custom tool definitions for the commands this agent's scopes allow. */
-  private tools(scopes: Scope[]) {
+  /** The commands this agent's scopes allow, as function tools. */
+  private toolDefs(scopes: Scope[]): ToolDef[] {
     return this.ctx.commands
       .describe()
       .filter((d) => scopes.includes(d.scope))
       .map((d) => {
         const { $schema: _s, ...schema } = d.input as Record<string, unknown>;
-        return { type: "custom" as const, name: toolName(d.name), description: d.description.slice(0, 1000), input_schema: schema as { type: "object"; [k: string]: unknown } };
+        return { name: toolName(d.name), description: d.description.slice(0, 1000), parameters: schema };
       });
+  }
+
+  /** Custom tool definitions for the managed agent. */
+  private tools(scopes: Scope[]) {
+    return this.toolDefs(scopes).map((t) => ({ type: "custom" as const, name: t.name, description: t.description, input_schema: t.parameters as { type: "object"; [k: string]: unknown } }));
+  }
+
+  /** Spend limits, shared by every engine that reports a cost. */
+  budgets(userId: string): { runBudgetCents: number; monthlyBudgetCents: number } {
+    const c = this.config(userId);
+    const saved = this.ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE user_id = ? AND key = 'agentBudgets'", userId);
+    const b = saved ? (JSON.parse(saved.value) as { runBudgetCents?: number; monthlyBudgetCents?: number }) : {};
+    return { runBudgetCents: b.runBudgetCents ?? c?.runBudgetCents ?? 100, monthlyBudgetCents: b.monthlyBudgetCents ?? c?.monthlyBudgetCents ?? 2_000 };
+  }
+
+  setBudgets(userId: string, b: { runBudgetCents?: number; monthlyBudgetCents?: number }) {
+    const next = { ...this.budgets(userId), ...b };
+    this.ctx.db.run(
+      "INSERT INTO settings (user_id, key, value) VALUES (?, 'agentBudgets', ?) ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
+      userId,
+      JSON.stringify(next),
+    );
+    const c = this.config(userId);
+    if (c) this.saveConfig(userId, { ...c, ...next });
+    return next;
+  }
+
+  private spentThisMonth(userId: string): number {
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+    return this.ctx.db.get<{ cents: number }>("SELECT coalesce(sum(cost_cents), 0) AS cents FROM cloud_runs WHERE user_id = ? AND created_at >= ?", userId, monthStart)!.cents;
+  }
+
+  /** Every engine and whether it can run now, for Settings and the engine picker. */
+  async enginesStatus(userId: string): Promise<{ engines: EngineStatus[]; defaultEngine: EngineId | null }> {
+    const ready = Boolean(this.config(userId) && this.principal(userId));
+    const managed: EngineStatus = {
+      id: MANAGED,
+      label: MANAGED_LABEL,
+      kind: "managed",
+      ready,
+      detail: ready ? "Runs in Anthropic's cloud on your API key" : this.apiKey(userId) ? "Connect it in Settings → Agents" : "Add an Anthropic API key",
+      needs: ready ? undefined : "key",
+      model: CLOUD_MODEL,
+      billing: "api",
+    };
+    const rest = await Promise.all(
+      [...this.engines.values()].map((e) =>
+        e.status(userId).catch((err: unknown): EngineStatus => ({ id: e.id, label: e.label, kind: e.kind, ready: false, detail: explain(err), billing: "api" })),
+      ),
+    );
+    return { engines: [managed, ...rest], defaultEngine: this.accounts.defaultEngine(userId) };
+  }
+
+  /** The engine a run uses: the one asked for, else the person's default, else whatever is ready. */
+  private async pickEngine(userId: string, requested?: EngineId | null): Promise<EngineId> {
+    if (requested) return requested;
+    const preferred = this.accounts.defaultEngine(userId);
+    if (preferred) return preferred;
+    if (this.config(userId) && this.principal(userId)) return MANAGED;
+    // Someone's own Claude Code or Codex runs only when they pick it: being installed isn't consent to use their plan.
+    for (const e of this.engines.values()) if (e.kind !== "cli" && (await e.status(userId).catch(() => null))?.ready) return e.id;
+    throw new HttpError(400, "Choose a model for the assistant first (Settings → Models & accounts).");
+  }
+
+  private checkLimits(userId: string) {
+    if (this.spentThisMonth(userId) >= this.budgets(userId).monthlyBudgetCents)
+      throw new HttpError(402, "Agents reached this month's budget. Raise it in Settings → Models & accounts.");
+    if ([...this.active.values()].filter((r) => r.userId === userId).length >= 3)
+      throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
   }
 
   status(userId: string) {
     const c = this.config(userId);
     const p = this.principal(userId);
-    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
-    const spent = this.ctx.db.get<{ cents: number }>("SELECT coalesce(sum(cost_cents), 0) AS cents FROM cloud_runs WHERE user_id = ? AND created_at >= ?", userId, monthStart)!.cents;
+    const b = this.budgets(userId);
     return {
       connected: Boolean(c && p),
       hasKey: Boolean(this.apiKey(userId)),
       model: CLOUD_MODEL,
       agent: p ? { id: p.id, name: p.name, scopes: p.scopes, policy: p.policy } : null,
-      runBudgetCents: c?.runBudgetCents ?? 100,
-      monthlyBudgetCents: c?.monthlyBudgetCents ?? 2_000,
-      spentThisMonthCents: spent,
+      runBudgetCents: b.runBudgetCents,
+      monthlyBudgetCents: b.monthlyBudgetCents,
+      spentThisMonthCents: this.spentThisMonth(userId),
       routines: this.routines(userId),
       runs: this.runs(userId, 20),
     };
@@ -248,9 +338,11 @@ export class CloudAgent {
         environmentId,
         principalId: principal!.id,
         toolsetHash,
-        runBudgetCents: opts.runBudgetCents ?? existing?.runBudgetCents ?? 100,
-        monthlyBudgetCents: opts.monthlyBudgetCents ?? existing?.monthlyBudgetCents ?? 2_000,
+        runBudgetCents: opts.runBudgetCents ?? this.budgets(userId).runBudgetCents,
+        monthlyBudgetCents: opts.monthlyBudgetCents ?? this.budgets(userId).monthlyBudgetCents,
       });
+      if (opts.runBudgetCents !== undefined || opts.monthlyBudgetCents !== undefined)
+        this.setBudgets(userId, { runBudgetCents: opts.runBudgetCents, monthlyBudgetCents: opts.monthlyBudgetCents });
     } catch (err) {
       throw new HttpError(err instanceof Anthropic.AuthenticationError ? 400 : 502, explain(err));
     }
@@ -278,26 +370,26 @@ export class CloudAgent {
     return shapeRun(r);
   }
 
-  /** Start a run: a new Managed Agents session seeded with the instruction. Returns at once; work streams in. */
-  async start(userId: string, instruction: string, routineId: string | null = null, context?: { threadIds?: string[]; view?: string }) {
+  /** Start a run on an engine. Returns at once; work streams in. */
+  async start(userId: string, instruction: string, routineId: string | null = null, context?: { threadIds?: string[]; view?: string }, engineId?: EngineId | null) {
+    const engine = await this.pickEngine(userId, engineId);
+    const now = Date.now();
+    const contextText = [`Now: ${new Date(now).toISOString()} (the user's zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}).`, this.contextText(userId, context)]
+      .filter(Boolean)
+      .join("\n");
+    if (engine !== MANAGED) return this.startLocal(userId, engine, { instruction, routineId, message: `${instruction}\n\n${contextText}` });
+
     const c = this.config(userId);
     const key = this.apiKey(userId);
     const principal = this.principal(userId);
     if (!c || !key || !principal) throw new HttpError(400, "Connect the cloud agent first (Settings → Agents).");
-    const status = this.status(userId);
-    if (status.spentThisMonthCents >= c.monthlyBudgetCents) throw new HttpError(402, "The cloud agent reached this month's budget. Raise it in Settings → Agents.");
-    if ([...this.active.values()].filter((r) => r.userId === userId).length >= 3)
-      throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
+    this.checkLimits(userId);
 
     const id = newId("run");
-    const now = Date.now();
     const user = this.ctx.users.get(userId)!;
-    const contextText = [`Now: ${new Date(now).toISOString()} (the user's zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}).`, this.contextText(userId, context)]
-      .filter(Boolean)
-      .join("\n");
     this.ctx.db.run(
-      "INSERT INTO cloud_runs (id, user_id, routine_id, instruction, status, transcript, created_at) VALUES (?,?,?,?,?,?,?)",
-      id, userId, routineId, instruction, "starting", JSON.stringify([{ kind: "user", text: instruction, at: now }]), now,
+      "INSERT INTO cloud_runs (id, user_id, routine_id, instruction, status, transcript, created_at, engine, model, agent_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      id, userId, routineId, instruction, "starting", JSON.stringify([{ kind: "user", text: instruction, at: now }]), now, MANAGED, CLOUD_MODEL, principal.id,
     );
     this.emit(userId, id);
     try {
@@ -317,6 +409,159 @@ export class CloudAgent {
       throw new HttpError(502, explain(err));
     }
     return this.run(userId, id);
+  }
+
+  /**
+   * Start a run on an engine whose loop runs here (API keys, ChatGPT sign-in, local CLIs).
+   * `instruction` is what the run shows; `message` is what the model receives. Autopilot passes its
+   * own principal so its runs carry only the scopes it was given.
+   */
+  async startLocal(
+    userId: string,
+    engineId: EngineId,
+    opts: { instruction: string; message: string; routineId?: string | null; principal?: Agent; origin?: "assistant" | "routine" | "autopilot"; model?: string | null },
+  ) {
+    const engine = this.engines.get(engineId);
+    if (!engine) throw new HttpError(400, "That model isn't available on this server.");
+    const st = await engine.status(userId);
+    if (!st.ready) throw new HttpError(400, `${engine.label}: ${st.detail}`);
+    this.checkLimits(userId);
+    const user = this.ctx.users.get(userId)!;
+    const principal = opts.principal ?? this.accounts.principal(userId, engineId, engine.label);
+    const id = newId("run");
+    const now = Date.now();
+    const model = opts.model ?? this.accounts.model(userId, engineId) ?? st.model ?? null;
+    const origin = opts.origin ?? (opts.routineId ? "routine" : "assistant");
+    this.ctx.db.run(
+      "INSERT INTO cloud_runs (id, user_id, routine_id, instruction, status, transcript, created_at, engine, model, agent_id, origin) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      id, userId, opts.routineId ?? null, opts.instruction, "running", JSON.stringify([{ kind: "user", text: opts.instruction, at: now }]), now, engineId, model, principal.id, origin,
+    );
+    if (origin !== "autopilot") this.ctx.commands.record({ kind: "agent", user, agent: principal }, "cloud.run", `Started: ${opts.instruction.slice(0, 120)}`, {});
+    this.emit(userId, id);
+    void this.driveLocal(userId, id, opts.message);
+    return this.run(userId, id);
+  }
+
+  private finishedListeners: ((userId: string, runId: string, status: string) => void)[] = [];
+
+  /** Called once a run settles (done, failed, stopped, out of budget). */
+  onFinished(cb: (userId: string, runId: string, status: string) => void) {
+    this.finishedListeners.push(cb);
+  }
+
+  /** Whether a run is still working. */
+  isActive(runId: string) {
+    return this.active.has(runId);
+  }
+
+  private systemPrompt(user: { name: string; email: string }) {
+    return `${SYSTEM}\n\nThe user is ${user.name} (${user.email}).`;
+  }
+
+  /** One turn of a local engine: build its RunIO, run it, settle the run. */
+  private async driveLocal(userId: string, runId: string, message: string) {
+    const r = this.ctx.db.get<RunRow>("SELECT * FROM cloud_runs WHERE id = ?", runId);
+    const engine = r ? this.engines.get(r.engine as EngineId) : undefined;
+    const user = this.ctx.users.get(userId);
+    const principal = r?.agent_id ? this.ctx.agents.get(userId, r.agent_id) : null;
+    if (!r || !engine || !user || !principal) return this.finish(userId, runId, "failed", "This model is no longer connected.");
+    const actor = { kind: "agent" as const, user, agent: principal };
+    const ctl = new AbortController();
+    this.active.set(runId, { userId, ctl });
+    const minted: string[] = [];
+    const startedAt = Date.now();
+    const { runBudgetCents } = this.budgets(userId);
+    let overBudget = false;
+    const io: RunIO = {
+      runId,
+      userId,
+      actor,
+      model: r.model,
+      systemPrompt: this.systemPrompt(user),
+      tools: this.toolDefs(principal.scopes),
+      callTool: (name, input) => this.runTool(actor, runId, name, input),
+      say: (text) => {
+        this.append(runId, { kind: "agent", text, at: Date.now() });
+        this.emit(userId, runId);
+      },
+      toolLine: (name, failed) => {
+        this.ctx.db.run("UPDATE cloud_runs SET tool_calls = tool_calls + 1 WHERE id = ?", runId);
+        this.append(runId, { kind: "tool", text: `${name.replaceAll("_", ".")}${failed ? " (failed)" : ""}`, at: Date.now() });
+        this.linkApprovals(runId, principal.id, startedAt);
+        this.emit(userId, runId);
+      },
+      note: (text) => {
+        this.append(runId, { kind: "note", text, at: Date.now() });
+        this.emit(userId, runId);
+      },
+      loadState: <T>() => {
+        const s = this.ctx.db.get<{ state: string | null }>("SELECT state FROM cloud_runs WHERE id = ?", runId)?.state;
+        return s ? (JSON.parse(s) as T) : null;
+      },
+      saveState: (state) => void this.ctx.db.run("UPDATE cloud_runs SET state = ? WHERE id = ?", JSON.stringify(state), runId),
+      addCost: (cents) => {
+        this.ctx.db.run("UPDATE cloud_runs SET cost_cents = coalesce(cost_cents, 0) + ? WHERE id = ?", cents, runId);
+        const total = this.ctx.db.get<{ c: number }>("SELECT cost_cents AS c FROM cloud_runs WHERE id = ?", runId)?.c ?? 0;
+        if (total >= runBudgetCents) {
+          overBudget = true;
+          ctl.abort();
+        }
+      },
+      mcpAccess: () => {
+        // A short-lived token for this run's principal; revoked when the turn ends.
+        const token = `${OAUTH_ACCESS_PREFIX}${randomToken(32)}`;
+        const id = newId("oat");
+        const now = Date.now();
+        this.ctx.db.run(
+          "INSERT INTO oauth_tokens (id, agent_id, access_hash, refresh_hash, access_expires_at, refresh_expires_at, revoked_at, created_at) VALUES (?,?,?,?,?,?,NULL,?)",
+          id, principal.id, sha256(token), sha256(randomToken(32)), now + 2 * 3_600_000, now, now,
+        );
+        minted.push(id);
+        return { url: `http://127.0.0.1:${this.ctx.config.port}/mcp`, token };
+      },
+      signal: ctl.signal,
+    };
+    try {
+      const out = await engine.turn(io, message);
+      if (overBudget) this.finish(userId, runId, "budget", "Reached this run's budget");
+      else if (ctl.signal.aborted) this.finish(userId, runId, "stopped", null);
+      else if (out.outcome === "done") this.finish(userId, runId, "done", null);
+      else if (out.outcome === "limit") this.finish(userId, runId, "budget", out.error);
+      else this.finish(userId, runId, "failed", out.error);
+    } catch (err) {
+      this.finish(userId, runId, overBudget ? "budget" : "failed", overBudget ? "Reached this run's budget" : explain(err));
+    } finally {
+      this.active.delete(runId);
+      for (const id of minted) this.ctx.db.run("UPDATE oauth_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", Date.now(), id);
+      this.linkApprovals(runId, principal.id, startedAt);
+    }
+  }
+
+  /** Approvals an engine created over MCP during this turn point back at the run, like tool calls through callTool do. */
+  private linkApprovals(runId: string, agentId: string, since: number) {
+    this.ctx.db.run("UPDATE approvals SET run_id = ? WHERE agent_id = ? AND run_id IS NULL AND created_at >= ?", runId, agentId, since);
+  }
+
+  /** One tool call through the command registry, on behalf of a run. */
+  private async runTool(actor: Actor, runId: string, tool: string, input: unknown): Promise<ToolResult> {
+    const name = this.ctx.commands.list().find((c) => toolName(c.name) === tool)?.name ?? tool;
+    let text: string;
+    let isError = false;
+    try {
+      const res = await this.ctx.commands.execute(actor, name, input);
+      if (res.status === "pending_approval") this.ctx.db.run("UPDATE approvals SET run_id = ? WHERE id = ?", runId, res.approvalId);
+      text =
+        res.status === "pending_approval"
+          ? `Waiting for the user's approval (${res.reason}). It's in their Review queue; it runs when they approve. Don't retry.`
+          : JSON.stringify({ ...((res.result ?? {}) as object), activityId: res.activityId ?? undefined });
+    } catch (err) {
+      isError = true;
+      text = err instanceof z.ZodError ? z.prettifyError(err) : err instanceof Error ? err.message : String(err);
+    }
+    if (text.length > MAX_TOOL_RESULT_CHARS) text = `${text.slice(0, MAX_TOOL_RESULT_CHARS)}… (truncated)`;
+    this.ctx.db.run("UPDATE cloud_runs SET tool_calls = tool_calls + 1 WHERE id = ?", runId);
+    this.append(runId, { kind: "tool", text: `${name}${isError ? " (failed)" : ""}`, at: Date.now() });
+    return { text, isError };
   }
 
   /** What the person is looking at, so "this" and "these" mean something. Only their own threads. */
@@ -341,6 +586,16 @@ export class CloudAgent {
   /** Follow-up message in a run whose session is still alive. */
   async reply(userId: string, runId: string, text: string, context?: { threadIds?: string[]; view?: string }) {
     const r = this.ctx.db.get<RunRow>("SELECT * FROM cloud_runs WHERE id = ? AND user_id = ?", runId, userId);
+    if (r && r.engine !== MANAGED) {
+      if (this.active.has(runId)) throw new HttpError(409, "Still working on your last message. Wait for it, or stop it.");
+      this.checkLimits(userId);
+      const extra = this.contextText(userId, context);
+      this.append(runId, { kind: "user", text, at: Date.now() });
+      this.ctx.db.run("UPDATE cloud_runs SET status = 'running', error = NULL, finished_at = NULL WHERE id = ?", runId);
+      this.emit(userId, runId);
+      void this.driveLocal(userId, runId, extra ? `${text}\n\n${extra}` : text);
+      return this.run(userId, runId);
+    }
     const key = this.apiKey(userId);
     if (!r?.session_id || !key) throw new HttpError(404, "Run not found");
     if (r.status === "budget") throw new HttpError(402, "This run hit its budget. Start a new one.");
@@ -360,7 +615,7 @@ export class CloudAgent {
     if (!r) throw new HttpError(404, "Run not found");
     const key = this.apiKey(userId);
     // A run still starting has no session yet; stopping it just marks it.
-    if (r.session_id && key) await this.client(key).beta.sessions.events.send(r.session_id, { events: [{ type: "user.interrupt" }] }).catch(() => {});
+    if (r.engine === MANAGED && r.session_id && key) await this.client(key).beta.sessions.events.send(r.session_id, { events: [{ type: "user.interrupt" }] }).catch(() => {});
     this.active.get(runId)?.ctl.abort();
     this.finish(userId, runId, "stopped", null);
     return this.run(userId, runId);
@@ -399,23 +654,7 @@ export class CloudAgent {
         case "agent.custom_tool_use": {
           if (answered.has(event.id)) return "continue";
           answered.add(event.id);
-          const name = this.ctx.commands.list().find((c) => toolName(c.name) === event.name)?.name ?? String(event.name);
-          let text: string;
-          let isError = false;
-          try {
-            const res = await this.ctx.commands.execute(actor, name, event.input);
-            if (res.status === "pending_approval") this.ctx.db.run("UPDATE approvals SET run_id = ? WHERE id = ?", runId, res.approvalId);
-            text =
-              res.status === "pending_approval"
-                ? `Waiting for the user's approval (${res.reason}). It's in their Review queue; it runs when they approve. Don't retry.`
-                : JSON.stringify({ ...((res.result ?? {}) as object), activityId: res.activityId ?? undefined });
-          } catch (err) {
-            isError = true;
-            text = err instanceof z.ZodError ? z.prettifyError(err) : err instanceof Error ? err.message : String(err);
-          }
-          if (text.length > 100_000) text = `${text.slice(0, 100_000)}… (truncated)`;
-          this.ctx.db.run("UPDATE cloud_runs SET tool_calls = tool_calls + 1 WHERE id = ?", runId);
-          this.append(runId, { kind: "tool", text: `${name}${isError ? " (failed)" : ""}`, at: Date.now() });
+          const { text, isError } = await this.runTool(actor, runId, String(event.name), event.input);
           await client.beta.sessions.events.send(sessionId, {
             events: [{ type: "user.custom_tool_result", custom_tool_use_id: event.id, content: [{ type: "text", text }], is_error: isError }],
           });
@@ -483,12 +722,20 @@ export class CloudAgent {
   }
 
   private finish(userId: string, runId: string, status: "done" | "failed" | "budget" | "stopped", error: string | null) {
-    this.ctx.db.run(
+    const changed = this.ctx.db.run(
       "UPDATE cloud_runs SET status = ?, error = ?, finished_at = ? WHERE id = ? AND status IN ('starting','running')",
       status, error, Date.now(), runId,
-    );
+    ).changes;
     if (error) this.append(runId, { kind: "note", text: error, at: Date.now() });
     this.emit(userId, runId);
+    if (changed)
+      for (const cb of this.finishedListeners) {
+        try {
+          cb(userId, runId, status);
+        } catch (err) {
+          console.error("[slipstream] run listener:", err);
+        }
+      }
   }
 
   private emit(userId: string, runId: string) {
@@ -504,6 +751,7 @@ export class CloudAgent {
       instruction: r.instruction,
       trigger: JSON.parse(r.trigger) as z.infer<typeof trigger>,
       enabled: Boolean(r.enabled),
+      engine: (r.engine as EngineId | null) ?? null,
       nextRunAt: r.next_run_at,
       lastRunAt: r.last_run_at,
     }));
@@ -522,15 +770,15 @@ export class CloudAgent {
     const now = Date.now();
     if (id) {
       const res = this.ctx.db.run(
-        "UPDATE cloud_routines SET name = ?, instruction = ?, trigger = ?, enabled = ?, next_run_at = ?, last_checked_at = ? WHERE id = ? AND user_id = ?",
-        input.name, input.instruction, JSON.stringify(input.trigger), input.enabled ? 1 : 0, next, now, id, userId,
+        "UPDATE cloud_routines SET name = ?, instruction = ?, trigger = ?, enabled = ?, next_run_at = ?, last_checked_at = ?, engine = ? WHERE id = ? AND user_id = ?",
+        input.name, input.instruction, JSON.stringify(input.trigger), input.enabled ? 1 : 0, next, now, input.engine ?? null, id, userId,
       );
       if (res.changes === 0) throw new HttpError(404, "Routine not found");
     } else {
       id = newId("rtn");
       this.ctx.db.run(
-        "INSERT INTO cloud_routines (id, user_id, name, instruction, trigger, enabled, next_run_at, last_checked_at, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        id, userId, input.name, input.instruction, JSON.stringify(input.trigger), input.enabled ? 1 : 0, next, now, now,
+        "INSERT INTO cloud_routines (id, user_id, name, instruction, trigger, enabled, next_run_at, last_checked_at, created_at, engine) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        id, userId, input.name, input.instruction, JSON.stringify(input.trigger), input.enabled ? 1 : 0, next, now, now, input.engine ?? null,
       );
     }
     return this.routines(userId).find((r) => r.id === id)!;
@@ -544,14 +792,15 @@ export class CloudAgent {
     const r = this.ctx.db.get<RoutineRow>("SELECT * FROM cloud_routines WHERE id = ? AND user_id = ?", id, userId);
     if (!r) throw new HttpError(404, "Routine not found");
     this.ctx.db.run("UPDATE cloud_routines SET last_run_at = ? WHERE id = ?", Date.now(), id);
-    return this.start(userId, `${r.instruction}${extra}`, r.id);
+    return this.start(userId, `${r.instruction}${extra}`, r.id, undefined, (r.engine as EngineId | null) ?? null);
   }
 
   /** After a restart: pick runs that were mid-flight back up from their session's history, or close them. */
   resumeInterrupted() {
     const stuck = this.ctx.db.all<RunRow>("SELECT * FROM cloud_runs WHERE status IN ('starting','running')");
     for (const r of stuck) {
-      if (r.session_id && this.apiKey(r.user_id) && this.config(r.user_id)) void this.drive(r.user_id, r.id, r.session_id);
+      if (r.engine !== MANAGED) this.finish(r.user_id, r.id, "failed", "Interrupted when Slipstream restarted. Send a follow-up to pick up where it left off.");
+      else if (r.session_id && this.apiKey(r.user_id) && this.config(r.user_id)) void this.drive(r.user_id, r.id, r.session_id);
       else this.finish(r.user_id, r.id, "failed", "Interrupted when Slipstream restarted.");
     }
   }
@@ -564,6 +813,7 @@ export class CloudAgent {
 
   close() {
     if (this.timer) clearInterval(this.timer);
+    this.chatgpt.close();
     for (const [, run] of this.active) run.ctl.abort();
   }
 
@@ -571,7 +821,6 @@ export class CloudAgent {
   async tick(now = Date.now()) {
     const due = this.ctx.db.all<RoutineRow>("SELECT * FROM cloud_routines WHERE enabled = 1");
     for (const r of due) {
-      if (!this.config(r.user_id)) continue;
       const t = JSON.parse(r.trigger) as z.infer<typeof trigger>;
       if (t.type === "schedule") {
         if (r.next_run_at && r.next_run_at <= now) {
@@ -609,7 +858,10 @@ function shapeRun(r: RunRow) {
     id: r.id,
     sessionId: r.session_id,
     routineId: r.routine_id,
+    origin: r.origin,
     instruction: r.instruction,
+    engine: r.engine as EngineId,
+    model: r.model,
     status: r.status,
     transcript: JSON.parse(r.transcript) as TranscriptEntry[],
     toolCalls: r.tool_calls,
@@ -634,7 +886,7 @@ function explain(err: unknown): string {
 export const cloudConnectInput = z.object({
   apiKey: z.string().trim().max(500).optional(),
   scopes: z.array(z.enum(SCOPES)).min(1).default(["read", "triage", "draft", "send"]),
-  policy: policySchema.partial().optional(),
+  policy: policyPatchSchema.optional(),
   runBudgetCents: z.number().int().min(10).max(10_000).optional(),
   monthlyBudgetCents: z.number().int().min(100).max(1_000_000).optional(),
 });

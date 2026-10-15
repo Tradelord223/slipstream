@@ -184,6 +184,12 @@ describe("approvals", () => {
     assert.equal((await a("/api/v1/triage.trash", { threadIds: done.slice(0, 3).map((t) => t.id) })).status, 202);
     assert.equal((await a("/api/v1/triage.trash", { threadIds: done.slice(3, 5).map((t) => t.id) })).status, 200);
   });
+
+  test("changing one policy field keeps the others", async () => {
+    const created = (await h("/api/agents", { method: "POST", json: { name: "Careful", scopes: ["read"], policy: { bulkThreshold: 3, settings: "allow" } } })).body.agent;
+    const updated = (await h(`/api/agents/${created.id}`, { method: "PATCH", json: { policy: { send: "never" } } })).body.agent;
+    assert.deepEqual(updated.policy, { send: "never", bulkThreshold: 3, settings: "allow" });
+  });
 });
 
 describe("MCP", () => {

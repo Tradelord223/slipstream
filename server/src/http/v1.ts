@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { Hono } from "hono";
 import { z } from "zod";
-import { policySchema, SCOPES } from "../agents/agents.ts";
+import { policyPatchSchema, SCOPES } from "../agents/agents.ts";
 import { WEBHOOK_EVENTS } from "../agents/webhooks.ts";
 import { HttpError } from "../auth/users.ts";
 import type { Actor } from "../commands/registry.ts";
@@ -62,7 +62,7 @@ export function v1Routes(ctx: AppContext) {
   const agentBody = z.object({
     name: z.string().trim().min(1).max(80),
     scopes: z.array(z.enum(SCOPES)).min(1),
-    policy: policySchema.partial().optional(),
+    policy: policyPatchSchema.optional(),
   });
 
   app.get("/agents", (c) => {

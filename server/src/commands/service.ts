@@ -51,6 +51,8 @@ export interface ApprovalHandler {
   reject: (userId: string, input: unknown) => void;
 }
 
+export type ActivityListener = (actor: Actor, command: string, input: unknown, threadIds: string[]) => void;
+
 export class Commands {
   private byName = new Map<string, Command>();
   private handlers = new Map<string, ApprovalHandler>();
@@ -69,6 +71,28 @@ export class Commands {
     const handler = this.handlers.get(name);
     if (!handler) throw new Error(`No approval handler for ${name}`);
     return this.requestApproval(actor, { name, title: handler.title } as Command, input, reason, preview);
+  }
+
+  private activityListeners: ActivityListener[] = [];
+
+  /** Hear about every completed command and undo (Autopilot learns from what people change). */
+  onActivity(cb: ActivityListener) {
+    this.activityListeners.push(cb);
+  }
+
+  private notify(actor: Actor, command: string, input: unknown, threadIds: string[]) {
+    for (const cb of this.activityListeners) {
+      try {
+        cb(actor, command, input, threadIds);
+      } catch (err) {
+        console.error("[slipstream] activity listener:", err);
+      }
+    }
+  }
+
+  /** Register a command after boot (features that build on the core vocabulary). */
+  add(c: Command) {
+    this.byName.set(c.name, c);
   }
 
   /** The context is built after the registry; bind it once at boot. */
@@ -112,6 +136,7 @@ export class Commands {
     const outcome = await cmd.run(this.ctx, actor, input);
     if (cmd.readOnly) return { status: "done", result: outcome.result, activityId: null };
     const activityId = this.writeActivity(actor, cmd.name, outcome, opts.approvalId);
+    this.notify(actor, cmd.name, input, outcome.threadIds ?? []);
     return { status: "done", result: outcome.result, activityId };
   }
 
@@ -323,6 +348,7 @@ export class Commands {
     }
     db.run("UPDATE activity SET status = 'undone' WHERE id = ?", row.id);
     this.writeActivity(actor, "undo", { result: null, summary: `Undid: ${row.summary}`, threadIds });
+    this.notify(actor, "undo", { activityId: row.id, command: row.command }, threadIds);
     if (threadIds.length) events.emitToUser(actor.user.id, { type: "threads", accountId: "", threadIds });
     return { threadIds };
   }

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { cloudConnectInput, routineInput } from "../agents/cloud.ts";
+import { ENGINE_IDS } from "../agents/engines/types.ts";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 
@@ -25,13 +26,14 @@ export function cloudRoutes(ctx: AppContext) {
 
   app.get("/cloud/runs", (c) => c.json({ runs: ctx.cloud.runs(c.get("user").id, 50) }));
   app.post("/cloud/runs", async (c) => {
-    const { instruction, context } = z
+    const { instruction, context, engine } = z
       .object({
         instruction: z.string().trim().min(1).max(8_000),
         context: z.object({ threadIds: z.array(z.string().max(100)).max(100).optional(), view: z.string().max(200).optional() }).optional(),
+        engine: z.enum(ENGINE_IDS).optional(),
       })
       .parse(await c.req.json());
-    return c.json(await ctx.cloud.start(c.get("user").id, instruction, null, context));
+    return c.json(await ctx.cloud.start(c.get("user").id, instruction, null, context, engine));
   });
   app.get("/cloud/runs/:id", (c) => c.json(ctx.cloud.run(c.get("user").id, c.req.param("id"))));
   app.post("/cloud/runs/:id/messages", async (c) => {

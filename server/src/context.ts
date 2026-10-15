@@ -10,6 +10,7 @@ import type { Agents } from "./agents/agents.ts";
 import type { Commands } from "./commands/service.ts";
 import type { Webhooks } from "./agents/webhooks.ts";
 import type { CloudAgent } from "./agents/cloud.ts";
+import type { Autopilot } from "./agents/autopilot.ts";
 import type { Actor } from "./commands/registry.ts";
 
 /** Everything a request handler might need, built once at boot. */
@@ -26,6 +27,7 @@ export interface AppContext {
   commands: Commands;
   webhooks: Webhooks;
   cloud: CloudAgent;
+  autopilot: Autopilot;
 }
 
 /** `actor` is the person, or the agent acting for them (bearer-token requests). */
