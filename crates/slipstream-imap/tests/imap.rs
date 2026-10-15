@@ -863,3 +863,60 @@ async fn implicit_tls_works_and_an_untrusted_certificate_is_refused() {
     assert!(err.to_string().contains("certificate"), "{err}");
     assert!(!f2.log().contains(&"LOGIN".to_string()), "no password to an unverified server");
 }
+
+/* ================================================================ robustness beyond the gates */
+
+#[tokio::test]
+async fn non_ascii_mailbox_names_use_the_same_paths_as_imapflow_and_go_out_as_modified_utf7() {
+    let f = Fake::new(false);
+    f.add("INBOX", Some("\\Inbox"));
+    f.add("Sent", Some("\\Sent"));
+    f.add("Gel&APY-schte Elemente", Some("\\Trash")); // what the wire carries for "Gelöschte Elemente"
+    f.deliver("INBOX", mail("a"), Extra::default());
+    f.deliver("Gel&APY-schte Elemente", mail("old"), Extra::default());
+    let mut r = rig(f).await;
+    let st = drain(&mut r.provider, None).await;
+    assert_eq!(ids(&st), ["INBOX:1:1", "Gelöschte Elemente:1:1"]);
+    assert!(st.messages[1].folders.trash);
+    assert!(Cursor::parse(st.cursor.as_deref()).boxes.contains_key("Gelöschte Elemente"));
+
+    r.provider.apply(RemoteAction::Trash(thread(&[("INBOX:1:1", "<a@example.com>")]))).await.unwrap();
+    assert_eq!(r.fake.ids("Gel&APY-schte Elemente").len(), 2);
+    assert!(r.fake.lines().iter().any(|l| l.starts_with("UID MOVE 1 Gel&APY-schte Elemente")), "{:#?}", r.fake.lines());
+}
+
+#[tokio::test]
+async fn dropping_a_sync_mid_flight_never_desynchronizes_the_connection() {
+    let f = Fake::generic(false);
+    for i in 0..30 {
+        f.deliver("INBOX", mail(&format!("m{i}")), Extra::default());
+    }
+    let mut r = rig(f).await;
+    let first = drain(&mut r.provider, None).await;
+    // Cancel syncs at awkward moments: each abandoned future may leave half a response on the wire.
+    for micros in [50u64, 200, 700, 1500, 3000] {
+        let _ = tokio::time::timeout(std::time::Duration::from_micros(micros), r.provider.sync(first.cursor.as_deref())).await;
+    }
+    r.fake.deliver("INBOX", mail("after"), Extra::default());
+    let st = drain(&mut r.provider, first.cursor).await;
+    assert_eq!(mids(&st), ["<after@example.com>"]);
+}
+
+#[tokio::test]
+async fn a_wedged_server_times_out_instead_of_hanging_the_sync() {
+    let f = Fake::generic(false);
+    f.deliver("INBOX", mail("a"), Extra::default());
+    let mut r = rig(f).await;
+    let st = drain(&mut r.provider, None).await;
+    r.fake.with(|d| d.hang = true);
+    r.provider.set_op_timeout(std::time::Duration::from_millis(300));
+    let started = std::time::Instant::now();
+    let err = r.provider.sync(st.cursor.as_deref()).await.unwrap_err();
+    assert!(err.to_string().contains("answer"), "{err}"); // "stopped answering" mid-command, "didn't answer in time" mid-handshake
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    // And it recovers once the server does.
+    r.fake.with(|d| d.hang = false);
+    r.fake.deliver("INBOX", mail("b"), Extra::default());
+    let st = drain(&mut r.provider, st.cursor).await;
+    assert_eq!(mids(&st), ["<b@example.com>"]);
+}

@@ -47,6 +47,8 @@ pub struct ImapProvider {
     conn: Option<Conn>,
     /// A command was started and never finished (the future was dropped): the stream may hold half a response.
     dirty: bool,
+    /// How long one operation (a page of sync, one action) may take before the connection is written off.
+    op_timeout: std::time::Duration,
     mem: Mem,
 }
 
@@ -147,7 +149,7 @@ impl ImapProvider {
 
     /// Test seams: swap the connector and/or the SMTP transport.
     pub fn with_parts(ctx: ProviderContext, settings: ImapSettings, connector: Arc<dyn Connector>, mailer: Option<Arc<dyn Mailer>>) -> Self {
-        ImapProvider { ctx, settings, connector, mailer, conn: None, dirty: false, mem: Mem::default() }
+        ImapProvider { ctx, settings, connector, mailer, conn: None, dirty: false, op_timeout: std::time::Duration::from_secs(300), mem: Mem::default() }
     }
 
     /* -------- connection */
@@ -160,11 +162,17 @@ impl ImapProvider {
                 self.conn = None;
             }
             if self.conn.is_none() {
-                self.conn = Some(self.connector.connect(&self.settings).await?);
+                // Greeting, TLS, login and CAPABILITY all happen in here; a server that goes quiet mid-handshake must not hang us.
+                let wait = self.op_timeout.min(std::time::Duration::from_secs(60));
+                let connecting = tokio::time::timeout(wait, self.connector.connect(&self.settings));
+                self.conn = Some(connecting.await.map_err(|_| ProviderError::other(format!("{} didn't answer in time over IMAP. Check the server name and port.", self.settings.imap_host)))??);
             }
             self.dirty = true;
             let conn = self.conn.as_mut().expect("connected above");
-            let result = op(conn, &mut self.mem).await;
+            let result = match tokio::time::timeout(self.op_timeout, op(conn, &mut self.mem)).await {
+                Ok(r) => r,
+                Err(_) => Err(ProviderError::Disconnected(format!("{} stopped answering over IMAP", self.settings.imap_host))),
+            };
             match result {
                 Ok(v) => {
                     conn.drain_unsolicited();
@@ -186,6 +194,11 @@ impl ImapProvider {
                 }
             }
         }
+    }
+
+    /// Override the per-operation timeout (default five minutes).
+    pub fn set_op_timeout(&mut self, t: std::time::Duration) {
+        self.op_timeout = t;
     }
 
     pub async fn close(&mut self) {

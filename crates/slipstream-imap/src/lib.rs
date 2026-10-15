@@ -11,6 +11,7 @@ pub mod provider;
 pub mod roles;
 pub mod smtp;
 pub mod types;
+pub mod utf7;
 
 pub use conn::{Conn, Connector, TlsConnector};
 pub use provider::ImapProvider;

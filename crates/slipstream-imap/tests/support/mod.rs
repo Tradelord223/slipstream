@@ -46,6 +46,8 @@ pub struct Data {
     pub condstore: bool,
     pub appended: Vec<(String, Vec<u8>, Vec<String>)>,
     pub fail_append: bool,
+    /// After login, swallow every command without answering (a wedged server).
+    pub hang: bool,
     /// Every command verb received, in order (LOGIN included).
     pub log: Vec<String>,
     /// Full command lines (without literals) for assertions about what went over the wire.
@@ -77,7 +79,7 @@ impl Fake {
             caps.insert("CONDSTORE".into());
         }
         Fake {
-            data: Arc::new(Mutex::new(Data { boxes: vec![], capabilities: caps, condstore, appended: vec![], fail_append: false, log: vec![], lines: vec![] })),
+            data: Arc::new(Mutex::new(Data { boxes: vec![], capabilities: caps, condstore, appended: vec![], fail_append: false, hang: false, log: vec![], lines: vec![] })),
             changed: Arc::new(watch::channel(0).0),
             kill: Arc::new(watch::channel(0).0),
         }
@@ -794,6 +796,9 @@ async fn session(mut stream: Box<dyn Duplex>, fake: Fake, mode: TlsMode, mut kil
             }
             text.push_str(&line);
             let toks = tokenize(&text);
+            if st.authed && fake.data.lock().unwrap().hang {
+                continue;
+            }
             let tag = toks[0].s();
             let command = toks[1].s();
             let out = handle(&fake, &mut st, &mode, &tag, &command, &toks[2..], &lits);

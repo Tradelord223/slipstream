@@ -438,7 +438,7 @@ impl Conn {
                 Response::MailboxData(MailboxDatum::Search(ids)) => out.search.extend(ids.iter().copied()),
                 Response::MailboxData(MailboxDatum::List(l)) => {
                     let flags = l.name_attributes.iter().filter_map(attribute_text).collect();
-                    out.listed.push(ListedMailbox::new(&l.name, l.delimiter.as_deref(), flags));
+                    out.listed.push(ListedMailbox::new(&crate::utf7::decode(&l.name), l.delimiter.as_deref(), flags));
                 }
                 Response::Done { tag, status, outcome } if *tag == id => {
                     return match status {
@@ -464,7 +464,8 @@ impl Conn {
 
     /// SELECT or EXAMINE. A reply without UIDVALIDITY (which RFC 3501 requires) is a truncated one.
     pub async fn select(&mut self, path: &str, read_only: bool) -> Result<Mailbox> {
-        let r = if read_only { self.session.examine(path).await } else { self.session.select(path).await };
+        let wire = crate::utf7::encode(path);
+        let r = if read_only { self.session.examine(&wire).await } else { self.session.select(&wire).await };
         let mb = r.map_err(imap_err(path))?;
         if mb.uid_validity.is_none() {
             return Err(ProviderError::Disconnected(format!("IMAP {path}: no UIDVALIDITY in the reply; the connection dropped")));
@@ -485,11 +486,11 @@ impl Conn {
     }
 
     pub async fn uid_move(&mut self, set: &str, dest: &str) -> Result<()> {
-        self.session.uid_mv(set, dest).await.map_err(imap_err(&format!("move to {dest}")))
+        self.session.uid_mv(set, crate::utf7::encode(dest)).await.map_err(imap_err(&format!("move to {dest}")))
     }
 
     pub async fn uid_copy(&mut self, set: &str, dest: &str) -> Result<()> {
-        self.session.uid_copy(set, dest).await.map_err(imap_err(&format!("copy to {dest}")))
+        self.session.uid_copy(set, crate::utf7::encode(dest)).await.map_err(imap_err(&format!("copy to {dest}")))
     }
 
     /// UID EXPUNGE (needs UIDPLUS): removes only the named messages.
@@ -498,12 +499,12 @@ impl Conn {
     }
 
     pub async fn create(&mut self, path: &str) -> Result<()> {
-        self.session.create(path).await.map_err(imap_err(&format!("create {path}")))
+        self.session.create(crate::utf7::encode(path)).await.map_err(imap_err(&format!("create {path}")))
     }
 
     pub async fn append(&mut self, path: &str, flags: &str, date_ms: i64, raw: &[u8]) -> Result<()> {
         let date = format!("\"{}\"", imap_date(date_ms, true));
-        self.session.append(path, Some(flags), Some(&date), raw).await.map_err(imap_err(&format!("append to {path}")))
+        self.session.append(crate::utf7::encode(path), Some(flags), Some(&date), raw).await.map_err(imap_err(&format!("append to {path}")))
     }
 
     pub async fn list(&mut self) -> Result<Vec<ListedMailbox>> {
@@ -543,6 +544,14 @@ fn attribute_text(a: &NameAttribute<'_>) -> Option<String> {
         NameAttribute::NoSelect => "\\Noselect".to_string(),
         NameAttribute::Marked => "\\Marked".to_string(),
         NameAttribute::Unmarked => "\\Unmarked".to_string(),
+        // RFC 6154 special-use attributes have their own variants in imap-proto.
+        NameAttribute::All => "\\All".to_string(),
+        NameAttribute::Archive => "\\Archive".to_string(),
+        NameAttribute::Drafts => "\\Drafts".to_string(),
+        NameAttribute::Flagged => "\\Flagged".to_string(),
+        NameAttribute::Junk => "\\Junk".to_string(),
+        NameAttribute::Sent => "\\Sent".to_string(),
+        NameAttribute::Trash => "\\Trash".to_string(),
         NameAttribute::Extension(e) => e.to_string(),
         _ => return None,
     })
