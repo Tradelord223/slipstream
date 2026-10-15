@@ -13,6 +13,7 @@ function activeScopes(target: EventTarget | null): Scope[] {
   const route = getRoute();
   if (route.name === "thread") return ["thread", "global"];
   if (route.name === "mail") return ["list", "global"];
+  if (route.name === "review") return ["review", "page", "global"];
   return ["page", "global"];
 }
 

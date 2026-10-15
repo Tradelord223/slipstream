@@ -11,6 +11,7 @@ import "./styles/thread.css";
 import "./styles/compose.css";
 import "./styles/overlays.css";
 import "./styles/settings.css";
+import "./styles/agents.css";
 
 // Apply the saved theme before the first paint so there is no flash.
 try {

@@ -230,4 +230,92 @@ export type ServerEvent =
   | { type: "sync"; accountId: string; status: string; error?: string | null }
   | { type: "drafts"; draftId: string; status: string; error?: string | null }
   | { type: "team"; workspaceId: string; sharedThreadId: string }
+  | { type: "activity"; activityId: string }
+  | { type: "approval"; approvalId: string; status: string }
   | { type: "import"; jobId: string; accountId: string; status: "running" | "done" | "failed"; imported: number; error?: string };
+
+// ---- Agents ----------------------------------------------------------------
+
+export type AgentScope = "read" | "triage" | "draft" | "send" | "settings";
+
+export interface AgentPolicy {
+  send: "always" | "external" | "never";
+  bulkThreshold: number;
+  settings: "approve" | "allow";
+}
+
+export interface AgentInfo {
+  id: string;
+  name: string;
+  scopes: AgentScope[];
+  policy: AgentPolicy;
+  tokenHint: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+export interface AgentInput {
+  name: string;
+  scopes: AgentScope[];
+  policy: Partial<AgentPolicy>;
+}
+
+export interface Approval {
+  id: string;
+  agent: { id: string; name: string };
+  command: string;
+  title: string;
+  preview: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected" | "failed" | string;
+  error: string | null;
+  createdAt: number;
+  decidedAt: number | null;
+}
+
+export type ActivityActor = { kind: "agent"; id: string; name: string } | { kind: "human"; name: string };
+
+export interface ActivityItem {
+  id: string;
+  actor: ActivityActor;
+  command: string;
+  summary: string;
+  threadIds: string[];
+  status: "done" | "pending" | "rejected" | "failed" | "undone" | string;
+  canUndo: boolean;
+  approvalId: string | null;
+  error: string | null;
+  createdAt: number;
+}
+
+export interface ExecuteResult {
+  status: "done" | "pending_approval";
+  result?: unknown;
+  activityId?: string | null;
+  approvalId?: string;
+  reason?: string;
+}
+
+export interface Webhook {
+  id: string;
+  url: string;
+  events: string[];
+  createdAt: number;
+  lastStatus: number | null;
+  lastError: string | null;
+  lastDeliveryAt: number | null;
+}
+
+export type RemoteMode = "serve" | "funnel" | "off";
+
+export interface RemoteStatus {
+  tailscale: {
+    installed: boolean;
+    running: boolean;
+    dnsName: string | null;
+    serve: { url: string } | null;
+    funnel: { url: string } | null;
+    error?: string;
+  };
+  publicListener: { port: number };
+}

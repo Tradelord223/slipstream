@@ -1,4 +1,5 @@
 import { act } from "../store/actions.ts";
+import { decide, focusedApproval, moveReviewFocus, openCreateAgent, openRelated, review, threadOf } from "../store/agents.ts";
 import { closeCompose, compose, discardDraft, edit, emitCompose, getEditor, instantIntro, sendCompose, sendLater, startNew, startReply } from "../store/compose.ts";
 import { clearFilter, clearSelection, focusEdge, list, loadMore, moveFocus, selectAll, setFilter, targetIds, toggleSelected } from "../store/list.ts";
 import { closeThread, goView, openThread, unsubscribeFrom } from "../store/nav.ts";
@@ -10,7 +11,7 @@ import { toast, undoLast } from "../store/toasts.ts";
 import { closePalette, openPalette, toggleContext, toggleRail, ui } from "../store/ui.ts";
 import type { ComposeKind } from "../lib/compose.ts";
 
-export type Scope = "global" | "list" | "thread" | "compose" | "page";
+export type Scope = "global" | "list" | "thread" | "compose" | "page" | "review";
 
 export interface CommandDef {
   id: string;
@@ -119,6 +120,15 @@ export const COMMANDS: CommandDef[] = [
   { id: "msg.expand", title: "Expand or collapse message", group: "Move", keys: ["o"], scopes: ["thread"], run: toggleFocusedMessage },
   { id: "msg.expandAll", title: "Expand or collapse all messages", group: "Move", keys: ["shift+o"], scopes: ["thread"], run: toggleExpandAll },
 
+  // ---- Review queue
+  { id: "review.next", title: "Next request", group: "Review", keys: ["j"], scopes: ["review"], repeat: true, run: () => moveReviewFocus(1) },
+  { id: "review.prev", title: "Previous request", group: "Review", keys: ["k"], scopes: ["review"], repeat: true, run: () => moveReviewFocus(-1) },
+  { id: "review.nextArrow", title: "Next request", group: "Review", keys: ["down"], scopes: ["review"], repeat: true, noPalette: true, run: () => moveReviewFocus(1) },
+  { id: "review.prevArrow", title: "Previous request", group: "Review", keys: ["up"], scopes: ["review"], repeat: true, noPalette: true, run: () => moveReviewFocus(-1) },
+  { id: "review.approve", title: "Approve", group: "Review", keys: ["enter"], scopes: ["review"], run: () => { const a = focusedApproval(); if (a && review.get().tab === "waiting") void decide(a, "approve"); } },
+  { id: "review.reject", title: "Reject", group: "Review", keys: ["backspace"], scopes: ["review"], run: () => { const a = focusedApproval(); if (a && review.get().tab === "waiting") void decide(a, "reject"); } },
+  { id: "review.open", title: "Open the conversation", group: "Review", keys: ["e"], scopes: ["review"], run: () => { const a = focusedApproval(); if (a && threadOf(a)) openRelated(a); } },
+
   // ---- Triage
   { id: "triage.done", title: "Mark done", group: "Triage", keys: ["e"], scopes: ["list", "thread"], run: () => void act.done() },
   { id: "triage.undone", title: "Move back to inbox", group: "Triage", keys: ["shift+e"], scopes: ["list", "thread"], run: () => void act.notDone() },
@@ -188,6 +198,10 @@ export const COMMANDS: CommandDef[] = [
   goto("label", "Go to label…", "l", () => openPalette("goLabel")),
   goto("snippets", "Go to Snippets", ";", () => navigate("/settings/snippets")),
   goto("all", "Go to All mail", "a", () => goView({ kind: "search", q: "in:all" })),
+  goto("review", "Go to Review", "r", () => navigate("/review")),
+  { id: "go.activity", title: "Go to Activity", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/activity") },
+  { id: "go.agents", title: "Go to Agents", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/settings/agents") },
+  { id: "agents.create", title: "Create agent token", group: "General", keys: [], scopes: ["global"], run: openCreateAgent },
 
   ...Array.from({ length: 9 }, (_, i): CommandDef => ({
     id: `account.${i + 1}`,

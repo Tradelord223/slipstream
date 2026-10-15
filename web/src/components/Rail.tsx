@@ -4,6 +4,7 @@ import { useNow, useDismiss } from "../lib/hooks.ts";
 import { Keys } from "./Keycap.tsx";
 import { Icon, Logo, type IconName } from "./Icon.tsx";
 import { Link } from "./Link.tsx";
+import { useReview } from "../store/agents.ts";
 import { useCounts } from "../store/counts.ts";
 import { useList } from "../store/list.ts";
 import { navigate, useRoute, viewPath, type MailView } from "../store/route.ts";
@@ -11,11 +12,13 @@ import { setAccountFilter, signOut, useSession } from "../store/session.ts";
 import { ui } from "../store/ui.ts";
 
 interface NavItem {
-  key: MailView["kind"] | "shared";
+  key: MailView["kind"] | "shared" | "review" | "activity";
   label: string;
   icon: IconName;
   to: string;
   count?: number;
+  /** An amber dot for something new that hasn't been looked at. */
+  notice?: boolean;
 }
 
 export function Rail() {
@@ -24,6 +27,8 @@ export function Rail() {
   const counts = useCounts();
   const labels = useSession((s) => s.labels);
   const workspace = useSession((s) => s.workspace);
+  const waiting = useReview((s) => s.pending?.length ?? 0);
+  const unseen = useReview((s) => s.unseen);
 
   const activeView: MailView | null = route.name === "mail" ? route.view : route.name === "thread" ? listView : null;
   const items: NavItem[] = [
@@ -35,7 +40,30 @@ export function Rail() {
     { key: "starred", label: "Starred", icon: "star", to: "/starred" },
     ...(workspace ? [{ key: "shared" as const, label: "Shared", icon: "users" as IconName, to: "/shared" }] : []),
   ];
-  const isActive = (k: NavItem["key"]) => (k === "shared" ? route.name === "shared" : activeView?.kind === k);
+  const agentItems: NavItem[] = [
+    { key: "review", label: "Review", icon: "shield", to: "/review", count: waiting, notice: unseen },
+    { key: "activity", label: "Activity", icon: "pulse", to: "/activity" },
+  ];
+  const isActive = (k: NavItem["key"]) =>
+    k === "shared" ? route.name === "shared" : k === "review" ? route.name === "review" : k === "activity" ? route.name === "activity" : activeView?.kind === k;
+  const renderItem = (it: NavItem) => (
+    <li key={it.key}>
+      <Link
+        to={it.to}
+        className="nav-item"
+        aria-current={isActive(it.key) ? "page" : undefined}
+        aria-label={it.notice ? `${it.label}, new request` : undefined}
+        onClick={() => ui.set({ sheetOpen: false })}
+      >
+        <span className="nav-icon">
+          <Icon name={it.icon} />
+          {it.notice && <span className="notice-dot" aria-hidden="true" />}
+        </span>
+        <span className="nav-label">{it.label}</span>
+        {it.count ? <span className="nav-count num">{it.count}</span> : null}
+      </Link>
+    </li>
+  );
 
   return (
     <nav className="rail" aria-label="Mailboxes">
@@ -47,15 +75,10 @@ export function Rail() {
         <AccountSwitcher />
       </div>
       <ul className="nav" role="list">
-        {items.map((it) => (
-          <li key={it.key}>
-            <Link to={it.to} className="nav-item" aria-current={isActive(it.key) ? "page" : undefined} onClick={() => ui.set({ sheetOpen: false })}>
-              <Icon name={it.icon} />
-              <span className="nav-label">{it.label}</span>
-              {it.count ? <span className="nav-count num">{it.count}</span> : null}
-            </Link>
-          </li>
-        ))}
+        {items.map(renderItem)}
+      </ul>
+      <ul className="nav nav-agents" role="list" aria-label="Agents">
+        {agentItems.map(renderItem)}
       </ul>
       {labels.length > 0 && (
         <>

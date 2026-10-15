@@ -114,7 +114,7 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
       out.push({ id: `acct:${a.id}`, title: `Switch to ${a.email}`, group: "Accounts", binding: i < 8 ? `ctrl+${i + 2}` : undefined, run: run(() => setAccountFilter(a.id)) }),
     );
     out.push({ id: "sync", title: "Sync now", group: "Accounts", run: run(() => void Promise.all(session.accounts.map((a) => api.syncAccount(a.id))).then(() => toast.info("Syncing"))) });
-    for (const [label, section] of [["General", "general"], ["Accounts", "accounts"], ["Splits", "splits"], ["Snippets", "snippets"], ["Shortcuts", "shortcuts"], ["Team", "team"], ["AI", "ai"]] as const) {
+    for (const [label, section] of [["General", "general"], ["Accounts", "accounts"], ["Splits", "splits"], ["Snippets", "snippets"], ["Shortcuts", "shortcuts"], ["Team", "team"], ["AI", "ai"], ["Connect an assistant", "connect"]] as const) {
       out.push({ id: `settings:${section}`, title: `Settings: ${label}`, group: "Settings", run: run(() => navigate(`/settings/${section}`)) });
     }
     if (session.mode === "team") out.push({ id: "signout", title: "Sign out", group: "Accounts", run: run(() => void signOut()) });

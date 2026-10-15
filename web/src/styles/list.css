@@ -233,6 +233,9 @@
 .two-line .row-snippet {
   font-size: 13px;
 }
+.two-line .row-sep {
+  display: none;
+}
 .two-line .row-meta {
   display: none;
 }

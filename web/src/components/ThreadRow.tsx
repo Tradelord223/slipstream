@@ -59,7 +59,16 @@ export const ThreadRow = memo(function ThreadRow(p: Props) {
       </span>
       <span className="row-body">
         <span className="row-subject">{t.subject || "(no subject)"}</span>
-        <span className="row-snippet">{t.snippet ? ` — ${t.snippet}` : ""}</span>
+        <span className="row-snippet">
+          {t.snippet ? (
+            <>
+              <span className="row-sep" aria-hidden="true">
+                {" — "}
+              </span>
+              {t.snippet}
+            </>
+          ) : null}
+        </span>
       </span>
       <span className="row-meta">
         {t.labels.slice(0, 2).map((l) => (

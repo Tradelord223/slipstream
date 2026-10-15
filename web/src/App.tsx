@@ -11,6 +11,7 @@ import { installKeys } from "./keys/dispatcher.ts";
 import { useViewport } from "./lib/hooks.ts";
 import { viewParams } from "./lib/views.ts";
 import { useCompose } from "./store/compose.ts";
+import { refreshApprovals } from "./store/agents.ts";
 import { refreshCounts, useCounts } from "./store/counts.ts";
 import { connectEvents, disconnectEvents } from "./store/events.ts";
 import { focusId, openView, useList } from "./store/list.ts";
@@ -19,7 +20,9 @@ import { loadSession, session, useSession } from "./store/session.ts";
 import { toast } from "./store/toasts.ts";
 import { ui, useUi } from "./store/ui.ts";
 import { AuthView, JoinSignedIn } from "./views/AuthView.tsx";
+import { ActivityView } from "./views/ActivityView.tsx";
 import { MailView } from "./views/MailView.tsx";
+import { ReviewView } from "./views/ReviewView.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { SharedView } from "./views/SharedView.tsx";
 import { ThreadView } from "./views/ThreadView.tsx";
@@ -76,6 +79,7 @@ function Shell() {
   useEffect(() => {
     connectEvents();
     refreshCounts(true);
+    refreshApprovals(true);
     const off = installKeys();
     return () => {
       off();
@@ -161,6 +165,8 @@ function Shell() {
   } else if (route.name === "mail") main = <MailView view={route.view} />;
   else if (route.name === "settings") main = <SettingsView section={route.section} />;
   else if (route.name === "shared") main = <SharedView id={route.id} />;
+  else if (route.name === "review") main = <ReviewView tab={route.tab} />;
+  else if (route.name === "activity") main = <ActivityView />;
   else if (route.name === "join") main = <JoinSignedIn invite={route.invite} />;
   else main = <JoinOrHome />;
 

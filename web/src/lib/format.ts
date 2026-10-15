@@ -27,6 +27,19 @@ export function ago(ms: number | null | undefined, now = Date.now()): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
+/** Compact elapsed time for timelines: "now", "2m", "3h", "4d"; older than a week falls back to the date. */
+export function agoShort(ms: number | null | undefined, now = Date.now()): string {
+  if (!ms) return "never";
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  if (s < 45) return "now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.round(h / 24);
+  return d < 8 ? `${d}d` : listTime(ms);
+}
+
 export function firstName(a: Address | string): string {
   const name = typeof a === "string" ? a : a.name || a.email;
   const clean = name.replace(/["<>]/g, "").trim();
