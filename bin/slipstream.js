@@ -5,5 +5,11 @@ if (major < 22 || (major === 22 && minor < 13)) {
   console.error(`Slipstream needs Node.js 22.13 or newer (you have ${process.versions.node}).`);
   process.exit(1);
 }
-const { start } = await import("../dist/server.js");
-await start();
+if (process.argv[2] === "mcp") {
+  // Mail MCP server over stdio for AI assistants (read, search, draft; never sends).
+  const { startMcp } = await import("../dist/mcp.js");
+  await startMcp();
+} else {
+  const { start } = await import("../dist/server.js");
+  await start();
+}

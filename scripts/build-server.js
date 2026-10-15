@@ -2,8 +2,11 @@
 import { build } from "esbuild";
 
 await build({
-  entryPoints: ["server/src/main.ts"],
-  outfile: "dist/server.js",
+  entryPoints: { server: "server/src/main.ts", mcp: "server/src/mcp.ts" },
+  outdir: "dist",
+  // Both entries share modules; splitting keeps one copy of each.
+  splitting: true,
+  chunkNames: "chunks/[name]-[hash]",
   bundle: true,
   platform: "node",
   format: "esm",
