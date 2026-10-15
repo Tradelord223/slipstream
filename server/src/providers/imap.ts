@@ -856,7 +856,9 @@ export class ImapProvider implements MailProvider {
       case "unstar": {
         const flag = action.kind === "markRead" || action.kind === "markUnread" ? "\\Seen" : "\\Flagged";
         const add = action.kind === "markRead" || action.kind === "star";
-        await this.eachMailbox(c, everywhere, action, async (_p, uids) => {
+        // Like the local store and Gmail: "unread" marks only the newest message (messages come oldest first).
+        const target = action.kind === "markUnread" ? { ...action, messages: action.messages.slice(-1) } : action;
+        await this.eachMailbox(c, everywhere, target, async (_p, uids) => {
           await (add ? c.messageFlagsAdd(uids, [flag], { uid: true }) : c.messageFlagsRemove(uids, [flag], { uid: true }));
         });
         return;
