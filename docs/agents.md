@@ -1,0 +1,115 @@
+# Agents
+
+Slipstream is built for people and their AI agents together. Anything you can do in the dashboard, an agent can do through the same command registry. You can see everything an agent did, approve what's risky, and undo the rest.
+
+## How it fits together
+
+- **One vocabulary.** About 40 commands (`mail.search`, `mail.read`, `triage.done`, `triage.remind`, `drafts.create`, `drafts.send`, `team.comment`, `undo`, …) live in one registry. The HTTP API, the MCP tools, the CLI and the dashboard's command palette are all generated from it, so they can't drift apart.
+- **Agents are principals.** Each agent has a name, a token and scopes:
+
+  | Scope | Lets the agent |
+  |---|---|
+  | `read` | search and read mail |
+  | `triage` | done, remind, labels, trash |
+  | `draft` | write drafts, comment for the team |
+  | `send` | send mail |
+  | `settings` | change splits and snippets |
+
+  Tokens are shown once and stored hashed. Revoking an agent cuts it off immediately.
+- **Approvals.** Each agent has a policy that decides what waits for you in **Review**:
+  - **Sending:** always waits by default. You can loosen it to "only outside my domain" or "never".
+  - **Bulk trash or spam:** over 10 conversations at once waits for approval.
+  - **Settings changes:** wait by default.
+
+  You approve with Enter and reject with Backspace.
+- **Activity and undo.** Every action is recorded with who did it, from your own keystrokes to each agent's. An agent's actions also show at the top of the conversation they touched ("Inbox agent marked this done · Undo"). Undo is exact within the triage window, and after that it runs the opposite action.
+
+## Give an agent access
+
+Settings → Agents → **New agent**. Choose the scopes and the approval policy, then copy the token.
+
+### Claude Code, Cursor and other HTTP MCP clients
+
+```bash
+claude mcp add --transport http slipstream http://127.0.0.1:4380/mcp \
+  --header "Authorization: Bearer ss_agent_…"
+```
+
+### Claude Desktop and other stdio MCP clients
+
+```json
+{ "mcpServers": { "slipstream": { "command": "npx", "args": ["slipstream-mail", "mcp"] } } }
+```
+
+On a local install, `slipstream mcp` creates its own agent ("Local MCP") the first time it runs, and it appears in Settings → Agents. Elsewhere, set `SLIPSTREAM_URL` and `SLIPSTREAM_TOKEN`. The bridge goes through the running server, so its actions are attributed, scoped and approvable like any other agent's.
+
+### HTTP API
+
+```bash
+curl -H "Authorization: Bearer ss_agent_…" http://127.0.0.1:4380/api/v1/commands
+curl -H "Authorization: Bearer ss_agent_…" -H "content-type: application/json" \
+  -d '{"query":"is:unread from:@client.com"}' http://127.0.0.1:4380/api/v1/mail.search
+```
+
+- Every command is `POST /api/v1/<command>` with a JSON body.
+- The OpenAPI 3.1 description is at `/api/v1/openapi.json`.
+- Results come back as `{ "status": "done", "result": …, "activityId": … }`. An action waiting for approval returns HTTP 202 with `{ "status": "pending_approval", "approvalId": … }`.
+- Agent tokens can only reach `/api/v1`, `/api/events` (server-sent events) and `/mcp`. They can't reach the dashboard's own API.
+
+### Command line
+
+```bash
+npx slipstream-mail commands                       # list everything
+npx slipstream-mail mail.search --query "is:unread" --limit 5
+npx slipstream-mail triage.remind --threadIds '["thr_…"]' --until 2026-10-16T09:00:00-04:00
+npx slipstream-mail drafts.create --threadId thr_… --body "Sounds good — Thursday works."
+npx slipstream-mail mail.read --help               # a command's input schema
+```
+
+### Webhooks
+
+Settings → Agents → Webhooks. Choose the events you want: `threads`, `drafts`, `activity`, `approval`, `sync`, `import`, or everything. Each delivery carries two headers:
+
+```
+X-Slipstream-Timestamp: 1792094400
+X-Slipstream-Signature: v1=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>
+```
+
+Check the signature and reject old timestamps. Failed deliveries are retried with backoff. On a team server, webhook targets must be public HTTPS addresses.
+
+## Connect claude.ai, ChatGPT and other cloud assistants
+
+Cloud assistants call your MCP endpoint from their own servers, so they need an address on the internet, and they sign in with OAuth. Slipstream includes a small OAuth server, and you don't need any hosting.
+
+1. Install [Tailscale](https://tailscale.com/download) and sign in.
+2. In Settings → Agents → **Connect an assistant**, turn on **Anywhere (Tailscale Funnel)**. Copy the MCP URL, for example `https://your-mac.tail1234.ts.net/mcp`.
+3. Add it as a custom connector in claude.ai, or as an app or connector in ChatGPT.
+4. The assistant opens a Slipstream page that shows a pairing code. In Slipstream → Review, approve the request with the same code.
+
+The connection becomes an agent with `read`, `triage` and `draft` access. You can add `send`, change its policy or revoke it like any other agent.
+
+**Your own devices only.** Use **Tailscale Serve** instead. It gives the same HTTPS address, but only devices on your tailnet can reach it. That's right for Claude Code, Cursor or Claude Desktop on your other machines, connected with a bearer token.
+
+### What's exposed
+
+- Serve and Funnel point at a second loopback listener (port 4381 by default). It serves only:
+  - `/mcp`
+  - `/oauth/*`
+  - `/.well-known/oauth-*`
+- The dashboard and its API are never reachable from outside.
+- Every MCP request needs a token: an agent token, or a short-lived OAuth access token (one hour, with rotating refresh tokens).
+- A connection request can't do anything until you approve it, and at most five can wait at once.
+
+A team server already has a public HTTPS address, so it serves the same OAuth and `/mcp` endpoints on its own domain. Signing in there uses the team member's own session.
+
+**Other tunnels work too.** Use ngrok or a Cloudflare named tunnel pointed at `http://127.0.0.1:4381`, and set `SLIPSTREAM_REMOTE_URL` to the public origin.
+
+## Safety model
+
+Email is written by strangers, and agents read it. Slipstream assumes some of that mail will try to steer your agents:
+
+- **Data, not instructions.** Tool descriptions and results mark message content as untrusted third-party data.
+- **Sending needs you.** Sending, bulk deletion and settings changes need your approval by default, whatever the agent was told.
+- **Scopes are enforced by the server.** An agent never sees tools it isn't allowed to use.
+- **Everything is visible and reversible.** Every action is attributed and can be undone, and revoking an agent takes effect at once.
+- **The built-in AI is boxed in.** Summaries and reply drafts have no tools at all.

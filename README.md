@@ -1,8 +1,8 @@
 # Slipstream
 
-**Email at the speed of thought, on your own machine.** Slipstream is an open-source, keyboard-first email client. It works with Gmail, Outlook and any IMAP server, keeps your mail in a local database so every keystroke is instant, and runs on your laptop or on your team's own server.
+**Email at the speed of thought, for you and your agents.** Slipstream is an open-source, keyboard-first email client. It works with Gmail, Outlook and any IMAP server, keeps your mail in a local database so every keystroke is instant, and runs on your laptop or on your team's own server. Your AI agents get the same powers you have, through MCP, an HTTP API and a CLI. You see everything they do, approve what matters, and undo the rest.
 
-<!-- screenshots -->
+![Slipstream inbox](docs/screenshots/inbox-dark.png)
 
 ```bash
 npx slipstream-mail
@@ -25,6 +25,7 @@ Slipstream keeps the speed and drops the rest.
 | Tracking | None. Remote images are blocked until you choose to see them |
 | Shortcuts | Every one remappable |
 | AI | Optional, your own key, no tools, hardened against prompt injection |
+| Agents | MCP, HTTP API, CLI and webhooks, with scoped tokens, approvals, attribution and undo |
 | Price | Free, AGPL-3.0 |
 
 ## What it does
@@ -40,7 +41,16 @@ Slipstream keeps the speed and drops the rest.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
 - **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
-- **Mail MCP server.** `npx slipstream-mail mcp` lets Claude Code or Claude Desktop search your mail and leave drafts for you. It can never send.
+- **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agents.md](docs/agents.md).
+- **claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI.
+
+## See it
+
+| | |
+|---|---|
+| ![Conversation](docs/screenshots/thread-dark.png) | ![Compose with snippets](docs/screenshots/compose-dark.png) |
+| ![Remind me](docs/screenshots/remind-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |
+| ![Inbox zero](docs/screenshots/zero-dark.png) | ![Light theme](docs/screenshots/inbox-light.png) |
 
 ## Connect your mail
 
@@ -79,11 +89,12 @@ git clone https://github.com/Tradelord223/slipstream && cd slipstream
 npm install
 npm run dev        # server on :4392 with a demo inbox + web app on :5180
 npm test           # server tests (node:test)
+npm run test:contract   # black-box API + MCP contract suite against a live server
 npm run typecheck
 npm run build && npm start
 ```
 
-The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. No native dependencies anywhere. More in [docs/architecture.md](docs/architecture.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
+The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. No native dependencies anywhere. More in [docs/architecture.md](docs/architecture.md); agents, MCP and remote access in [docs/agents.md](docs/agents.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
 
 ## License
 
