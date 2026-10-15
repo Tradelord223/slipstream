@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../../api.ts";
 import { agoShort, longTime } from "../../lib/format.ts";
 import { contextMarker, groupRuns, runText } from "../../lib/cloudText.ts";
-import { useNow, useViewport } from "../../lib/hooks.ts";
+import { useNow, useViewport, useWindowWidth } from "../../lib/hooks.ts";
 import { scopeSentence } from "../../lib/scopes.ts";
-import { assistant, ASSISTANT_MAX, ASSISTANT_MIN, newChat, setDraft, setOpen, setWidth, showRun, useAssistant } from "../../store/assistant.ts";
+import { assistant, ASSISTANT_INLINE_MIN, ASSISTANT_MAX, ASSISTANT_MIN, newChat, setDraft, setOpen, setWidth, showRun, useAssistant } from "../../store/assistant.ts";
 import { dollars, loadHistory, modelName, refreshCloud, replyToRun, RUN_ACTIVE, runError, startRun, statusLabel, stopRun, upsertRun, useCloud } from "../../store/cloud.ts";
 import { useReview } from "../../store/agents.ts";
 import { navigate } from "../../store/route.ts";
@@ -19,7 +19,8 @@ import { useAssistantContext } from "./useContext.ts";
 export function AssistantHost() {
   const open = useAssistant((s) => s.open);
   const viewport = useViewport();
-  if (viewport === "desktop") {
+  const windowWidth = useWindowWidth();
+  if (viewport === "desktop" && windowWidth >= ASSISTANT_INLINE_MIN) {
     return (
       <aside className="assistant" aria-label="Claude" aria-hidden={!open} inert={!open}>
         {open && <Resizer />}
@@ -31,17 +32,40 @@ export function AssistantHost() {
   return <Sheet />;
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** The sheet is modal: focus moves in, Tab stays inside, Escape closes, and focus goes back where it was. */
 function Sheet() {
+  const ref = useRef<HTMLElement>(null);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) setOpen(false);
+    const previous = document.activeElement as HTMLElement | null;
+    ref.current?.focus();
+    return () => {
+      if (previous && document.contains(previous)) previous.focus();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, []);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && !e.defaultPrevented) {
+      e.stopPropagation();
+      setOpen(false);
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const nodes = [...(ref.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((n) => n.offsetParent !== null);
+    const first = nodes[0];
+    const last = nodes.at(-1);
+    if (!first || !last) return;
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
   return (
     <div className="assistant-scrim" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-      <aside className="assistant assistant-sheet" role="dialog" aria-modal="true" aria-label="Claude">
+      <aside ref={ref} className="assistant assistant-sheet" role="dialog" aria-modal="true" aria-label="Claude" tabIndex={-1} onKeyDown={onKeyDown}>
         <Panel sheet />
       </aside>
     </div>

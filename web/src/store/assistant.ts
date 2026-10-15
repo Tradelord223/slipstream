@@ -81,3 +81,14 @@ export function setWidth(w: number, persist = false) {
 export function setDraft(draft: string) {
   assistant.set({ draft });
 }
+
+/** Below this the sidebar would squeeze the page, so it opens as a sheet instead. */
+export const ASSISTANT_INLINE_MIN = 1200;
+/** The page keeps at least this much room beside the sidebar. */
+const MAIN_MIN = 600;
+
+/** The width actually used: what the person chose, unless the window can't spare it. */
+export function effectiveWidth(chosen: number, railShown: boolean, windowWidth: number): number {
+  const room = windowWidth - (railShown ? 232 : 0) - MAIN_MIN;
+  return Math.max(ASSISTANT_MIN, Math.min(chosen, room));
+}

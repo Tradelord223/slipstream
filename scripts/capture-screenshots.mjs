@@ -8,14 +8,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { FakeManagedAgents } from "./fake-managed-agents.mjs";
-import { startLabelStandIn } from "./standin-labels.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const out = process.argv[2] ?? join(root, "docs/screenshots");
 const port = 4396;
-const serverBase = `http://127.0.0.1:${port}`;
-// Everything the script and the browser touch goes through `base`: the server itself, or the label stand-in in front of it.
-let base = serverBase;
+const base = `http://127.0.0.1:${port}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 if (!existsSync(join(root, "dist/web/index.html"))) {
@@ -45,12 +42,12 @@ const server = spawn(process.execPath, ["server/src/main.ts"], {
   env: { ...process.env, SLIPSTREAM_DATA_DIR: dataDir, SLIPSTREAM_PORT: String(port), SLIPSTREAM_SYNC_SECONDS: "600", SLIPSTREAM_ANTHROPIC_BASE_URL: fakeUrl },
   stdio: "ignore",
 });
-let labelStandIn = null;
+
 
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
-      const r = await fetch(`${serverBase}/api/health`, { headers: { "x-slipstream": "1" } });
+      const r = await fetch(`${base}/api/health`, { headers: { "x-slipstream": "1" } });
       if (r.ok) return;
     } catch {
       /* not up yet */
@@ -153,12 +150,6 @@ async function seedAgents() {
 
 try {
   await waitForServer();
-  // A server without the label commands gets the stand-in in front of it.
-  const probe = await fetch(`${serverBase}/api/v1/labels.list`, { method: "POST", headers: { "x-slipstream": "1", "content-type": "application/json" }, body: "{}" });
-  if (!probe.ok) {
-    labelStandIn = await startLabelStandIn(4399, port);
-    base = "http://127.0.0.1:4399";
-  }
   mkdirSync(out, { recursive: true });
   await call("POST", "/api/snippets", { name: "Intro call", subject: "Quick intro", bodyHtml: "<p>Hi {first_name}, would a 20 minute call this week work for you?</p>", shared: false });
   await call("POST", "/api/snippets", { name: "Thanks", bodyHtml: "<p>Thanks {first_name}, much appreciated.</p>", shared: false });
@@ -339,6 +330,5 @@ try {
 } finally {
   server.kill("SIGTERM");
   fake.close();
-  labelStandIn?.close();
   rmSync(dataDir, { recursive: true, force: true });
 }

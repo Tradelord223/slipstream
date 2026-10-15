@@ -51,3 +51,12 @@ export function useDismiss(ref: React.RefObject<HTMLElement | null>, active: boo
     };
   }, [ref, active, onDismiss]);
 }
+
+const subscribeResize = (fn: () => void) => {
+  window.addEventListener("resize", fn);
+  return () => window.removeEventListener("resize", fn);
+};
+
+export function useWindowWidth(): number {
+  return useSyncExternalStore(subscribeResize, () => window.innerWidth);
+}

@@ -207,7 +207,7 @@ function ThreadBar({ subject, detail }: { subject: string; detail?: ThreadDetail
           </button>
         </>
       )}
-      <AssistantButton />
+      <AssistantButton compact />
     </header>
   );
 }

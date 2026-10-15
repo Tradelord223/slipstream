@@ -11,11 +11,11 @@ import { RemindPopover } from "./components/RemindPopover.tsx";
 import { ShortcutsSheet } from "./components/ShortcutsSheet.tsx";
 import { TipsBar, Toasts } from "./components/Toasts.tsx";
 import { installKeys } from "./keys/dispatcher.ts";
-import { useViewport } from "./lib/hooks.ts";
+import { useViewport, useWindowWidth } from "./lib/hooks.ts";
 import { viewParams } from "./lib/views.ts";
 import { useCompose } from "./store/compose.ts";
 import { refreshApprovals } from "./store/agents.ts";
-import { assistant, useAssistant } from "./store/assistant.ts";
+import { ASSISTANT_INLINE_MIN, assistant, effectiveWidth, useAssistant } from "./store/assistant.ts";
 import { refreshCloud, useCloud } from "./store/cloud.ts";
 import { refreshLabels } from "./store/labels.ts";
 import { refreshCounts, useCounts } from "./store/counts.ts";
@@ -86,6 +86,7 @@ function Shell() {
   const assistantWidth = useAssistant((s) => s.width);
   const accessOpen = useAssistant((s) => s.accessOpen);
   const cloudStatus = useCloud((s) => s.status);
+  const windowWidth = useWindowWidth();
 
   useEffect(() => {
     connectEvents();
@@ -164,6 +165,7 @@ function Shell() {
   }, [sheetOpen]);
 
   const showRail = viewport === "desktop" && railOpen;
+  const inlineAssistant = viewport === "desktop" && windowWidth >= ASSISTANT_INLINE_MIN;
   let main: React.ReactNode;
   if (route.name === "thread") {
     const fallback: MailViewType = view ?? { kind: "inbox" };
@@ -174,7 +176,7 @@ function Shell() {
           <ThreadView id={route.id} showContext={false} />
         </div>
       ) : (
-        <ThreadView id={route.id} showContext={!assistantOpen} />
+        <ThreadView id={route.id} showContext={!(inlineAssistant && assistantOpen)} />
       );
   } else if (route.name === "mail") main = <MailView view={route.view} />;
   else if (route.name === "settings") main = <SettingsView section={route.section} />;
@@ -187,8 +189,8 @@ function Shell() {
 
   return (
     <div
-      className={`app app-${viewport} ${showRail ? "with-rail" : ""} ${viewport === "desktop" && assistantOpen ? "with-assistant" : ""}`}
-      style={{ ["--assistant-w" as string]: `${assistantWidth}px` }}
+      className={`app app-${viewport} ${showRail ? "with-rail" : ""} ${inlineAssistant && assistantOpen ? "with-assistant" : ""}`}
+      style={{ ["--assistant-w" as string]: `${effectiveWidth(assistantWidth, showRail, windowWidth)}px` }}
     >
       {showRail && <Rail />}
       {viewport !== "desktop" && sheetOpen && (

@@ -12,7 +12,7 @@ import { useStore } from "../store/createStore.ts";
 import { navigate } from "../store/route.ts";
 import type { Approval } from "../types.ts";
 
-const FIELD = /^(To|Cc|Bcc|Subject|Send at):\s*(.*)$/;
+const FIELD = /^(From|To|Cc|Bcc|Subject|Send at):\s*(.*)$/;
 
 /** Splits a send preview into its header fields and the message body; anything else is shown as plain text. */
 export function parsePreview(text: string): { fields: { label: string; value: string }[]; body: string } {

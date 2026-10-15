@@ -1033,3 +1033,16 @@
 .form-row .seg {
   justify-self: start;
 }
+
+.assistant-sheet:focus {
+  outline: none;
+}
+
+.claude-btn.compact {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.claude-btn.compact .claude-btn-label {
+  display: none;
+}
