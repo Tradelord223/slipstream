@@ -1,0 +1,37 @@
+# Fly.io: the recommended home for a team's Slipstream (see docs/self-hosting.md).
+#   fly launch --no-deploy --copy-config
+#   fly volumes create slipstream_data --size 3
+#   fly secrets set SLIPSTREAM_SECRET=$(openssl rand -base64 32)
+#   fly deploy
+app = "slipstream-mail"
+primary_region = "iad"
+
+[build]
+
+[env]
+  SLIPSTREAM_MODE = "team"
+  SLIPSTREAM_DATA_DIR = "/data"
+  PORT = "8080"
+
+[mounts]
+  source = "slipstream_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Mail sync runs in the background, so the machine stays on.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/health"
+    timeout = "3s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

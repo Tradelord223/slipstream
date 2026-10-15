@@ -1,0 +1,19 @@
+# Slipstream for a team on any server with Docker.
+#   1. cp .env.example .env  and fill it in
+#   2. docker compose up -d
+# Put it behind HTTPS (Caddy, Traefik, Coolify, or your platform's proxy).
+services:
+  slipstream:
+    build: .
+    image: slipstream-mail
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      SLIPSTREAM_MODE: team
+    volumes:
+      - slipstream-data:/data
+
+volumes:
+  slipstream-data:

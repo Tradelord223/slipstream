@@ -49,6 +49,8 @@ async function seedDemo(ctx: AppContext): Promise<void> {
 }
 
 export async function start(config = loadConfig()) {
+  // Everything Slipstream writes is private mail data: owner-only files.
+  process.umask(0o077);
   const ctx = createContext(config);
   if (config.mode === "local") ctx.users.ensureLocalUser();
   if (config.demo) await seedDemo(ctx);
