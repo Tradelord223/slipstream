@@ -622,7 +622,9 @@ describe("ImapProvider actions (generic server)", () => {
     assert.equal(s.find("INBOX", 3)!.flags.size, 0);
     await r.provider.apply({ kind: "markUnread", ...T });
     await r.provider.apply({ kind: "unstar", ...T });
-    assert.equal(s.find("INBOX", 1)!.flags.size, 0);
+    // "Unread" is the newest message only, like the local store and Gmail.
+    assert.deepEqual([...s.find("INBOX", 1)!.flags], ["\\Seen"]);
+    assert.equal(s.find("INBOX", 2)!.flags.size, 0);
     noLocksLeft(r);
   });
 
