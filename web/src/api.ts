@@ -1,0 +1,161 @@
+import type {
+  Address, Bootstrap, ContactInfo, Contact, Counts, Draft, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
+  ThreadPage, TriageKind, TriageResult, SharedComment,
+} from "./types.ts";
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Fired when the server asks for a sign-in (team mode). */
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: () => void) {
+  onUnauthorized = fn;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, opts: { quiet401?: boolean; signal?: AbortSignal } = {}): Promise<T> {
+  const headers: Record<string, string> = { "x-slipstream": "1" };
+  let payload: BodyInit | undefined;
+  if (body instanceof FormData) payload = body;
+  else if (body !== undefined) {
+    headers["content-type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+  let res: Response;
+  try {
+    res = await fetch(path, { method, headers, body: payload, signal: opts.signal });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") throw err;
+    throw new ApiError(0, "Can't reach Slipstream. Check that it's still running.");
+  }
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      /* not JSON */
+    }
+    if (res.status === 401 && !opts.quiet401) onUnauthorized?.();
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as T;
+}
+
+const get = <T>(path: string, signal?: AbortSignal) => request<T>("GET", path, undefined, { signal });
+const post = <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {});
+const put = <T>(path: string, body?: unknown) => request<T>("PUT", path, body ?? {});
+const del = <T>(path: string) => request<T>("DELETE", path);
+
+const qs = (o: Record<string, string | number | undefined | null>) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+};
+
+export interface ListParams {
+  view: "inbox" | "split" | "search";
+  split?: string;
+  q?: string;
+  account?: string;
+  before?: string | null;
+  limit?: number;
+}
+
+export const api = {
+  bootstrap: () => request<Bootstrap>("GET", "/api/bootstrap", undefined, { quiet401: true }),
+  authState: () => request<{ mode: "local" | "team"; needsSetup: boolean; openSignup: boolean }>("GET", "/api/auth/state", undefined, { quiet401: true }),
+  login: (email: string, password: string) => request<{ user: unknown }>("POST", "/api/auth/login", { email, password }, { quiet401: true }),
+  signup: (body: { email: string; name: string; password: string; workspaceName?: string; invite?: string }) =>
+    request<{ user: unknown }>("POST", "/api/auth/signup", body, { quiet401: true }),
+  invite: (token: string) => request<{ workspace: string; email: string | null }>("GET", `/api/auth/invite${qs({ token })}`, undefined, { quiet401: true }),
+  logout: () => post<{ ok: true }>("/api/auth/logout"),
+
+  threads: (p: ListParams, signal?: AbortSignal) =>
+    get<ThreadPage>(`/api/threads${qs({ view: p.view, split: p.split, q: p.q, account: p.account, before: p.before, limit: p.limit })}`, signal),
+  thread: (id: string, signal?: AbortSignal) => get<ThreadDetail>(`/api/threads/${encodeURIComponent(id)}`, signal),
+  counts: () => get<Counts>("/api/counts"),
+  triage: (kind: TriageKind, threadIds: string[], extra: { until?: number; label?: string } = {}) =>
+    post<TriageResult>("/api/triage", { kind, threadIds, ...extra }),
+  undo: (undoToken: string) => post<{ threadIds: string[] }>("/api/undo", { undoToken }),
+  zero: (body: { olderThanDays: number; keepStarred: boolean; keepUnread: boolean }) =>
+    post<{ undoToken: string | null; threadIds: string[] }>("/api/zero", body),
+  unsubscribe: (threadId: string) =>
+    post<{ method: "web" | "email"; url?: string | null; undoToken: string }>(`/api/threads/${encodeURIComponent(threadId)}/unsubscribe`),
+
+  contacts: (q: string, signal?: AbortSignal) => get<{ contacts: Contact[] }>(`/api/contacts${qs({ q })}`, signal),
+  contact: (email: string) => get<ContactInfo>(`/api/contacts/${encodeURIComponent(email)}`),
+  setVip: (email: string, vip: boolean) => post<{ ok: true }>(`/api/contacts/${encodeURIComponent(email)}/vip`, { vip }),
+
+  drafts: () => get<{ drafts: Draft[] }>("/api/drafts"),
+  draft: (id: string) => get<Draft>(`/api/drafts/${id}`),
+  createDraft: (d: DraftInput) => post<Draft>("/api/drafts", d),
+  saveDraft: (id: string, d: DraftInput) => put<Draft>(`/api/drafts/${id}`, d),
+  deleteDraft: (id: string) => del<{ ok: true }>(`/api/drafts/${id}`),
+  sendDraft: (id: string, o: { sendAt?: number; instant?: boolean; followUpDays?: number; markDone?: boolean }) =>
+    post<{ id: string; sendAt: number; undoToken: string | null }>(`/api/drafts/${id}/send`, o),
+  cancelDraft: (id: string) => post<Draft>(`/api/drafts/${id}/cancel`),
+  attachToDraft: (id: string, files: File[]) => {
+    const f = new FormData();
+    for (const file of files) f.append("file", file);
+    return request<Draft>("POST", `/api/drafts/${id}/attachments`, f);
+  },
+  removeDraftAttachment: (id: string, att: string) => del<Draft>(`/api/drafts/${id}/attachments/${att}`),
+
+  snippets: () => get<{ snippets: Snippet[] }>("/api/snippets"),
+  createSnippet: (s: SnippetInput) => post<{ id: string }>("/api/snippets", s),
+  updateSnippet: (id: string, s: SnippetInput) => put<{ ok: true }>(`/api/snippets/${id}`, s),
+  deleteSnippet: (id: string) => del<{ ok: true }>(`/api/snippets/${id}`),
+  snippetUsed: (id: string) => post<{ ok: true }>(`/api/snippets/${id}/used`),
+
+  saveSettings: (s: Record<string, unknown>) => put<{ ok: true }>("/api/settings", s),
+  saveAiKey: (apiKey: string) => put<{ ok: true }>("/api/settings/ai-key", { apiKey }),
+  createSplit: (name: string, query: string) => post<{ id: string; name: string; query: string; builtin: boolean }>("/api/splits", { name, query }),
+  updateSplit: (id: string, name: string, query: string) => put<{ ok: true }>(`/api/splits/${id}`, { name, query }),
+  deleteSplit: (id: string) => del<{ ok: true }>(`/api/splits/${id}`),
+  orderSplits: (ids: string[]) => put<{ ok: true }>("/api/splits-order", { ids }),
+
+  presets: () => get<{ presets: { id: string; label: string; help: string }[] }>("/api/accounts/presets"),
+  connectImap: (body: Record<string, unknown>) => post<{ id: string }>("/api/accounts/imap", body),
+  syncAccount: (id: string) => post<{ ok: true }>(`/api/accounts/${id}/sync`),
+  removeAccount: (id: string) => del<{ ok: true }>(`/api/accounts/${id}`),
+  importMail: (file: File, email: string) => {
+    const f = new FormData();
+    f.append("file", file);
+    if (email) f.append("email", email);
+    return request<{ jobId: string; accountId: string }>("POST", "/api/import", f);
+  },
+
+  team: () => get<TeamInfo>("/api/team"),
+  createInvite: (email?: string) => post<{ url: string; expiresInDays: number }>("/api/team/invites", email ? { email } : {}),
+  removeMember: (id: string) => del<{ ok: true }>(`/api/team/members/${id}`),
+  shareThread: (id: string) => post<{ id: string }>(`/api/threads/${encodeURIComponent(id)}/share`),
+  shared: (status: "open" | "resolved" = "open") => get<{ shared: SharedSummary[] }>(`/api/shared${qs({ status })}`),
+  sharedThread: (id: string) => get<SharedDetail>(`/api/shared/${id}`),
+  comment: (id: string, body: string) => post<SharedComment>(`/api/shared/${id}/comments`, { body }),
+  updateShared: (id: string, body: { assigneeId?: string | null; status?: "open" | "resolved" }) =>
+    request<{ ok: true }>("PATCH", `/api/shared/${id}`, body),
+};
+
+export interface DraftInput {
+  accountId: string;
+  threadId?: string | null;
+  replyToMessageId?: string | null;
+  to: Address[];
+  cc: Address[];
+  bcc: Address[];
+  subject: string;
+  bodyHtml: string;
+}
+
+export interface SnippetInput {
+  name: string;
+  subject?: string | null;
+  bodyHtml: string;
+  shared: boolean;
+}

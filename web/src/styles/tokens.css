@@ -1,0 +1,123 @@
+/* Night flight. Dark is the default; the system's light preference or an explicit choice switches it. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0d12;
+  --panel: #11141b;
+  --raised: #171b24;
+  --line: #232937;
+  --line-soft: #1a1f2a;
+  --text: #e7eaf0;
+  --text-2: #a3abba;
+  /* Brief value #6B7486 reads 3.7:1 on the focused row; nudged to hold 4.5:1 for snippets and times. */
+  --text-3: #7a8498;
+  --accent: #5ee6c7;
+  --accent-ink: #062a22;
+  --accent-soft: rgba(94, 230, 199, 0.12);
+  --accent-text: #5ee6c7;
+  --amber: #f5b544;
+  --amber-soft: rgba(245, 181, 68, 0.14);
+  --rose: #ff6b7a;
+  --rose-soft: rgba(255, 107, 122, 0.14);
+  --sky: #8ab4ff;
+  --hover: rgba(255, 255, 255, 0.045);
+  --press: rgba(255, 255, 255, 0.08);
+  --scrim: rgba(4, 6, 10, 0.62);
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --paper-edge: rgba(255, 255, 255, 0.06);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --raised: #ffffff;
+    --line: #e3e6ec;
+    --line-soft: #eef0f4;
+    --text: #12151c;
+    --text-2: #4a5262;
+    /* Brief #8A92A3 is 3.1:1 on white; #667085 holds AA. */
+    --text-3: #667085;
+    /* Brief #0E9E80 with white ink is 3.4:1; #0B7F66 gives 5:1 for buttons and accent text. */
+    --accent: #0b7f66;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(14, 158, 128, 0.1);
+    --accent-text: #0b7f66;
+    --amber: #9a6414;
+    --amber-soft: rgba(183, 121, 31, 0.12);
+    --rose: #c8303f;
+    --rose-soft: rgba(217, 58, 74, 0.1);
+    --sky: #2a62d4;
+    --hover: rgba(18, 21, 28, 0.045);
+    --press: rgba(18, 21, 28, 0.08);
+    --scrim: rgba(18, 21, 28, 0.32);
+    --shadow: 0 18px 50px rgba(18, 21, 28, 0.18), 0 2px 8px rgba(18, 21, 28, 0.08);
+    --shadow-sm: 0 6px 20px rgba(18, 21, 28, 0.12);
+    --paper-edge: rgba(18, 21, 28, 0.08);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --raised: #ffffff;
+  --line: #e3e6ec;
+  --line-soft: #eef0f4;
+  --text: #12151c;
+  --text-2: #4a5262;
+  --text-3: #667085;
+  --accent: #0b7f66;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(14, 158, 128, 0.1);
+  --accent-text: #0b7f66;
+  --amber: #9a6414;
+  --amber-soft: rgba(183, 121, 31, 0.12);
+  --rose: #c8303f;
+  --rose-soft: rgba(217, 58, 74, 0.1);
+  --sky: #2a62d4;
+  --hover: rgba(18, 21, 28, 0.045);
+  --press: rgba(18, 21, 28, 0.08);
+  --scrim: rgba(18, 21, 28, 0.32);
+  --shadow: 0 18px 50px rgba(18, 21, 28, 0.18), 0 2px 8px rgba(18, 21, 28, 0.08);
+  --shadow-sm: 0 6px 20px rgba(18, 21, 28, 0.12);
+  --paper-edge: rgba(18, 21, 28, 0.08);
+}
+
+:root {
+  --font: "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+
+  --fs-base: 14px;
+  --fs-row: 13.5px;
+  --fs-small: 12.5px;
+  --fs-tiny: 11.5px;
+  --fs-title: 17px;
+  --fs-head: 22px;
+
+  --r-panel: 8px;
+  --r-control: 6px;
+  --r-key: 5px;
+
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  --rail-w: 232px;
+  --context-w: 300px;
+  --row-h: 40px;
+  --header-h: 52px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --t-fast: 120ms;
+  --t-med: 160ms;
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+:root[data-density="compact"] {
+  --row-h: 34px;
+}
