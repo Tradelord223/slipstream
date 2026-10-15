@@ -84,6 +84,7 @@ interface RunRow {
   origin: string;
   input_tokens: number;
   output_tokens: number;
+  allow: string | null;
 }
 
 interface RoutineRow {
@@ -149,7 +150,7 @@ export function nextScheduled(days: number[], time: string, tz: string, from = D
 
 export class CloudAgent {
   private ctx: AppContext;
-  private active = new Map<string, { userId: string; ctl: AbortController; engine: EngineId; agentId: string }>();
+  private active = new Map<string, { userId: string; ctl: AbortController; engine: EngineId; agentId: string; origin: string }>();
   private timer: NodeJS.Timeout | null = null;
   readonly accounts: EngineAccounts;
   readonly engines: Map<EngineId, Engine>;
@@ -194,20 +195,27 @@ export class CloudAgent {
     return c ? this.ctx.agents.get(userId, c.principalId) : null;
   }
 
-  /** The commands this agent's scopes allow, as function tools. Autopilot's own runs also get its internal commands. */
-  private toolDefs(scopes: Scope[], internal = false): ToolDef[] {
+  /** The commands this agent may use, as function tools: its scopes, narrowed by the run's own limits. */
+  private toolDefs(actor: Extract<Actor, { kind: "agent" }>): ToolDef[] {
     return this.ctx.commands
-      .describe({ internal })
-      .filter((d) => scopes.includes(d.scope))
+      .describe({ actor })
+      .filter((d) => actor.agent.scopes.includes(d.scope))
       .map((d) => {
         const { $schema: _s, ...schema } = d.input as Record<string, unknown>;
         return { name: toolName(d.name), description: d.description.slice(0, 1000), parameters: schema };
       });
   }
 
-  /** Custom tool definitions for the managed agent. */
+  /** Custom tool definitions for the managed agent: the commands its scopes allow. */
   private tools(scopes: Scope[]) {
-    return this.toolDefs(scopes).map((t) => ({ type: "custom" as const, name: t.name, description: t.description, input_schema: t.parameters as { type: "object"; [k: string]: unknown } }));
+    return this.ctx.commands
+      .describe()
+      .filter((d) => scopes.includes(d.scope))
+      .map((d) => {
+        const { $schema: _s, ...schema } = d.input as Record<string, unknown>;
+        return { name: toolName(d.name), description: d.description.slice(0, 1000), parameters: schema };
+      })
+      .map((t) => ({ type: "custom" as const, name: t.name, description: t.description, input_schema: t.parameters as { type: "object"; [k: string]: unknown } }));
   }
 
   /** Spend limits, shared by every engine that reports a cost. */
@@ -237,14 +245,14 @@ export class CloudAgent {
   }
 
   /** Every engine and whether it can run now, for Settings and the engine picker. */
-  async enginesStatus(userId: string): Promise<{ engines: EngineStatus[]; defaultEngine: EngineId | null }> {
+  async enginesStatus(userId: string): Promise<{ engines: EngineStatus[]; defaultEngine: EngineId | null; resolvedEngine: EngineId | null }> {
     const ready = Boolean(this.config(userId) && this.principal(userId));
     const managed: EngineStatus = {
       id: MANAGED,
       label: MANAGED_LABEL,
       kind: "managed",
       ready,
-      detail: ready ? "Runs in Anthropic's cloud on your API key" : this.apiKey(userId) ? "Connect it in Settings → Agents" : "Add an Anthropic API key",
+      detail: ready ? "Runs in Anthropic's cloud on your API key" : this.apiKey(userId) ? "Connect it to start" : "Add an Anthropic API key",
       needs: ready ? undefined : "key",
       model: CLOUD_MODEL,
       billing: "api",
@@ -254,7 +262,9 @@ export class CloudAgent {
         e.status(userId).catch((err: unknown): EngineStatus => ({ id: e.id, label: e.label, kind: e.kind, ready: false, detail: explain(err), billing: "api" })),
       ),
     );
-    return { engines: [managed, ...rest], defaultEngine: this.accounts.defaultEngine(userId) };
+    // What a new run would use right now, so the picker never has to guess.
+    const resolvedEngine = await this.pickEngine(userId, null).catch(() => null);
+    return { engines: [managed, ...rest], defaultEngine: this.accounts.defaultEngine(userId), resolvedEngine };
   }
 
   /** The engine a run uses: the one asked for, else the person's default, else whatever is ready. */
@@ -268,11 +278,14 @@ export class CloudAgent {
     throw new HttpError(400, "Choose a model for the assistant first (Settings → Models & accounts).");
   }
 
-  private checkLimits(userId: string) {
+  /** Spend and concurrency. Autopilot has its own two slots, so it never crowds out the person's runs. */
+  private checkLimits(userId: string, origin = "assistant") {
     if (this.spentThisMonth(userId) >= this.budgets(userId).monthlyBudgetCents)
       throw new HttpError(402, "Agents reached this month's budget. Raise it in Settings → Models & accounts.");
-    if ([...this.active.values()].filter((r) => r.userId === userId).length >= 3)
-      throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
+    const mine = [...this.active.values()].filter((r) => r.userId === userId);
+    if (origin === "autopilot") {
+      if (mine.filter((r) => r.origin === "autopilot").length >= 2) throw new HttpError(429, "Autopilot is already busy.");
+    } else if (mine.filter((r) => r.origin !== "autopilot").length >= 3) throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
   }
 
   status(userId: string) {
@@ -440,22 +453,25 @@ export class CloudAgent {
       model?: string | null;
       /** Called with the run's id before any work starts, so a fast run can't finish unseen. */
       onStart?: (runId: string) => void;
+      /** Limit the run to these commands and conversations (enforced by the command service). */
+      allow?: { commands: string[]; threadIds?: string[] };
     },
   ) {
     const engine = this.engines.get(engineId);
     if (!engine) throw new HttpError(400, "That model isn't available on this server.");
     const st = await engine.status(userId);
     if (!st.ready) throw new HttpError(400, `${engine.label}: ${st.detail}`);
-    this.checkLimits(userId);
+    const origin = opts.origin ?? (opts.routineId ? "routine" : "assistant");
+    this.checkLimits(userId, origin);
     const user = this.ctx.users.get(userId)!;
     const principal = opts.principal ?? this.accounts.principal(userId, engineId, engine.label);
     const id = newId("run");
     const now = Date.now();
     const model = opts.model ?? this.accounts.model(userId, engineId) ?? st.model ?? null;
-    const origin = opts.origin ?? (opts.routineId ? "routine" : "assistant");
     this.ctx.db.run(
-      "INSERT INTO cloud_runs (id, user_id, routine_id, instruction, status, transcript, created_at, engine, model, agent_id, origin) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO cloud_runs (id, user_id, routine_id, instruction, status, transcript, created_at, engine, model, agent_id, origin, allow) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
       id, userId, opts.routineId ?? null, opts.instruction, "running", JSON.stringify([{ kind: "user", text: opts.instruction, at: now }]), now, engineId, model, principal.id, origin,
+      opts.allow ? JSON.stringify({ commands: opts.allow.commands, threadIds: opts.allow.threadIds ?? null }) : null,
     );
     if (origin !== "autopilot") this.ctx.commands.record({ kind: "agent", user, agent: principal }, "cloud.run", `Started: ${opts.instruction.slice(0, 120)}`, {});
     this.emit(userId, id);
@@ -487,12 +503,13 @@ export class CloudAgent {
     const user = this.ctx.users.get(userId);
     const principal = r?.agent_id ? this.ctx.agents.get(userId, r.agent_id) : null;
     if (!r || !engine || !user || !principal) return this.finish(userId, runId, "failed", "This model is no longer connected.");
-    const actor = { kind: "agent" as const, user, agent: principal };
+    const allow = r.allow ? (JSON.parse(r.allow) as { commands: string[] | null; threadIds: string[] | null }) : null;
+    // Acting inside this run: approvals point back at it, and a limited run can do only what it was given.
+    const actor = { kind: "agent" as const, user, agent: { ...principal, run: { id: runId, commands: allow?.commands ?? null, threadIds: allow?.threadIds ?? null } } };
     const ctl = new AbortController();
-    this.active.set(runId, { userId, ctl, engine: r.engine as EngineId, agentId: principal.id });
+    this.active.set(runId, { userId, ctl, engine: r.engine as EngineId, agentId: principal.id, origin: r.origin });
     const minted: string[] = [];
-    const startedAt = Date.now();
-    const { runBudgetCents } = this.budgets(userId);
+    const { runBudgetCents, monthlyBudgetCents } = this.budgets(userId);
     let overBudget = false;
     const io: RunIO = {
       runId,
@@ -500,7 +517,7 @@ export class CloudAgent {
       actor,
       model: r.model,
       systemPrompt: this.systemPrompt(user),
-      tools: this.toolDefs(principal.scopes, r.origin === "autopilot"),
+      tools: this.toolDefs(actor),
       callTool: (name, input) => this.runTool(actor, runId, name, input),
       say: (text) => {
         this.append(runId, { kind: "agent", text, at: Date.now() });
@@ -509,7 +526,6 @@ export class CloudAgent {
       toolLine: (name, failed) => {
         this.ctx.db.run("UPDATE cloud_runs SET tool_calls = tool_calls + 1 WHERE id = ?", runId);
         this.append(runId, { kind: "tool", text: `${name.replaceAll("_", ".")}${failed ? " (failed)" : ""}`, at: Date.now() });
-        this.linkApprovals(runId, principal.id, startedAt);
         this.emit(userId, runId);
       },
       note: (text) => {
@@ -524,7 +540,7 @@ export class CloudAgent {
       addCost: (cents) => {
         this.ctx.db.run("UPDATE cloud_runs SET cost_cents = coalesce(cost_cents, 0) + ? WHERE id = ?", cents, runId);
         const total = this.ctx.db.get<{ c: number }>("SELECT cost_cents AS c FROM cloud_runs WHERE id = ?", runId)?.c ?? 0;
-        if (total >= runBudgetCents) {
+        if (total >= runBudgetCents || this.spentThisMonth(userId) >= monthlyBudgetCents) {
           overBudget = true;
           ctl.abort();
         }
@@ -538,13 +554,13 @@ export class CloudAgent {
         }
       },
       mcpAccess: () => {
-        // A short-lived token for this run's principal; revoked when the turn ends.
+        // A token for this run only: /mcp only, the run's limits, gone when the turn ends (or soon after, at worst).
         const token = `${OAUTH_ACCESS_PREFIX}${randomToken(32)}`;
         const id = newId("oat");
         const now = Date.now();
         this.ctx.db.run(
-          "INSERT INTO oauth_tokens (id, agent_id, access_hash, refresh_hash, access_expires_at, refresh_expires_at, revoked_at, created_at) VALUES (?,?,?,?,?,?,NULL,?)",
-          id, principal.id, sha256(token), sha256(randomToken(32)), now + 2 * 3_600_000, now, now,
+          "INSERT INTO oauth_tokens (id, agent_id, access_hash, refresh_hash, access_expires_at, refresh_expires_at, revoked_at, created_at, run_id) VALUES (?,?,?,?,?,?,NULL,?,?)",
+          id, principal.id, sha256(token), sha256(randomToken(32)), now + 15 * 60_000, now, now, runId,
         );
         minted.push(id);
         return { url: `http://127.0.0.1:${this.ctx.config.port}/mcp`, token };
@@ -563,15 +579,7 @@ export class CloudAgent {
     } finally {
       this.active.delete(runId);
       for (const id of minted) this.ctx.db.run("UPDATE oauth_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", Date.now(), id);
-      this.linkApprovals(runId, principal.id, startedAt);
     }
-  }
-
-  /** Approvals an engine created over MCP during this turn point back at the run, like tool calls through callTool do. */
-  private linkApprovals(runId: string, agentId: string, since: number) {
-    // Two runs on the same engine at once can't be told apart by agent, so neither claims the other's approvals.
-    for (const [id, run] of this.active) if (id !== runId && run.agentId === agentId) return;
-    this.ctx.db.run("UPDATE approvals SET run_id = ? WHERE agent_id = ? AND run_id IS NULL AND created_at >= ?", runId, agentId, since);
   }
 
   /** One tool call through the command registry, on behalf of a run. */
@@ -667,7 +675,7 @@ export class CloudAgent {
     const actor: Actor = { kind: "agent", user, agent: principal };
     const client = this.client(key);
     const ctl = new AbortController();
-    this.active.set(runId, { userId, ctl, engine: MANAGED, agentId: principal.id });
+    this.active.set(runId, { userId, ctl, engine: MANAGED, agentId: principal.id, origin: "assistant" });
     const seen = new Set<string>();
     const answered = new Set<string>();
 
@@ -831,7 +839,7 @@ export class CloudAgent {
   /** After a restart: pick runs that were mid-flight back up from their session's history, or close them. */
   resumeInterrupted() {
     // Run tokens handed to a CLI before the restart: their runs are over, so the tokens are too.
-    this.ctx.db.run("UPDATE oauth_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND refresh_expires_at = created_at", Date.now());
+    this.ctx.db.run("UPDATE oauth_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND run_id IS NOT NULL", Date.now());
     const stuck = this.ctx.db.all<RunRow>("SELECT * FROM cloud_runs WHERE status IN ('starting','running')");
     for (const r of stuck) {
       if (r.engine !== MANAGED) this.finish(r.user_id, r.id, "failed", "Interrupted when Slipstream restarted. Send a follow-up to pick up where it left off.");
@@ -906,6 +914,7 @@ function shapeRun(r: RunRow) {
     sessionId: r.session_id,
     routineId: r.routine_id,
     origin: r.origin,
+    agentId: r.agent_id,
     instruction: r.instruction,
     engine: r.engine as EngineId,
     model: r.model,

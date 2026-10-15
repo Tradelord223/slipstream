@@ -53,8 +53,13 @@ afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
+// The fakes take their instructions from these; Slipstream passes only what it's told to.
+process.env.SLIPSTREAM_CLI_ENV = "FAKE_LOG,FAKE_MODE,FAKE_LOGGED_IN";
+const dataDir = mkdtempSync(join(tmpdir(), "slipstream-cli-data-"));
+after(() => rmSync(dataDir, { recursive: true, force: true }));
+
 function engine(id: EngineId, mode: "local" | "team" = "local"): Engine {
-  const e = cliEngines({ config: { mode } } as unknown as AppContext).find((x) => x.id === id);
+  const e = cliEngines({ config: { mode, dataDir } } as unknown as AppContext).find((x) => x.id === id);
   assert.ok(e);
   return e;
 }
@@ -143,7 +148,7 @@ describe("Claude Code engine", () => {
     assert.equal(flag("--append-system-prompt"), io.systemPrompt);
     assert.equal(flag("--model"), "sonnet");
     assert.ok(!r.argv.some((a) => a.includes(TOKEN)), "no token on argv");
-    assert.ok(r.tokenInEnv);
+    assert.ok(!r.tokenInEnv, "the token is only in the MCP config file");
 
     assert.deepEqual(r.mcpConfig, { mcpServers: { slipstream: { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${TOKEN}` } } } });
     assert.equal(r.mcpFileMode, 0o600);
@@ -250,6 +255,8 @@ describe("Codex engine", () => {
     assert.equal(flag("-s"), "read-only");
     assert.ok(r.argv.includes("--skip-git-repo-check"));
     assert.ok(r.argv.includes("--ignore-user-config"), "the person's other MCP servers and instructions stay out");
+    for (const feature of ["shell_tool", "unified_exec", "hooks"]) assert.ok(r.argv.join(" ").includes(`--disable ${feature}`), `${feature} is off`);
+    assert.ok(r.argv.includes("--ignore-rules"));
     assert.equal(flag("-m"), "gpt-5.5");
     assert.equal(resolveReal(flag("-C")), resolveReal(r.cwd));
     assert.deepEqual(r.cwdEntries, [], "the working folder is empty");
@@ -346,7 +353,7 @@ describe("CLI engine status", () => {
     assert.equal(ready.ready, true);
     assert.equal(ready.detail, "Logged in using ChatGPT");
     assert.equal(ready.needs, undefined);
-    assert.match(ready.note ?? "", /read-only sandbox/);
+    assert.match(ready.note ?? "", /shell, hooks/);
 
     process.env.FAKE_LOGGED_IN = "0";
     assert.equal((await codex.status("usr_test")).ready, true, "served from the cache");

@@ -20,10 +20,17 @@ Slipstream holds the keys to people's mailboxes. This page covers who it defends
 
 **A malicious email tries to hijack the AI** (prompt injection).
 
-- **No tools:** the model gets no tools at all. It can't fetch URLs, send mail or read other mail.
-- **Data, not instructions:** email content is passed as delimited data, and forged closing tags are neutralized. The system prompt marks that content as data.
-- **Plain text only:** output is shown as plain text, with no rendered links or images that could carry data out.
-- **You review drafts:** a drafted reply only ever lands in your compose box.
+Assume some mail will try. Slipstream's defenses are enforced by the server, not by asking a model to behave:
+
+- **Quick summaries and reply suggestions get no tools at all.** They can't fetch URLs, send mail or read other mail. Their output is shown as plain text, and a suggested reply only ever lands in your compose box.
+- **Agents act only through Slipstream's commands,** with the scopes you gave them. Sending, bulk deletion and settings changes wait for you in Review by default, and everything else is attributed and undoable.
+- **Autopilot is boxed in per run:**
+  - It has its own agent with read, triage and draft access, never send.
+  - A sorting run may read only the conversations in its batch and record decisions about them.
+  - A drafting run may read only its conversations and reply to the people who wrote; the server sets the recipients, not the model.
+  - The server refuses anything else, whatever the email says.
+- **Data, not instructions:** email content (bodies, subjects, names and addresses) goes to a model as marked data with no angle brackets left in it, so it can't pose as Slipstream's own instructions.
+- **Your own Claude Code or Codex** runs in an empty private folder with Slipstream's MCP server as its only tool source: Claude Code's built-in tools are off, and Codex's shell, hooks and command rules are off. Its token works only on `/mcp`, only for that turn. It sees only the environment variables it needs for its own sign-in.
 
 **Someone gets a copy of the database.**
 

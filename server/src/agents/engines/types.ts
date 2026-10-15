@@ -48,6 +48,10 @@ export interface EngineStatus {
   billing: "api" | "plan";
   /** Anything a person should know before choosing it (terms, sandboxing). */
   note?: string;
+  /** The signed-in account, for sign-in engines. */
+  account?: { email?: string; plan?: string };
+  /** A sign-in is waiting to be finished in the browser. */
+  pending?: boolean;
 }
 
 export interface ToolDef {

@@ -112,6 +112,8 @@ export class Commands {
 
   /** Whether a command is listed to this actor (commands for one principal's own use are hidden from the rest). */
   visible(c: Command, actor?: Actor): boolean {
+    const limits = actor?.kind === "agent" ? actor.agent.run?.commands : null;
+    if (limits && !limits.includes(c.name)) return false;
     return !c.visibleTo || (actor !== undefined && c.visibleTo(this.ctx, actor));
   }
 
@@ -132,6 +134,13 @@ export class Commands {
     if (actor.kind === "agent" && !actor.agent.scopes.includes(cmd.scope))
       throw new HttpError(403, `This agent doesn't have the "${cmd.scope}" scope needed for ${cmd.name}.`);
     const input = cmd.input.parse(rawInput ?? {});
+    // A limited run (Autopilot's) may use only its own commands, on only its own conversations.
+    const limits = actor.kind === "agent" ? actor.agent.run : undefined;
+    if (limits?.commands && !limits.commands.includes(cmd.name)) throw new HttpError(403, `This run can't use ${cmd.name}.`);
+    if (limits?.threadIds) {
+      const outside = this.threadsOf(actor.user.id, input).filter((t) => !limits.threadIds!.includes(t));
+      if (outside.length) throw new HttpError(403, "This run can only work on the conversations it was given.");
+    }
 
     if (actor.kind === "agent" && !opts.approvalId && cmd.approval) {
       const reason = cmd.approval(this.ctx, actor, input);
@@ -202,8 +211,8 @@ export class Commands {
     const now = Date.now();
     db.tx(() => {
       db.run(
-        "INSERT INTO approvals (id, user_id, agent_id, command, input, preview, reason, thread_ids, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        id, actor.user.id, actor.agent.id, cmd.name, JSON.stringify(input), preview, reason, threadIds, now,
+        "INSERT INTO approvals (id, user_id, agent_id, command, input, preview, reason, thread_ids, created_at, run_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        id, actor.user.id, actor.agent.id, cmd.name, JSON.stringify(input), preview, reason, threadIds, now, actor.agent.run?.id ?? null,
       );
       db.run(
         `INSERT INTO activity (id, user_id, agent_id, actor_name, command, summary, thread_ids, status, approval_id, created_at)

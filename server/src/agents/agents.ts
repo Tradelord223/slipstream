@@ -26,6 +26,12 @@ export const policyPatchSchema = z.object({
   settings: z.enum(["approve", "allow"]).optional(),
 });
 
+export interface RunLimits {
+  id: string;
+  commands: string[] | null;
+  threadIds: string[] | null;
+}
+
 export const TOKEN_PREFIX = "ss_agent_";
 /** Short-lived OAuth access tokens (remote MCP clients); see remote/oauth.ts. */
 export const OAUTH_ACCESS_PREFIX = "ss_oat_";
@@ -38,6 +44,11 @@ export interface Agent {
   kind: "token" | "oauth";
   scopes: Scope[];
   policy: Policy;
+  /**
+   * Set while acting inside one agent run: the run's id (so approvals point back at it) and, when the
+   * run is limited, the only commands and conversations it may use. Enforced by the command service.
+   */
+  run?: RunLimits;
   tokenHint: string;
   createdAt: number;
   lastUsedAt: number | null;
@@ -123,12 +134,12 @@ export class Agents {
 
   /** Resolve a bearer token (agent token or OAuth access token) to its active agent. One indexed lookup. */
   authenticate(token: string): Agent | null {
-    let r: AgentRow | undefined;
+    let r: (AgentRow & { run_id?: string | null }) | undefined;
     if (token.startsWith(TOKEN_PREFIX)) {
       r = this.db.get<AgentRow>("SELECT * FROM agents WHERE token_hash = ? AND revoked_at IS NULL AND status = 'active'", sha256(token));
     } else if (token.startsWith(OAUTH_ACCESS_PREFIX)) {
       r = this.db.get<AgentRow>(
-        `SELECT a.* FROM oauth_tokens t JOIN agents a ON a.id = t.agent_id
+        `SELECT a.*, t.run_id FROM oauth_tokens t JOIN agents a ON a.id = t.agent_id
          WHERE t.access_hash = ? AND t.revoked_at IS NULL AND t.access_expires_at > ? AND a.revoked_at IS NULL AND a.status = 'active'`,
         sha256(token),
         Date.now(),
@@ -137,6 +148,13 @@ export class Agents {
     if (!r) return null;
     // Coarse last-used tracking (one write a minute at most).
     if (!r.last_used_at || Date.now() - r.last_used_at > 60_000) this.db.run("UPDATE agents SET last_used_at = ? WHERE id = ?", Date.now(), r.id);
-    return shape(r);
+    const agent = shape(r);
+    if (r.run_id) {
+      // A run's own token: it carries the run's limits.
+      const run = this.db.get<{ allow: string | null }>("SELECT allow FROM cloud_runs WHERE id = ?", r.run_id);
+      const allow = run?.allow ? (JSON.parse(run.allow) as { commands?: string[] | null; threadIds?: string[] | null }) : {};
+      agent.run = { id: r.run_id, commands: allow.commands ?? null, threadIds: allow.threadIds ?? null };
+    }
+    return agent;
   }
 }

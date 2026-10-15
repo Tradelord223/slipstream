@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import type { AppContext } from "../../context.ts";
@@ -44,7 +44,7 @@ const CODEX: CliSpec = {
   label: "Codex",
   binName: "codex",
   envVar: "SLIPSTREAM_CODEX_BIN",
-  note: "Runs your own Codex with your ChatGPT sign-in. Codex keeps its own shell tool even in read-only mode; Slipstream runs it in an empty folder with a read-only sandbox.",
+  note: "Runs your own Codex with your ChatGPT sign-in; usage counts against your plan. Its shell, hooks and your own Codex config are switched off, so Slipstream's tools are all it has.",
   installHint: "Codex isn't installed. Install it with: npm install -g @openai/codex (or brew install --cask codex).",
   loginHint: "Codex isn't signed in. Run codex login in a terminal and sign in with ChatGPT.",
 };
@@ -83,15 +83,21 @@ function reportUsage(io: RunIO, usage: unknown) {
   if (u && (n(u.input_tokens) || n(u.output_tokens))) io.addUsage(n(u.input_tokens), n(u.output_tokens));
 }
 
-/** API keys the CLIs would prefer over the person's sign-in, which would bill an API account instead of their plan. */
-const BILLING_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"];
+/**
+ * What the CLI may see of Slipstream's environment: enough to find its own sign-in, locale and proxy, and
+ * nothing else. Slipstream's secrets, mail OAuth clients and API keys stay out (an API key would also
+ * bill an API account instead of the person's plan).
+ */
+const PASS_ENV = /^(HOME|USER|LOGNAME|SHELL|TMPDIR|TEMP|TMP|LANG|LANGUAGE|LC_[A-Z]+|TZ|TERM|COLORTERM|XDG_[A-Z_]+|CODEX_HOME|CLAUDE_CONFIG_DIR|(HTTPS?|NO|ALL)_PROXY|(https?|no|all)_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_(FILE|DIR)|USERPROFILE|APPDATA|LOCALAPPDATA|SYSTEMROOT|SystemRoot|COMSPEC|PATHEXT|WINDIR)$/;
 
-/** The child's environment: ours minus API keys, plus the binary's own folder on PATH (npm shims need `node` beside them). */
+/** The child's environment: the allowed variables, plus the binary's own folder on PATH (npm shims need `node` beside them). */
 function childEnv(bin: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const path = [dirname(bin), ...(process.env.PATH ?? "").split(delimiter).filter(Boolean)].join(delimiter);
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: path, ...extra };
-  for (const k of BILLING_KEYS) delete env[k];
-  return env;
+  // SLIPSTREAM_CLI_ENV names more variables to pass (comma-separated), for setups that need them.
+  const more = new Set((process.env.SLIPSTREAM_CLI_ENV ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (PASS_ENV.test(k) || more.has(k)) env[k] = v;
+  return { ...env, PATH: path, ...extra };
 }
 
 /** Hides the run's token, and anything shaped like a credential, before text is shown to a person. */
@@ -224,9 +230,13 @@ function parseJson(line: string): Record<string, unknown> | null {
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
+/** Turn folders live under Slipstream's own private data folder, not a shared temp folder (set by cliEngines). */
+let turnRoot = tmpdir();
+
 async function withTurnDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   // mkdtemp makes the folder owner-only (0700); the CLI works in it and nothing outlives the turn.
-  const dir = mkdtempSync(join(tmpdir(), "slipstream-cli-"));
+  mkdirSync(turnRoot, { recursive: true, mode: 0o700 });
+  const dir = mkdtempSync(join(turnRoot, "turn-"));
   try {
     return await fn(dir);
   } finally {
@@ -296,7 +306,8 @@ async function claudeTurn(io: RunIO, message: string, bin: string): Promise<Turn
       }
     };
 
-    const ran = await runCli(io, bin, args, { cwd: dir, stdin: message, env: childEnv(bin, { SLIPSTREAM_TOKEN: token }), onLine });
+    // The token is in the MCP config file; Claude Code doesn't need it in its environment.
+    const ran = await runCli(io, bin, args, { cwd: dir, stdin: message, env: childEnv(bin), onLine });
     const res = result as Record<string, unknown> | null;
     if (ran.aborted || ran.timedOut || !res) return endedEarly(CLAUDE, ran, token);
     // No cost is added: this is the person's plan, not an API key.
@@ -322,6 +333,14 @@ async function codexTurn(io: RunIO, message: string, bin: string): Promise<TurnO
       "--json",
       "--skip-git-repo-check",
       "--ignore-user-config",
+      // No shell, no hooks, no execpolicy rules: Slipstream's tools are the only way it can act or read.
+      "--disable",
+      "shell_tool",
+      "--disable",
+      "unified_exec",
+      "--disable",
+      "hooks",
+      "--ignore-rules",
       "-c",
       `sandbox_mode=${q("read-only")}`,
       "-c",
@@ -419,5 +438,6 @@ function makeEngine(ctx: AppContext, spec: CliSpec, checkLogin: (bin: string) =>
 
 /** Claude Code and Codex, run from the person's own installs. Local mode only: they sign in as the person at the computer. */
 export function cliEngines(ctx: AppContext): Engine[] {
+  turnRoot = join(ctx.config.dataDir, "runs");
   return [makeEngine(ctx, CLAUDE, claudeStatus, claudeTurn), makeEngine(ctx, CODEX, codexStatus, codexTurn)];
 }

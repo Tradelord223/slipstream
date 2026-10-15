@@ -490,4 +490,8 @@ export const migrations: string[] = [
   ALTER TABLE cloud_runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE cloud_runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
   `,
+  /* 13: a run can be limited to some commands and conversations, and its MCP token knows its run */ `
+  ALTER TABLE cloud_runs ADD COLUMN allow TEXT;
+  ALTER TABLE oauth_tokens ADD COLUMN run_id TEXT;
+  `,
 ];

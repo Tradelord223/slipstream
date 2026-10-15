@@ -56,12 +56,19 @@ export function chatgptEngine(auth: ChatGPTAuth, accounts: EngineAccounts): Engi
         note: "Uses your ChatGPT plan's allowance. Choose how much Slipstream may use in ChatGPT Settings → Usage. Sign in with ChatGPT is a preview from OpenAI.",
       } as const;
       if (!s.signedIn)
-        return { ...common, ready: false, needs: "signin", detail: s.pending ? "Finish signing in in your browser" : (s.lastError ?? "Sign in with your ChatGPT Plus or Pro plan") } satisfies EngineStatus;
+        return {
+          ...common,
+          ready: false,
+          needs: "signin",
+          pending: s.pending,
+          detail: s.pending ? "Finish signing in in your browser" : (s.lastError ?? "Sign in with your ChatGPT Plus or Pro plan"),
+        } satisfies EngineStatus;
       const list = await models(userId);
       return {
         ...common,
         ready: true,
         detail: `Signed in${s.email ? ` as ${s.email}` : ""}${s.plan ? ` (${s.plan})` : ""}`,
+        account: { email: s.email, plan: s.plan },
         ...(list ? { models: list } : {}),
         model: await defaultModel(userId),
       } satisfies EngineStatus;

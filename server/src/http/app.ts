@@ -69,6 +69,8 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
       const agent = ctx.agents.authenticate(token);
       if (!agent) return unauthorized(c, "Invalid or revoked agent token");
       if (!AGENT_PATHS.some((re) => re.test(path))) return c.json({ error: "Agent tokens can only use /api/v1, /api/events and /mcp" }, 403);
+      // A token handed to a CLI for one run is for that run's MCP tools only.
+      if (agent.run && path !== "/mcp") return c.json({ error: "Run tokens can only use /mcp" }, 403);
       const user = users.get(agent.userId);
       if (!user) return unauthorized(c, "Invalid agent token");
       c.set("user", user);

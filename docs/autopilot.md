@@ -20,7 +20,7 @@ Turn it on from **Autopilot** in the sidebar. It runs on the model you choose in
 3. **Applying it.**
    - In **Auto** mode, confident decisions are carried out right away, as Autopilot: attributed in Activity and undoable like anything else.
    - In **Suggest** mode, they wait for you. Accept one, dismiss it, or accept them all.
-4. **Replies.** For conversations where someone is waiting on you, Autopilot reads the thread and writes a draft. It matches how you write, which it learns from your sent mail, and your last replies to that person. It never sends.
+4. **Replies.** For conversations where someone is waiting on you, Autopilot reads the thread and drafts a reply to the person who wrote. It matches how you write, which it learns from your sent mail, and your last replies to that person. It never sends.
 
 Each message is processed once. A new reply in the conversation is a new message, so it gets a fresh look.
 
@@ -48,10 +48,12 @@ The page also shows how it's doing over the last 30 days:
 Email is written by strangers, and some of it will try to steer an assistant. Autopilot's limits are enforced by Slipstream, not by asking the model nicely:
 
 - **It can't send, forward or change settings.** Autopilot is its own agent with only read, triage and draft access.
+- **Each run can touch only its own conversations.** A sorting run can read the conversations in its batch and record decisions about them, and nothing else. A drafting run can read its conversations and reply to them. The server refuses any other command or conversation.
 - **Everything it does is reversible.** Done, remind and labels can all be undone, from the Autopilot page or from Activity.
 - **Email text is fenced.** Messages are marked as data, never instructions, and their text can't pose as Slipstream's own markup.
 - **Labels are checked.** Labels it invents are dropped unless your rules name them.
-- **Drafts are checked.** A draft addressed to anyone outside the conversation is deleted, and links in a draft that weren't in the conversation are flagged.
+- **Replies go to who wrote.** Autopilot writes only the text. The server addresses each reply to the person who wrote, so an email can't add a recipient. Links in a draft that weren't in the conversation are flagged.
+- **It has daily limits.** It stops for the day after 2 million tokens.
 - **Low confidence waits for you.** A decision with low confidence is never applied automatically.
 
 ## Measuring it

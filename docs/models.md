@@ -30,9 +30,10 @@ If Claude Code or Codex is installed and signed in on the computer running Slips
 
 - **What it can touch:** each turn runs in a fresh, empty, private folder, with Slipstream's MCP server as its only connection.
   - **Claude Code:** built-in tools are off, and only Slipstream's tools are allowed.
-  - **Codex:** runs read-only, without your own Codex config or other MCP servers. It keeps its own shell tool even in read-only mode, so its card says so.
-- **The connection:** a token that works for that turn only and is revoked when the turn ends.
-- **Billing:** API keys in Slipstream's environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`) are not passed to the program, so it uses your plan rather than billing an API account.
+  - **Codex:** its shell, hooks and command rules are switched off, and it runs read-only, without your own Codex config or other MCP servers.
+- **The connection:** a token that works only on Slipstream's MCP endpoint, only for that turn, and is revoked when the turn ends.
+- **What it sees of Slipstream's environment:** only what it needs to find its own sign-in, locale and proxy.
+- **Billing:** API keys in Slipstream's environment are not passed to the program, so it uses your plan rather than billing an API account.
 - **Claude Code terms:** Anthropic allows signing in to the unmodified Claude Code program with your own subscription, and usage counts against your plan. Its [terms](https://code.claude.com/docs/en/legal-and-compliance) have changed before; if they change again, the API-key route is unaffected.
 - **Only when you pick them:** these engines run only when chosen, because being installed isn't the same as agreeing to spend your plan. They're also only available when Slipstream runs on your own computer, not on a team server.
 

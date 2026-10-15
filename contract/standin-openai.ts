@@ -36,7 +36,7 @@ function nextStep(input: Item[]): Item[] {
   if (ask.startsWith("You are Autopilot, drafting")) {
     const first = /^Conversation (\S+):/m.exec(ask)![1]!;
     if (outputs.length === 0) return [call("mail_read", { threadId: first })];
-    if (outputs.length === 1) return [call("drafts_create", { threadId: first, body: "Thanks. [time] works for me." })];
+    if (outputs.length === 1) return [call("autopilot_draftReply", { threadId: first, body: "Thanks. [time] works for me." })];
     return [say("Drafted one reply.")];
   }
   if (outputs.length === 0) return [call("mail_search", { query: "Dispatch", limit: 1 })];

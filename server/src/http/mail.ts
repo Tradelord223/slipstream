@@ -22,6 +22,9 @@ const triageBody = z.object({
   label: z.string().max(200).optional(),
 });
 
+
+/** Settings that belong to other features and aren't sent with the dashboard's preferences. */
+const INTERNAL_SETTINGS = new Set(["cloudAgent", "engines", "agentBudgets", "autopilot"]);
 export function mailRoutes(ctx: AppContext) {
   const { db, triage, store, events, sync } = ctx;
   const app = new Hono<Env>();
@@ -226,10 +229,19 @@ export function mailRoutes(ctx: AppContext) {
       `SELECT DISTINCT l.name FROM labels l JOIN accounts a ON a.id = l.account_id WHERE a.user_id = ? AND l.kind = 'user' ORDER BY l.name`,
       user.id,
     );
+    // The person's preferences only: internal state (agents, models, Autopilot) has its own endpoints, and one
+    // bad value must not take the whole dashboard down.
     const settings = Object.fromEntries(
       db
-        .all<{ key: string; value: string }>("SELECT key, value FROM settings WHERE user_id = ? AND key NOT LIKE 'secret:%'", user.id)
-        .map((r) => [r.key, JSON.parse(r.value)]),
+        .all<{ key: string; value: string }>("SELECT key, value FROM settings WHERE user_id = ? AND key NOT LIKE 'secret:%' AND key NOT LIKE '%:%'", user.id)
+        .filter((r) => !INTERNAL_SETTINGS.has(r.key))
+        .flatMap((r) => {
+          try {
+            return [[r.key, JSON.parse(r.value)]];
+          } catch {
+            return [];
+          }
+        }),
     );
     return c.json({
       mode: ctx.config.mode,

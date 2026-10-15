@@ -33,6 +33,7 @@ describe("agents on every engine", { skip: external && "needs stand-ins inside t
         SLIPSTREAM_CLAUDE_BIN: resolve("contract/fixtures/scripted-claude.mjs"),
         SLIPSTREAM_CODEX_BIN: resolve("contract/fixtures/scripted-codex.mjs"),
         TOKEN_LOG: tokenLog,
+        SLIPSTREAM_CLI_ENV: "TOKEN_LOG",
       },
     });
     h = human(server.url);
