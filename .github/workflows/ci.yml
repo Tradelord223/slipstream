@@ -42,4 +42,6 @@ jobs:
           done
           curl -fsS http://localhost:8080/api/health
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-slipstream: 1' http://localhost:8080/api/bootstrap)" = "401"
-          docker logs ss
+      - name: Container logs
+        if: always()
+        run: docker logs ss || true

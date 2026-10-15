@@ -20,6 +20,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./
 COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/entrypoint.sh /usr/local/bin/slipstream-entrypoint
+# The data volume must belong to the user the server runs as.
+RUN mkdir -p /data && chown node:node /data
 ENV NODE_ENV=production \
     SLIPSTREAM_MODE=team \
     SLIPSTREAM_DATA_DIR=/data \
