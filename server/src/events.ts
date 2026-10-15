@@ -5,6 +5,8 @@ export type ServerEvent =
   | { type: "sync"; accountId: string; status: string; error?: string | null }
   | { type: "drafts"; draftId: string; status: string; error?: string | null }
   | { type: "team"; workspaceId: string; sharedThreadId: string }
+  | { type: "activity"; activityId: string }
+  | { type: "approval"; approvalId: string; status: string }
   | { type: "import"; jobId: string; accountId: string; status: "running" | "done" | "failed"; imported: number; error?: string };
 
 /** In-process pub/sub. Events are scoped per user; the SSE route filters by subscriber. */
@@ -17,6 +19,13 @@ export class Events {
 
   emitToUser(userId: string, event: ServerEvent): void {
     this.emitter.emit(`user:${userId}`, event);
+    this.emitter.emit("any-user", userId, event);
+  }
+
+  /** Every per-user event, for outbound webhooks. */
+  onAnyUser(fn: (userId: string, e: ServerEvent) => void): () => void {
+    this.emitter.on("any-user", fn);
+    return () => this.emitter.off("any-user", fn);
   }
 
   emitToWorkspace(workspaceId: string, event: ServerEvent): void {

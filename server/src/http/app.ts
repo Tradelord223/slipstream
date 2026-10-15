@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { getCookie } from "hono/cookie";
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
@@ -12,6 +12,7 @@ import { composeRoutes } from "./compose.ts";
 import { mailRoutes } from "./mail.ts";
 import { prefsRoutes } from "./prefs.ts";
 import { teamRoutes } from "./team.ts";
+import { handleMcp, v1Routes } from "./v1.ts";
 
 /** Paths reachable without a session in team mode. */
 const PUBLIC_API = new Set(["/api/auth/login", "/api/auth/signup", "/api/auth/state", "/api/auth/invite"]);
@@ -43,27 +44,52 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
     await next();
   });
 
-  app.use("/api/*", async (c, next) => {
-    const path = c.req.path;
-    const isNavigation = c.req.method === "GET" && NAVIGATION_GET.some((re) => re.test(path));
+  /** Agents authenticate with a bearer token and may only use the agent surface. */
+  const AGENT_PATHS = [/^\/api\/v1\//, /^\/api\/events$/, /^\/mcp$/];
+  const bearer = (c: Context<Env>) => {
+    const h = c.req.header("authorization") ?? "";
+    return /^Bearer\s+/i.test(h) ? h.replace(/^Bearer\s+/i, "").trim() : null;
+  };
 
-    if (!isNavigation) {
-      // CSRF: a custom header can't be sent cross-origin without a CORS preflight we never approve.
-      if (c.req.header("x-slipstream") !== "1") return c.json({ error: "Missing client header" }, 403);
-      const origin = c.req.header("origin");
-      if (origin && !config.allowedHosts.has(new URL(origin).host)) return c.json({ error: "Cross-origin request" }, 403);
+  const authenticate = async (c: Context<Env>, next: Next) => {
+    const path = c.req.path;
+    const origin = c.req.header("origin");
+    if (origin && !config.allowedHosts.has(safeHost(origin))) return c.json({ error: "Cross-origin request" }, 403);
+
+    const token = bearer(c);
+    if (token) {
+      const agent = ctx.agents.authenticate(token);
+      if (!agent) return unauthorized(c, "Invalid or revoked agent token");
+      if (!AGENT_PATHS.some((re) => re.test(path))) return c.json({ error: "Agent tokens can only use /api/v1, /api/events and /mcp" }, 403);
+      const user = users.get(agent.userId);
+      if (!user) return unauthorized(c, "Invalid agent token");
+      c.set("user", user);
+      c.set("actor", { kind: "agent", user, agent });
+      return next();
     }
+    if (path === "/mcp") return unauthorized(c, "Connect with an agent token from Settings → Agents");
+
+    const isNavigation = c.req.method === "GET" && NAVIGATION_GET.some((re) => re.test(path));
+    // CSRF: a custom header can't be sent cross-origin without a CORS preflight we never approve.
+    if (!isNavigation && c.req.header("x-slipstream") !== "1") return c.json({ error: "Missing client header" }, 403);
 
     if (config.mode === "local") {
-      c.set("user", users.get(LOCAL_USER_ID)!);
+      const user = users.get(LOCAL_USER_ID)!;
+      c.set("user", user);
+      c.set("actor", { kind: "human", user });
       return next();
     }
     if (PUBLIC_API.has(path)) return next();
     const user = users.userForSession(getCookie(c, SESSION_COOKIE));
     if (!user) return c.json({ error: "Sign in required" }, 401);
     c.set("user", user);
+    c.set("actor", { kind: "human", user });
     return next();
-  });
+  };
+
+  app.use("/api/*", authenticate);
+  app.use("/mcp", authenticate);
+  app.all("/mcp", (c) => handleMcp(ctx, c.get("actor"), c.req.raw));
 
   app.route("/api/auth", authRoutes(ctx));
   app.route("/api", mailRoutes(ctx));
@@ -72,6 +98,7 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   app.route("/api", prefsRoutes(ctx));
   app.route("/api", teamRoutes(ctx));
   app.route("/api", aiRoutes(ctx));
+  app.route("/api", v1Routes(ctx));
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
   if (staticDir && existsSync(staticDir)) {
@@ -96,6 +123,20 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
     });
   }
   return app;
+}
+
+function safeHost(origin: string): string {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return "";
+  }
+}
+
+function unauthorized(c: Context<Env>, message: string) {
+  // RFC 9728: point MCP clients at the protected resource metadata.
+  c.header("WWW-Authenticate", `Bearer resource_metadata="${new URL("/.well-known/oauth-protected-resource", c.req.url).toString()}"`);
+  return c.json({ error: message }, 401);
 }
 
 const PAGE_HEADERS = {

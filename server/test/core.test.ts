@@ -146,8 +146,9 @@ describe("store, splits and triage", () => {
     assert.equal(r2.threads.length, 1);
     const foreign = env.ctx.db.get<{ id: string }>("SELECT id FROM threads WHERE remote_id = 'f2'")!.id;
     assert.equal((await env.api(`/api/threads/${foreign}`)).status, 404);
-    const t = await (await env.api("/api/triage", { method: "POST", json: { kind: "done", threadIds: [foreign] } })).json();
-    assert.deepEqual(t.threadIds, []);
+    const t = await env.api("/api/triage", { method: "POST", json: { kind: "done", threadIds: [foreign] } });
+    assert.equal(t.status, 404);
+    assert.equal(env.ctx.db.get<{ in_inbox: number }>("SELECT in_inbox FROM threads WHERE id = ?", foreign)!.in_inbox, 1);
   });
 
   test("outgoing HTML is sanitized before it's queued to send", async () => {

@@ -6,6 +6,9 @@ import type { Triage } from "./mail/actions.ts";
 import type { MailStore } from "./mail/store.ts";
 import type { SyncEngine } from "./mail/sync.ts";
 import type { Users, User } from "./auth/users.ts";
+import type { Agents } from "./agents/agents.ts";
+import type { Commands } from "./commands/service.ts";
+import type { Actor } from "./commands/registry.ts";
 
 /** Everything a request handler might need, built once at boot. */
 export interface AppContext {
@@ -17,6 +20,9 @@ export interface AppContext {
   events: Events;
   users: Users;
   secrets: SecretBox;
+  agents: Agents;
+  commands: Commands;
 }
 
-export type Env = { Variables: { user: User } };
+/** `actor` is the person, or the agent acting for them (bearer-token requests). */
+export type Env = { Variables: { user: User; actor: Actor } };

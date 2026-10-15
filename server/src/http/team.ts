@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
+import { addComment, shareThread } from "../team.ts";
 import { newId } from "../lib/crypto.ts";
 
 /**
@@ -63,44 +64,7 @@ export function teamRoutes(ctx: AppContext) {
     return c.json({ ok: true });
   });
 
-  app.post("/threads/:id/share", async (c) => {
-    const user = c.get("user");
-    const ws = requireWorkspace(user.id);
-    const threadId = c.req.param("id");
-    const thread = db.get<{ id: string; subject: string }>(
-      "SELECT t.id, t.subject FROM threads t JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.user_id = ?",
-      threadId,
-      user.id,
-    );
-    if (!thread) throw new HttpError(404, "Conversation not found");
-    const messages = db.all<{ from_name: string; from_email: string; to_json: string; cc_json: string; sent_at: number; body_text: string; body_html: string | null; subject: string }>(
-      "SELECT from_name, from_email, to_json, cc_json, sent_at, body_text, body_html, subject FROM messages WHERE thread_id = ? ORDER BY sent_at",
-      threadId,
-    );
-    const snapshot = JSON.stringify(
-      messages.map((m) => ({
-        from: { name: m.from_name, email: m.from_email },
-        to: JSON.parse(m.to_json),
-        cc: JSON.parse(m.cc_json),
-        sentAt: m.sent_at,
-        subject: m.subject,
-        text: m.body_text,
-        html: m.body_html,
-      })),
-    );
-    const now = Date.now();
-    const existing = db.get<{ id: string }>("SELECT id FROM shared_threads WHERE source_thread_id = ? AND workspace_id = ?", threadId, ws.id);
-    const id = existing?.id ?? newId("shr");
-    if (existing) db.run("UPDATE shared_threads SET snapshot = ?, subject = ?, updated_at = ? WHERE id = ?", snapshot, thread.subject, now, id);
-    else
-      db.run(
-        `INSERT INTO shared_threads (id, workspace_id, shared_by, source_thread_id, subject, snapshot, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?)`,
-        id, ws.id, user.id, threadId, thread.subject, snapshot, now, now,
-      );
-    events.emitToWorkspace(ws.id, { type: "team", workspaceId: ws.id, sharedThreadId: id });
-    return c.json({ id });
-  });
+  app.post("/threads/:id/share", (c) => c.json({ id: shareThread(ctx, c.get("user").id, c.req.param("id")).id }));
 
   app.get("/shared", (c) => {
     const user = c.get("user");
@@ -141,8 +105,8 @@ export function teamRoutes(ctx: AppContext) {
       "SELECT * FROM shared_threads WHERE id = ?",
       c.req.param("id"),
     )!;
-    const comments = db.all<{ id: string; user_id: string; name: string; body: string; created_at: number }>(
-      `SELECT c.id, c.user_id, u.name, c.body, c.created_at FROM comments c JOIN users u ON u.id = c.user_id
+    const comments = db.all<{ id: string; user_id: string; name: string; body: string; created_at: number; agent_name: string | null }>(
+      `SELECT c.id, c.user_id, u.name, c.body, c.created_at, c.agent_name FROM comments c JOIN users u ON u.id = c.user_id
        WHERE c.shared_thread_id = ? ORDER BY c.created_at`,
       s.id,
     );
@@ -155,21 +119,14 @@ export function teamRoutes(ctx: AppContext) {
       // The person who shared it can jump back to their own copy.
       ownThreadId: s.shared_by === user.id ? s.source_thread_id : null,
       messages: JSON.parse(s.snapshot),
-      comments: comments.map((x) => ({ id: x.id, author: { id: x.user_id, name: x.name }, body: x.body, createdAt: x.created_at })),
+      comments: comments.map((x) => ({ id: x.id, author: { id: x.user_id, name: x.name }, agentName: x.agent_name, body: x.body, createdAt: x.created_at })),
     });
   });
 
   app.post("/shared/:id/comments", async (c) => {
-    const user = c.get("user");
-    const ws = requireWorkspace(user.id);
-    const s = sharedIn(ws.id, c.req.param("id"));
     const { body } = z.object({ body: z.string().trim().min(1).max(10_000) }).parse(await c.req.json());
-    const id = newId("cmt");
-    const now = Date.now();
-    db.run("INSERT INTO comments (id, shared_thread_id, user_id, body, created_at) VALUES (?,?,?,?,?)", id, s.id, user.id, body, now);
-    db.run("UPDATE shared_threads SET updated_at = ? WHERE id = ?", now, s.id);
-    events.emitToWorkspace(ws.id, { type: "team", workspaceId: ws.id, sharedThreadId: s.id });
-    return c.json({ id, author: { id: user.id, name: user.name }, body, createdAt: now });
+    const { subject: _subject, ...comment } = addComment(ctx, { kind: "human", user: c.get("user") }, c.req.param("id"), body);
+    return c.json(comment);
   });
 
   app.patch("/shared/:id", async (c) => {

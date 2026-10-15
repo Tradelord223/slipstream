@@ -13,6 +13,9 @@ import { Triage } from "./mail/actions.ts";
 import { MailStore } from "./mail/store.ts";
 import { SyncEngine } from "./mail/sync.ts";
 import { DEMO_IDENTITY } from "./providers/demo.ts";
+import { Agents } from "./agents/agents.ts";
+import { buildCatalog } from "./commands/catalog.ts";
+import { Commands } from "./commands/service.ts";
 
 export function createContext(config: Config): AppContext {
   const db = new Db(config.dbPath);
@@ -22,7 +25,11 @@ export function createContext(config: Config): AppContext {
   const triage = new Triage(db, store);
   const users = new Users(db);
   const sync = new SyncEngine(config, db, store, events, secrets);
-  return { config, db, events, secrets, store, triage, users, sync };
+  const agents = new Agents(db);
+  const commands = new Commands(buildCatalog());
+  const ctx: AppContext = { config, db, events, secrets, store, triage, users, sync, agents, commands };
+  commands.bind(ctx);
+  return ctx;
 }
 
 /** First local run: a demo mailbox so there's something to fly through before connecting real mail. */
