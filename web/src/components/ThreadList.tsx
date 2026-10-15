@@ -9,6 +9,9 @@ import { ThreadRow } from "./ThreadRow.tsx";
 
 const OVERSCAN = 8;
 
+/** Where the list was scrolled when it last left the screen, so coming back from a conversation lands in the same place. */
+let savedScroll: { key: string; top: number } | null = null;
+
 /** A windowed list: only the rows near the viewport exist in the DOM, so 50k conversations scroll like 50. */
 export function ThreadList({ activeId, compact = false }: { activeId?: string | null; compact?: boolean }) {
   const rows = useList((s) => s.visible);
@@ -44,8 +47,22 @@ export function ThreadList({ activeId, compact = false }: { activeId?: string | 
     return () => ro.disconnect();
   }, [measure]);
 
-  // A new mailbox starts at the top.
+  // Returning from a conversation keeps the scroll position; a different mailbox starts at the top.
+  const lastToken = useRef(resetToken);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && savedScroll && savedScroll.key === list.get().key) {
+      el.scrollTop = savedScroll.top;
+      setRange({ top: el.scrollTop, height: el.clientHeight });
+    }
+    savedScroll = null;
+    return () => {
+      if (scroller.current) savedScroll = { key: list.get().key, top: scroller.current.scrollTop };
+    };
+  }, []);
   useEffect(() => {
+    if (lastToken.current === resetToken) return;
+    lastToken.current = resetToken;
     if (scroller.current) scroller.current.scrollTop = 0;
   }, [resetToken]);
 

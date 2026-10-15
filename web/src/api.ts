@@ -2,6 +2,7 @@ import type {
   ActivityItem, AgentInfo, AgentInput, Approval, ExecuteResult, RemoteMode, RemoteStatus, Webhook,
   Address, Bootstrap, ContactInfo, Contact, Counts, Draft, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
   ThreadPage, TriageKind, TriageResult, SharedComment,
+  CloudConnectInput, CloudRun, CloudStatus, LabelInfo, LabelRule, Routine, RoutineInput,
 } from "./types.ts";
 
 export class ApiError extends Error {
@@ -59,6 +60,11 @@ const qs = (o: Record<string, string | number | undefined | null>) => {
   const s = p.toString();
   return s ? `?${s}` : "";
 };
+
+/** Run a Slipstream command the way an agent would; people and agents share one registry. */
+function command<T>(name: string, input: unknown = {}) {
+  return post<{ status: string; result: T; activityId?: string | null }>(`/api/v1/${name}`, input);
+}
 
 export interface ListParams {
   view: "inbox" | "split" | "search";
@@ -163,8 +169,24 @@ export const api = {
   deleteWebhook: (id: string) => del<{ ok: true }>(`/api/webhooks/${encodeURIComponent(id)}`),
   remote: () => get<RemoteStatus>("/api/remote"),
   setRemote: (mode: RemoteMode) => post<RemoteStatus>("/api/remote/tailscale", { mode }),
-  /** The OpenAPI document needs the client header, so a plain link can't open it. */
-  openApiSpec: () => get<unknown>("/api/v1/openapi.json"),
+
+  // The cloud agent: Claude on Anthropic's Managed Agents, answered through Slipstream's own commands.
+  cloud: () => get<CloudStatus>("/api/cloud"),
+  cloudConnect: (body: CloudConnectInput) => post<CloudStatus>("/api/cloud/connect", body),
+  cloudDisconnect: () => post<CloudStatus>("/api/cloud/disconnect"),
+  cloudRuns: () => get<{ runs: CloudRun[] }>("/api/cloud/runs"),
+  cloudRun: (id: string, signal?: AbortSignal) => get<CloudRun>(`/api/cloud/runs/${encodeURIComponent(id)}`, signal),
+  startRun: (instruction: string, context?: { threadIds: string[] }) => post<CloudRun>("/api/cloud/runs", context ? { instruction, context } : { instruction }),
+  replyRun: (id: string, text: string) => post<CloudRun>(`/api/cloud/runs/${encodeURIComponent(id)}/messages`, { text }),
+  stopRun: (id: string) => post<CloudRun>(`/api/cloud/runs/${encodeURIComponent(id)}/stop`),
+  saveRoutine: (body: RoutineInput, id?: string) => (id ? put<Routine>(`/api/cloud/routines/${encodeURIComponent(id)}`, body) : post<Routine>("/api/cloud/routines", body)),
+  deleteRoutine: (id: string) => del<{ ok: true }>(`/api/cloud/routines/${encodeURIComponent(id)}`),
+  runRoutine: (id: string) => post<CloudRun>(`/api/cloud/routines/${encodeURIComponent(id)}/run`),
+
+  // Commands, called the way an agent would (people use the same registry).
+  command,
+  labels: () => command<LabelInfo[]>("labels.list").then((r) => r.result),
+  labelRules: () => command<LabelRule[]>("labelRules.list").then((r) => r.result),
 };
 
 export interface DraftInput {

@@ -12,6 +12,8 @@ import "./styles/compose.css";
 import "./styles/overlays.css";
 import "./styles/settings.css";
 import "./styles/agents.css";
+import "./styles/cloud.css";
+import "./styles/labels.css";
 
 // Apply the saved theme before the first paint so there is no flash.
 try {

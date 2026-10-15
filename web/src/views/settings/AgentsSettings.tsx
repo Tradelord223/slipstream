@@ -7,18 +7,13 @@ import { Dialog } from "../../components/Dialog.tsx";
 import { Icon } from "../../components/Icon.tsx";
 import { claudeCodeCommand, curlCommand, stdioConfig } from "../../lib/connect.ts";
 import { ago, listTime } from "../../lib/format.ts";
+import { SCOPE_INFO } from "../../lib/scopes.ts";
 import { agentsUi } from "../../store/agents.ts";
+import { useCloud } from "../../store/cloud.ts";
 import { useStore } from "../../store/createStore.ts";
 import { toast } from "../../store/toasts.ts";
 import type { AgentInfo, AgentPolicy, AgentScope, Webhook } from "../../types.ts";
-
-export const SCOPE_INFO: { id: AgentScope; label: string; hint: string }[] = [
-  { id: "read", label: "Read", hint: "Search and read mail, drafts and activity" },
-  { id: "triage", label: "Triage", hint: "Mark done, star, label, remind, trash and unsubscribe" },
-  { id: "draft", label: "Draft", hint: "Write and edit drafts and share with your team. Nothing is sent." },
-  { id: "send", label: "Send", hint: "Send drafts as you, now or later" },
-  { id: "settings", label: "Settings", hint: "Change your splits and add snippets" },
-];
+import { CloudCard } from "./CloudCard.tsx";
 
 const DEFAULT_POLICY: AgentPolicy = { send: "always", bulkThreshold: 10, settings: "approve" };
 
@@ -39,6 +34,7 @@ type Dialogs =
 export function AgentsSettings() {
   return (
     <div className="settings-list">
+      <CloudCard />
       <AgentsPanel />
       <WebhooksPanel />
     </div>
@@ -46,7 +42,10 @@ export function AgentsSettings() {
 }
 
 function AgentsPanel() {
-  const [agents, setAgents] = useState<AgentInfo[] | null>(null);
+  const [everyone, setAgents] = useState<AgentInfo[] | null>(null);
+  const cloudId = useCloud((s) => (s.status?.connected ? s.status.agent?.id : undefined));
+  // Claude (cloud) has its own card above; it shouldn't show twice.
+  const agents = everyone && everyone.filter((a) => a.id !== cloudId);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialogs>(null);
   const createOpen = useStore(agentsUi, (s) => s.createOpen);

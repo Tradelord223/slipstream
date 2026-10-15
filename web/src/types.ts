@@ -232,6 +232,7 @@ export type ServerEvent =
   | { type: "team"; workspaceId: string; sharedThreadId: string }
   | { type: "activity"; activityId: string }
   | { type: "approval"; approvalId: string; status: string }
+  | { type: "cloud"; runId: string }
   | { type: "import"; jobId: string; accountId: string; status: "running" | "done" | "failed"; imported: number; error?: string };
 
 // ---- Agents ----------------------------------------------------------------
@@ -271,6 +272,10 @@ export interface Approval {
   error: string | null;
   createdAt: number;
   decidedAt: number | null;
+  /** The conversations it touches. */
+  threadIds: string[];
+  /** What the agent asked for (for drafts.send, input.draftId). */
+  input: Record<string, unknown>;
 }
 
 export type ActivityActor = { kind: "agent"; id: string; name: string } | { kind: "human"; name: string };
@@ -318,4 +323,88 @@ export interface RemoteStatus {
     error?: string;
   };
   publicListener: { port: number };
+}
+
+// ---- Cloud agent ---------------------------------------------------------------
+
+export type RunStatus = "starting" | "running" | "done" | "failed" | "budget" | "stopped";
+
+export interface TranscriptEntry {
+  kind: "user" | "agent" | "tool" | "note";
+  text: string;
+  at: number;
+}
+
+export interface CloudRun {
+  id: string;
+  sessionId: string | null;
+  routineId: string | null;
+  instruction: string;
+  status: RunStatus;
+  transcript: TranscriptEntry[];
+  toolCalls: number;
+  /** US cents; null until Anthropic reports it. */
+  costCents: number | null;
+  error: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+}
+
+export type RoutineTrigger =
+  | { type: "schedule"; days: number[]; time: string; timezone: string }
+  | { type: "mail"; query: string };
+
+export interface Routine {
+  id: string;
+  name: string;
+  instruction: string;
+  trigger: RoutineTrigger;
+  enabled: boolean;
+  nextRunAt: number | null;
+  lastRunAt: number | null;
+}
+
+export interface RoutineInput {
+  name: string;
+  instruction: string;
+  trigger: RoutineTrigger;
+  enabled: boolean;
+}
+
+export interface CloudStatus {
+  connected: boolean;
+  hasKey: boolean;
+  model: string;
+  agent: { id: string; name: string; scopes: AgentScope[]; policy: AgentPolicy } | null;
+  runBudgetCents: number;
+  monthlyBudgetCents: number;
+  spentThisMonthCents: number;
+  routines: Routine[];
+  runs: CloudRun[];
+}
+
+export interface CloudConnectInput {
+  apiKey?: string;
+  scopes: AgentScope[];
+  policy?: Partial<AgentPolicy>;
+  runBudgetCents?: number;
+  monthlyBudgetCents?: number;
+}
+
+// ---- Labels ----------------------------------------------------------------------
+
+export interface LabelInfo {
+  name: string;
+  color: string | null;
+  count: number;
+  unread: number;
+  parent: string | null;
+}
+
+export interface LabelRule {
+  id: string;
+  label: string;
+  query: string;
+  enabled: boolean;
+  createdAt: number;
 }

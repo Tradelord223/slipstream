@@ -1,26 +1,33 @@
 import { useEffect } from "react";
 import { setUnauthorizedHandler } from "./api.ts";
+import { AssistantHost } from "./components/assistant/AssistantPanel.tsx";
+import { CloudAccessDialog } from "./components/assistant/CloudForm.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { Composer, type Placement } from "./components/Composer.tsx";
+import { LabelDialogHost } from "./components/labels/LabelDialogs.tsx";
 import { Logo } from "./components/Icon.tsx";
 import { Rail } from "./components/Rail.tsx";
 import { RemindPopover } from "./components/RemindPopover.tsx";
 import { ShortcutsSheet } from "./components/ShortcutsSheet.tsx";
 import { TipsBar, Toasts } from "./components/Toasts.tsx";
 import { installKeys } from "./keys/dispatcher.ts";
-import { useViewport } from "./lib/hooks.ts";
+import { useViewport, useWindowWidth } from "./lib/hooks.ts";
 import { viewParams } from "./lib/views.ts";
 import { useCompose } from "./store/compose.ts";
 import { refreshApprovals } from "./store/agents.ts";
+import { ASSISTANT_INLINE_MIN, assistant, effectiveWidth, useAssistant } from "./store/assistant.ts";
+import { refreshCloud, useCloud } from "./store/cloud.ts";
+import { refreshLabels } from "./store/labels.ts";
 import { refreshCounts, useCounts } from "./store/counts.ts";
 import { connectEvents, disconnectEvents } from "./store/events.ts";
 import { focusId, openView, useList } from "./store/list.ts";
-import { navigate, useRoute, type MailView as MailViewType } from "./store/route.ts";
-import { loadSession, session, useSession } from "./store/session.ts";
+import { currentUrl, navigate, useRoute, type MailView as MailViewType } from "./store/route.ts";
+import { loadSession, rememberView, session, useSession } from "./store/session.ts";
 import { toast } from "./store/toasts.ts";
 import { ui, useUi } from "./store/ui.ts";
 import { AuthView, JoinSignedIn } from "./views/AuthView.tsx";
 import { ActivityView } from "./views/ActivityView.tsx";
+import { AgentView } from "./views/AgentView.tsx";
 import { MailView } from "./views/MailView.tsx";
 import { ReviewView } from "./views/ReviewView.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
@@ -75,11 +82,18 @@ function Shell() {
   const density = useSession((s) => s.settings.density);
   const listView = useList((s) => s.view);
   const counts = useCounts();
+  const assistantOpen = useAssistant((s) => s.open);
+  const assistantWidth = useAssistant((s) => s.width);
+  const accessOpen = useAssistant((s) => s.accessOpen);
+  const cloudStatus = useCloud((s) => s.status);
+  const windowWidth = useWindowWidth();
 
   useEffect(() => {
     connectEvents();
     refreshCounts(true);
     refreshApprovals(true);
+    void refreshCloud();
+    refreshLabels(true);
     const off = installKeys();
     return () => {
       off();
@@ -123,6 +137,7 @@ function Shell() {
 
   useEffect(() => {
     if (route.name === "thread") focusId(route.id);
+    if (route.name === "mail") rememberView(currentUrl());
   }, [route]);
 
   useEffect(() => {
@@ -150,6 +165,7 @@ function Shell() {
   }, [sheetOpen]);
 
   const showRail = viewport === "desktop" && railOpen;
+  const inlineAssistant = viewport === "desktop" && windowWidth >= ASSISTANT_INLINE_MIN;
   let main: React.ReactNode;
   if (route.name === "thread") {
     const fallback: MailViewType = view ?? { kind: "inbox" };
@@ -160,18 +176,22 @@ function Shell() {
           <ThreadView id={route.id} showContext={false} />
         </div>
       ) : (
-        <ThreadView id={route.id} showContext />
+        <ThreadView id={route.id} showContext={!(inlineAssistant && assistantOpen)} />
       );
   } else if (route.name === "mail") main = <MailView view={route.view} />;
   else if (route.name === "settings") main = <SettingsView section={route.section} />;
   else if (route.name === "shared") main = <SharedView id={route.id} />;
   else if (route.name === "review") main = <ReviewView tab={route.tab} />;
   else if (route.name === "activity") main = <ActivityView />;
+  else if (route.name === "agent") main = <AgentView />;
   else if (route.name === "join") main = <JoinSignedIn invite={route.invite} />;
   else main = <JoinOrHome />;
 
   return (
-    <div className={`app app-${viewport} ${showRail ? "with-rail" : ""}`}>
+    <div
+      className={`app app-${viewport} ${showRail ? "with-rail" : ""} ${inlineAssistant && assistantOpen ? "with-assistant" : ""}`}
+      style={{ ["--assistant-w" as string]: `${effectiveWidth(assistantWidth, showRail, windowWidth)}px` }}
+    >
       {showRail && <Rail />}
       {viewport !== "desktop" && sheetOpen && (
         <div className="sheet-scrim" onMouseDown={(e) => e.target === e.currentTarget && ui.set({ sheetOpen: false })}>
@@ -181,6 +201,9 @@ function Shell() {
         </div>
       )}
       <main className="main">{main}</main>
+      <AssistantHost />
+      <LabelDialogHost />
+      {accessOpen && cloudStatus?.connected && <CloudAccessDialog status={cloudStatus} onClose={() => assistant.set({ accessOpen: false })} />}
       <ComposerHost />
       <TipsBar />
       <Toasts />

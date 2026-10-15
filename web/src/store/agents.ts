@@ -136,7 +136,13 @@ export function moveReviewFocus(delta: number) {
 }
 
 export function threadOf(a: Approval): string | undefined {
-  return review.get().threadByApproval[a.id];
+  return a.threadIds?.[0] ?? review.get().threadByApproval[a.id];
+}
+
+/** The draft behind a send request, when the agent named one. */
+export function draftOf(a: Approval): string | undefined {
+  const id = a.input?.draftId;
+  return typeof id === "string" ? id : undefined;
 }
 
 export function openRelated(a: Approval | undefined = focusedApproval()) {

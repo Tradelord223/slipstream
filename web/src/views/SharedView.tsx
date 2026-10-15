@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.ts";
+import { AssistantButton } from "../components/AssistantButton.tsx";
 import { EmptyState } from "../components/InboxZero.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { MessageCard } from "../components/MessageCard.tsx";
@@ -30,6 +31,7 @@ function Header({ title, children }: { title: string; children?: React.ReactNode
       <h1 className="view-title">{title}</h1>
       <span className="grow" />
       {children}
+      <AssistantButton />
     </header>
   );
 }
