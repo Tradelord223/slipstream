@@ -18,7 +18,7 @@
     "start": "node dist/server.js",
     "test": "node --test --test-reporter=spec \"server/test/**/*.test.ts\"",
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
-    "seed:bench": "node server/src/bench.ts"
+    "bench": "node scripts/bench.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
