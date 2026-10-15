@@ -21,11 +21,15 @@ export const policySchema = z.object({
 export type Policy = z.infer<typeof policySchema>;
 
 export const TOKEN_PREFIX = "ss_agent_";
+/** Short-lived OAuth access tokens (remote MCP clients); see remote/oauth.ts. */
+export const OAUTH_ACCESS_PREFIX = "ss_oat_";
 
 export interface Agent {
   id: string;
   userId: string;
   name: string;
+  /** "oauth" agents were connected by a remote assistant (claude.ai, ChatGPT) and use short-lived tokens. */
+  kind: "token" | "oauth";
   scopes: Scope[];
   policy: Policy;
   tokenHint: string;
@@ -43,12 +47,15 @@ interface AgentRow {
   created_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+  status: string;
+  oauth_client_id: string | null;
 }
 
 const shape = (r: AgentRow): Agent => ({
   id: r.id,
   userId: r.user_id,
   name: r.name,
+  kind: r.oauth_client_id ? "oauth" : "token",
   scopes: JSON.parse(r.scopes) as Scope[],
   policy: policySchema.parse(JSON.parse(r.policy)),
   tokenHint: r.token_hint,
@@ -82,7 +89,7 @@ export class Agents {
 
   list(userId: string): Agent[] {
     return this.db
-      .all<AgentRow>("SELECT * FROM agents WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at", userId)
+      .all<AgentRow>("SELECT * FROM agents WHERE user_id = ? AND revoked_at IS NULL AND status = 'active' ORDER BY created_at", userId)
       .map(shape);
   }
 
@@ -108,10 +115,19 @@ export class Agents {
     return this.db.run("UPDATE agents SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL", Date.now(), id, userId).changes > 0;
   }
 
-  /** Resolve a bearer token to its agent. Constant work per call: one indexed lookup of the hash. */
+  /** Resolve a bearer token (agent token or OAuth access token) to its active agent. One indexed lookup. */
   authenticate(token: string): Agent | null {
-    if (!token.startsWith(TOKEN_PREFIX)) return null;
-    const r = this.db.get<AgentRow>("SELECT * FROM agents WHERE token_hash = ? AND revoked_at IS NULL", sha256(token));
+    let r: AgentRow | undefined;
+    if (token.startsWith(TOKEN_PREFIX)) {
+      r = this.db.get<AgentRow>("SELECT * FROM agents WHERE token_hash = ? AND revoked_at IS NULL AND status = 'active'", sha256(token));
+    } else if (token.startsWith(OAUTH_ACCESS_PREFIX)) {
+      r = this.db.get<AgentRow>(
+        `SELECT a.* FROM oauth_tokens t JOIN agents a ON a.id = t.agent_id
+         WHERE t.access_hash = ? AND t.revoked_at IS NULL AND t.access_expires_at > ? AND a.revoked_at IS NULL AND a.status = 'active'`,
+        sha256(token),
+        Date.now(),
+      );
+    }
     if (!r) return null;
     // Coarse last-used tracking (one write a minute at most).
     if (!r.last_used_at || Date.now() - r.last_used_at > 60_000) this.db.run("UPDATE agents SET last_used_at = ? WHERE id = ?", Date.now(), r.id);

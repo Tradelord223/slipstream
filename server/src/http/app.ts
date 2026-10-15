@@ -13,6 +13,8 @@ import { mailRoutes } from "./mail.ts";
 import { prefsRoutes } from "./prefs.ts";
 import { teamRoutes } from "./team.ts";
 import { handleMcp, v1Routes } from "./v1.ts";
+import { makeOriginOf, remoteRoutes } from "./remote.ts";
+import { oauthRoutes } from "../remote/oauth.ts";
 
 /** Paths reachable without a session in team mode. */
 const PUBLIC_API = new Set(["/api/auth/login", "/api/auth/signup", "/api/auth/state", "/api/auth/invite"]);
@@ -87,6 +89,9 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
     return next();
   };
 
+  // OAuth for MCP clients that connect to this server directly (team servers, local tools).
+  app.route("/", oauthRoutes(ctx, makeOriginOf(ctx, "main")));
+
   app.use("/api/*", authenticate);
   app.use("/mcp", authenticate);
   app.all("/mcp", (c) => handleMcp(ctx, c.get("actor"), c.req.raw));
@@ -99,6 +104,7 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   app.route("/api", teamRoutes(ctx));
   app.route("/api", aiRoutes(ctx));
   app.route("/api", v1Routes(ctx));
+  app.route("/api", remoteRoutes(ctx));
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
   if (staticDir && existsSync(staticDir)) {

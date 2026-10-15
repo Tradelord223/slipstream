@@ -42,12 +42,31 @@ interface ApprovalRow {
  * Runs commands for people and agents: validates input, enforces agent scopes, routes risky agent
  * actions to the Review queue, and records who did what so it can be seen and undone.
  */
+/** Approvals that aren't registry commands (e.g. a remote assistant asking to connect). */
+export interface ApprovalHandler {
+  title: string;
+  approve: (userId: string, input: unknown) => Promise<unknown> | unknown;
+  reject: (userId: string, input: unknown) => void;
+}
+
 export class Commands {
   private byName = new Map<string, Command>();
+  private handlers = new Map<string, ApprovalHandler>();
   private ctx!: AppContext;
 
   constructor(commands: Command[]) {
     for (const c of commands) this.byName.set(c.name, c);
+  }
+
+  registerApprovalHandler(name: string, handler: ApprovalHandler) {
+    this.handlers.set(name, handler);
+  }
+
+  /** Put a request in the Review queue on behalf of an agent (for approvals outside the registry). */
+  requestCustomApproval(actor: Extract<Actor, { kind: "agent" }>, name: string, input: unknown, preview: string, reason: string) {
+    const handler = this.handlers.get(name);
+    if (!handler) throw new Error(`No approval handler for ${name}`);
+    return this.requestApproval(actor, { name, title: handler.title } as Command, input, reason, preview);
   }
 
   /** The context is built after the registry; bind it once at boot. */
@@ -125,10 +144,16 @@ export class Commands {
     return id;
   }
 
-  private requestApproval(actor: Extract<Actor, { kind: "agent" }>, cmd: Command, input: unknown, reason: string): ExecuteResult {
+  private requestApproval(
+    actor: Extract<Actor, { kind: "agent" }>,
+    cmd: Pick<Command, "name" | "title" | "preview">,
+    input: unknown,
+    reason: string,
+    fixedPreview?: string,
+  ): Extract<ExecuteResult, { status: "pending_approval" }> {
     const { db, events } = this.ctx;
     const id = newId("apr");
-    const preview = cmd.preview ? cmd.preview(this.ctx, actor, input) : JSON.stringify(input, null, 2);
+    const preview = fixedPreview ?? (cmd.preview ? cmd.preview(this.ctx, actor, input) : JSON.stringify(input, null, 2));
     const now = Date.now();
     db.tx(() => {
       db.run(
@@ -158,7 +183,7 @@ export class Commands {
       id: r.id,
       agent: { id: r.agent_id, name: r.agent_name },
       command: r.command,
-      title: this.byName.get(r.command)?.title ?? r.command,
+      title: this.byName.get(r.command)?.title ?? this.handlers.get(r.command)?.title ?? r.command,
       preview: r.preview,
       reason: r.reason,
       status: r.status,
@@ -179,6 +204,14 @@ export class Commands {
     const user = users.get(userId)!;
     try {
       if (!agent) throw new HttpError(410, "The agent that asked for this was removed.");
+      const handler = this.handlers.get(row.command);
+      if (handler) {
+        const result = await handler.approve(userId, JSON.parse(row.input));
+        db.run("UPDATE approvals SET result = ? WHERE id = ?", JSON.stringify(result ?? null), approvalId);
+        db.run("UPDATE activity SET status = 'done', summary = ? WHERE approval_id = ?", `${handler.title}: approved`, approvalId);
+        events.emitToUser(userId, { type: "approval", approvalId, status: "approved" });
+        return { status: "done", result, activityId: null };
+      }
       const result = await this.execute({ kind: "agent", user, agent }, row.command, JSON.parse(row.input), { approvalId });
       db.run("UPDATE approvals SET result = ? WHERE id = ?", JSON.stringify(result), approvalId);
       events.emitToUser(userId, { type: "approval", approvalId, status: "approved" });
@@ -201,6 +234,8 @@ export class Commands {
       userId,
     );
     if (res.changes === 0) throw new HttpError(409, "This request was already decided.");
+    const row = db.get<ApprovalRow>("SELECT * FROM approvals WHERE id = ?", approvalId)!;
+    this.handlers.get(row.command)?.reject(userId, JSON.parse(row.input));
     db.run("UPDATE activity SET status = 'rejected' WHERE approval_id = ?", approvalId);
     events.emitToUser(userId, { type: "approval", approvalId, status: "rejected" });
   }
