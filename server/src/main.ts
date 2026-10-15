@@ -16,6 +16,7 @@ import { SyncEngine } from "./mail/sync.ts";
 import { DEMO_IDENTITY } from "./providers/demo.ts";
 import { Agents } from "./agents/agents.ts";
 import { Webhooks } from "./agents/webhooks.ts";
+import { CloudAgent } from "./agents/cloud.ts";
 import { buildCatalog } from "./commands/catalog.ts";
 import { Commands } from "./commands/service.ts";
 
@@ -31,6 +32,7 @@ export function createContext(config: Config): AppContext {
   const commands = new Commands(buildCatalog());
   const ctx = { config, db, events, secrets, store, triage, users, sync, agents, commands } as AppContext;
   ctx.webhooks = new Webhooks(ctx);
+  ctx.cloud = new CloudAgent(ctx);
   commands.bind(ctx);
   return ctx;
 }
@@ -70,6 +72,7 @@ export async function start(config = loadConfig()) {
   const app = createApp(ctx, staticDir);
   ctx.sync.start();
   ctx.webhooks.start();
+  ctx.cloud.startScheduler();
 
   const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   // Local mode: a loopback listener that only serves MCP + OAuth, for Tailscale Serve/Funnel or a tunnel.
@@ -81,6 +84,7 @@ export async function start(config = loadConfig()) {
     server.close();
     remote?.close();
     ctx.webhooks.close();
+    ctx.cloud.close();
     await ctx.sync.stop();
     ctx.db.close();
     process.exit(0);

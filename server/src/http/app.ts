@@ -14,6 +14,7 @@ import { prefsRoutes } from "./prefs.ts";
 import { teamRoutes } from "./team.ts";
 import { handleMcp, v1Routes } from "./v1.ts";
 import { makeOriginOf, remoteRoutes } from "./remote.ts";
+import { cloudRoutes } from "./cloud.ts";
 import { oauthRoutes } from "../remote/oauth.ts";
 
 /** Paths reachable without a session in team mode. */
@@ -105,6 +106,7 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   app.route("/api", aiRoutes(ctx));
   app.route("/api", v1Routes(ctx));
   app.route("/api", remoteRoutes(ctx));
+  app.route("/api", cloudRoutes(ctx));
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
   if (staticDir && existsSync(staticDir)) {

@@ -6,6 +6,7 @@ export type ServerEvent =
   | { type: "drafts"; draftId: string; status: string; error?: string | null }
   | { type: "team"; workspaceId: string; sharedThreadId: string }
   | { type: "activity"; activityId: string }
+  | { type: "cloud"; runId: string }
   | { type: "approval"; approvalId: string; status: string }
   | { type: "import"; jobId: string; accountId: string; status: "running" | "done" | "failed"; imported: number; error?: string };
 
