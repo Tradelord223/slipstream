@@ -1,0 +1,24 @@
+[package]
+name = "slipstream-imap"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Spike: a Rust IMAP/SMTP provider with the same contract as server/src/providers/imap.ts"
+
+[dependencies]
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+mail-parser = "0.11"
+# TLS roots come from the OS store (rustls-native-certs), not webpki-roots (CDLA-Permissive-2.0).
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+futures = "0.3"
+
+[dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
