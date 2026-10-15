@@ -164,10 +164,11 @@ describe("Claude Code engine", () => {
     assert.deepEqual(io.toolLines, [{ name: "mail_search", failed: true }]);
   });
 
-  it("maps the turn limit and plan limits to the limit outcome", async () => {
+  it("pauses at the turn limit (a follow-up continues) and maps plan limits to the limit outcome", async () => {
     setup({ FAKE_MODE: "maxturns" });
     const io = fakeIO({ mcp: { url: mcpUrl, token: TOKEN } });
-    assert.equal((await engine("cli:claude-code").turn(io, "hi")).outcome, "limit");
+    assert.equal((await engine("cli:claude-code").turn(io, "hi")).outcome, "done");
+    assert.match(io.notes.join(" "), /Paused after 25 turns/);
     process.env.FAKE_MODE = "limit";
     const out = await engine("cli:claude-code").turn(io, "hi");
     assert.equal(out.outcome, "limit");

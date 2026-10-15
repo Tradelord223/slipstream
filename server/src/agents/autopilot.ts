@@ -32,8 +32,10 @@ export const autopilotSettings = z.object({
   /** The person's own rules, in plain words. Quoted names are labels Autopilot may create. */
   playbook: z.string().max(4_000).default(""),
   draftReplies: z.boolean().default(true),
-  /** Only mail Slipstream received after this moment is processed. */
+  /** New mail is mail Slipstream received after this moment (and sent around when it arrived). */
   since: z.number().int().default(0),
+  /** Also process conversations sent after this moment, whenever they arrived (set by backfill). */
+  backfillFrom: z.number().int().nullable().default(null),
   /** How the person writes, learned from their sent mail. */
   voice: z.string().max(3_000).default(""),
 });
@@ -101,6 +103,8 @@ const CONFIDENT = 0.6;
 const BODY_CHARS = 1_500;
 const BULK_BODY_CHARS = 300;
 const RETRY_AFTER_FAILURE_MS = 10 * 60_000;
+/** Mail counts as new when it was sent within this long of arriving: an import of old mail isn't new mail. */
+const FRESH_MS = 2 * 86_400_000;
 
 /** Untrusted text can't close or open our own markup. */
 const fence = (s: string) => s.replace(/<(\/?)(email|conversation)/gi, "‹$1$2");
@@ -148,7 +152,8 @@ const htmlText = (html: string) =>
 export class Autopilot {
   private ctx: AppContext;
   /** Runs Autopilot started and what each was for. */
-  private runs = new Map<string, { userId: string; kind: "decide" | "draft" | "voice"; itemIds: string[]; startedAt: number }>();
+  private runs = new Map<string, { userId: string; kind: "decide" | "draft" | "voice"; itemIds: string[]; startedAt: number; queue?: string[] }>();
+  private inFlight = new Map<string, Promise<void>>();
   private lastFailure = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
@@ -187,12 +192,13 @@ export class Autopilot {
     return this.overview(userId);
   }
 
-  /** Process conversations that arrived in the last `days` too. */
+  /** Process conversations sent in the last `days` too. */
   backfill(userId: string, days: number) {
     const s = this.settings(userId);
-    this.save(userId, { ...s, since: Math.min(s.since || Date.now(), Date.now() - days * 86_400_000) });
+    const from = Date.now() - days * 86_400_000;
+    this.save(userId, { ...s, backfillFrom: s.backfillFrom === null ? from : Math.min(s.backfillFrom, from) });
     this.lastFailure.delete(userId);
-    void this.tickUser(userId);
+    void this.tickUser(userId).catch((e) => console.error("[slipstream] autopilot:", e));
     return this.overview(userId);
   }
 
@@ -253,9 +259,11 @@ export class Autopilot {
     this.ticking = true;
     try {
       const users = this.ctx.db.all<{ user_id: string; value: string }>("SELECT user_id, value FROM settings WHERE key = 'autopilot'");
-      for (const u of users) if ((JSON.parse(u.value) as { enabled?: boolean }).enabled) await this.tickUser(u.user_id);
-    } catch (err) {
-      console.error("[slipstream] autopilot:", err);
+      for (const u of users) {
+        if (!(JSON.parse(u.value) as { enabled?: boolean }).enabled) continue;
+        // One person's problem never holds up anyone else's mail.
+        await this.tickUser(u.user_id).catch((err) => console.error("[slipstream] autopilot:", err));
+      }
     } finally {
       this.ticking = false;
     }
@@ -267,27 +275,40 @@ export class Autopilot {
   }
 
   /** Conversations with a new incoming message since Autopilot last looked at them. */
-  private candidates(userId: string, since: number) {
+  private candidates(userId: string, s: AutopilotSettings) {
     return this.ctx.db.all<{ thread_id: string; message_id: string; from_email: string; item_id: string | null; attempts: number | null; stage: string | null }>(
       `SELECT t.id AS thread_id, m.id AS message_id, m.from_email, i.id AS item_id, i.attempts, i.stage
        FROM threads t
        JOIN accounts a ON a.id = t.account_id AND a.user_id = ?
        JOIN messages m ON m.id = (SELECT id FROM messages WHERE thread_id = t.id AND outgoing = 0 ORDER BY sent_at DESC, created_at DESC LIMIT 1)
        LEFT JOIN autopilot_items i ON i.thread_id = t.id AND i.message_id = m.id
-       WHERE t.in_inbox = 1 AND t.muted = 0 AND t.in_trash = 0 AND t.in_spam = 0 AND m.created_at >= ?
+       WHERE t.in_inbox = 1 AND t.muted = 0 AND t.in_trash = 0 AND t.in_spam = 0
+         AND ((m.created_at >= ? AND m.sent_at >= m.created_at - ?) OR (? IS NOT NULL AND m.sent_at >= ?))
          AND (t.last_outbound_at IS NULL OR t.last_outbound_at < t.last_inbound_at)
          AND (i.id IS NULL OR (i.stage = 'failed' AND i.attempts < 2))
        ORDER BY t.sort_at DESC LIMIT 200`,
       userId,
-      since,
+      s.since,
+      FRESH_MS,
+      s.backfillFrom,
+      s.backfillFrom,
     );
   }
 
-  async tickUser(userId: string) {
+  /** Look for new mail for one person. Calls that overlap share one pass. */
+  tickUser(userId: string): Promise<void> {
+    const running = this.inFlight.get(userId);
+    if (running) return running;
+    const pass = this.pass(userId).finally(() => this.inFlight.delete(userId));
+    this.inFlight.set(userId, pass);
+    return pass;
+  }
+
+  private async pass(userId: string) {
     const s = this.settings(userId);
     if (!s.enabled || this.busy(userId)) return;
     if (Date.now() - (this.lastFailure.get(userId) ?? 0) < RETRY_AFTER_FAILURE_MS) return;
-    const found = this.candidates(userId, s.since);
+    const found = this.candidates(userId, s);
     if (!found.length) return;
     const rules = this.senderRules(userId);
     const forModel: typeof found = [];
@@ -311,18 +332,23 @@ export class Autopilot {
     }
     const batch = forModel.slice(0, BATCH);
     const ids = batch.map((c) => this.upsertItem(userId, c, "deciding", "model"));
+    const marks = ids.map(() => "?").join(",");
+    const startedAt = Date.now();
     try {
-      const run = await this.ctx.cloud.startLocal(userId, engine.id, {
+      await this.ctx.cloud.startLocal(userId, engine.id, {
         instruction: `Sort ${batch.length === 1 ? "1 new conversation" : `${batch.length} new conversations`}`,
         message: this.decidePrompt(userId, ids),
         principal: this.principal(userId),
         origin: "autopilot",
+        onStart: (runId) => {
+          this.runs.set(runId, { userId, kind: "decide", itemIds: ids, startedAt });
+          // Only a run that actually started counts as an attempt.
+          this.ctx.db.run(`UPDATE autopilot_items SET run_id = ?, attempts = attempts + 1 WHERE id IN (${marks})`, runId, ...ids);
+        },
       });
-      this.runs.set(run.id, { userId, kind: "decide", itemIds: ids, startedAt: Date.now() });
-      this.ctx.db.run(`UPDATE autopilot_items SET run_id = ? WHERE id IN (${ids.map(() => "?").join(",")})`, run.id, ...ids);
       this.clearError(userId);
     } catch (err) {
-      this.ctx.db.run(`UPDATE autopilot_items SET stage = 'failed' WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids);
+      this.ctx.db.run(`UPDATE autopilot_items SET stage = 'failed' WHERE id IN (${marks}) AND stage = 'deciding'`, ...ids);
       this.fail(userId, err instanceof Error ? err.message : String(err));
     }
     this.emit(userId);
@@ -330,15 +356,14 @@ export class Autopilot {
 
   private upsertItem(userId: string, c: { thread_id: string; message_id: string; item_id: string | null }, stage: ItemRow["stage"], source: ItemRow["source"]): string {
     if (c.item_id) {
-      this.ctx.db.run("UPDATE autopilot_items SET stage = ?, source = ?, attempts = attempts + 1 WHERE id = ?", stage, source, c.item_id);
+      this.ctx.db.run("UPDATE autopilot_items SET stage = ?, source = ? WHERE id = ?", stage, source, c.item_id);
       return c.item_id;
     }
-    const id = newId("api");
     this.ctx.db.run(
-      "INSERT INTO autopilot_items (id, user_id, thread_id, message_id, stage, source, attempts, created_at) VALUES (?,?,?,?,?,?,1,?)",
-      id, userId, c.thread_id, c.message_id, stage, source, Date.now(),
+      "INSERT INTO autopilot_items (id, user_id, thread_id, message_id, stage, source, attempts, created_at) VALUES (?,?,?,?,?,?,0,?) ON CONFLICT (thread_id, message_id) DO NOTHING",
+      newId("api"), userId, c.thread_id, c.message_id, stage, source, Date.now(),
     );
-    return id;
+    return this.ctx.db.get<{ id: string }>("SELECT id FROM autopilot_items WHERE thread_id = ? AND message_id = ?", c.thread_id, c.message_id)!.id;
   }
 
   private fail(userId: string, error: string) {
@@ -523,39 +548,43 @@ export class Autopilot {
     if (r.kind === "decide") {
       // Anything the model didn't decide is tried again on a later tick (at most twice).
       const leftover = this.ctx.db.run("UPDATE autopilot_items SET stage = 'failed' WHERE run_id = ? AND stage = 'deciding'", runId).changes;
-      if (status !== "done" && leftover) {
-        const err = this.ctx.db.get<{ error: string | null }>("SELECT error FROM cloud_runs WHERE id = ?", runId)?.error;
-        this.fail(userId, err ?? "Autopilot's last batch didn't finish.");
+      if (leftover) {
+        const err = status === "done" ? null : this.ctx.db.get<{ error: string | null }>("SELECT error FROM cloud_runs WHERE id = ?", runId)?.error;
+        this.fail(userId, err ?? `The model finished without deciding ${leftover === 1 ? "1 conversation" : `${leftover} conversations`}. Autopilot will try again.`);
       }
       if (this.settings(userId).draftReplies) await this.startDrafts(userId, r.itemIds);
     } else if (r.kind === "draft") {
       this.collectDrafts(userId, r.itemIds, r.startedAt);
+      // Replies beyond one run's share get their own run.
+      if (r.queue?.length && this.settings(userId).draftReplies) await this.startDrafts(userId, r.queue);
     }
     this.emit(userId);
     // More may be waiting.
-    if (r.kind === "decide") void this.tickUser(userId);
+    if (r.kind === "decide") void this.tickUser(userId).catch((e) => console.error("[slipstream] autopilot:", e));
   }
 
   private async startDrafts(userId: string, itemIds: string[]) {
-    const items = itemIds
+    const eligible = itemIds
       .map((id) => this.ctx.db.get<ItemRow>("SELECT * FROM autopilot_items WHERE id = ?", id))
       .filter((it): it is ItemRow => {
         if (!it?.decision || it.stage !== "decided" || it.draft_id) return false;
         const d = JSON.parse(it.decision) as Decision;
         return d.needsReply && d.action !== "done";
-      })
-      .slice(0, DRAFT_BATCH);
+      });
+    const items = eligible.slice(0, DRAFT_BATCH);
+    const queue = eligible.slice(DRAFT_BATCH).map((i) => i.id);
     if (!items.length) return;
     const engine = await this.engine(userId);
     if ("error" in engine) return;
+    const startedAt = Date.now();
     try {
-      const run = await this.ctx.cloud.startLocal(userId, engine.id, {
+      await this.ctx.cloud.startLocal(userId, engine.id, {
         instruction: `Draft ${items.length === 1 ? "a reply" : `${items.length} replies`}`,
         message: this.draftPrompt(userId, items),
         principal: this.principal(userId),
         origin: "autopilot",
+        onStart: (runId) => this.runs.set(runId, { userId, kind: "draft", itemIds: items.map((i) => i.id), startedAt, queue }),
       });
-      this.runs.set(run.id, { userId, kind: "draft", itemIds: items.map((i) => i.id), startedAt: Date.now() });
     } catch (err) {
       console.error("[slipstream] autopilot drafts:", err instanceof Error ? err.message : err);
     }
@@ -592,17 +621,27 @@ export class Autopilot {
     ].join("\n");
   }
 
-  /** Link drafts to their items; remove any addressed outside the conversation. */
+  /**
+   * Link the drafts Autopilot wrote to their items, and remove any it addressed outside the conversation.
+   * Only drafts its own drafts.create made count: a draft the person is writing in the same thread is theirs.
+   */
   private collectDrafts(userId: string, itemIds: string[], since: number) {
+    const mine = new Set(
+      this.ctx.db
+        .all<{ inverse: string | null }>("SELECT inverse FROM activity WHERE user_id = ? AND agent_id = ? AND command = 'drafts.create' AND created_at >= ?", userId, this.principal(userId).id, since)
+        .map((a) => (a.inverse ? (JSON.parse(a.inverse) as { input?: { draftId?: string } }).input?.draftId : undefined))
+        .filter((x): x is string => Boolean(x)),
+    );
     for (const id of itemIds) {
       const it = this.ctx.db.get<ItemRow>("SELECT * FROM autopilot_items WHERE id = ?", id);
       if (!it) continue;
-      const draft = this.ctx.db.get<{ id: string; to_json: string; cc_json: string; bcc_json: string; body_html: string }>(
-        "SELECT id, to_json, cc_json, bcc_json, body_html FROM drafts WHERE user_id = ? AND thread_id = ? AND status = 'draft' AND updated_at >= ? ORDER BY updated_at DESC LIMIT 1",
-        userId,
-        it.thread_id,
-        since,
-      );
+      const draft = this.ctx.db
+        .all<{ id: string; to_json: string; cc_json: string; bcc_json: string; body_html: string }>(
+          "SELECT id, to_json, cc_json, bcc_json, body_html FROM drafts WHERE user_id = ? AND thread_id = ? AND status = 'draft' ORDER BY updated_at DESC",
+          userId,
+          it.thread_id,
+        )
+        .find((d) => mine.has(d.id));
       if (!draft) continue;
       const participants = new Set(
         this.ctx.db
@@ -652,8 +691,8 @@ export class Autopilot {
       ].join("\n"),
       principal: this.principal(userId),
       origin: "autopilot",
+      onStart: (runId) => this.runs.set(runId, { userId, kind: "voice", itemIds: [], startedAt: Date.now() }),
     });
-    this.runs.set(run.id, { userId, kind: "voice", itemIds: [], startedAt: Date.now() });
     return run;
   }
 
@@ -689,6 +728,8 @@ export class Autopilot {
   /** Undo everything Autopilot did to a conversation for this decision. */
   async undo(userId: string, id: string) {
     const it = this.item(userId, id);
+    // Nothing was done yet: undoing a proposal just sets it aside, and teaches nothing.
+    if (!it.applied) return this.dismiss(userId, id);
     const user = this.ctx.users.get(userId)!;
     const acts = (JSON.parse(it.activity_ids) as string[]).reverse();
     for (const a of acts) {
@@ -705,7 +746,7 @@ export class Autopilot {
     const weekAgo = Date.now() - 7 * 86_400_000;
     for (const tid of threadIds) {
       const it = this.ctx.db.get<ItemRow>(
-        "SELECT * FROM autopilot_items WHERE user_id = ? AND thread_id = ? AND stage = 'decided' AND decided_at >= ? AND status IN ('open','accepted') ORDER BY decided_at DESC LIMIT 1",
+        "SELECT * FROM autopilot_items WHERE user_id = ? AND thread_id = ? AND stage = 'decided' AND decided_at >= ? AND status IN ('open','accepted','corrected') ORDER BY decided_at DESC LIMIT 1",
         actor.user.id,
         tid,
         weekAgo,
@@ -758,18 +799,21 @@ export class Autopilot {
       Date.now() - 60 * 86_400_000,
     );
     const have = new Set(this.senderRules(userId).map((r) => r.pattern));
-    const tally = new Map<string, number>();
+    const tally = new Map<string, { pattern: string; action: "keep" | "done"; label: string | null; times: number }>();
     for (const r of rows) {
       const c = JSON.parse(r.correction) as Correction;
-      const key = c.action === "keep" || c.undid ? `${r.from_email}|keep|` : c.action === "done" ? `${r.from_email}|done|` : c.addedLabel ? `${r.from_email}|keep|${c.addedLabel}` : null;
-      if (key) tally.set(key, (tally.get(key) ?? 0) + 1);
+      const action = c.action === "keep" || c.undid || c.addedLabel ? "keep" : c.action === "done" ? "done" : null;
+      if (!action) continue;
+      const pattern = r.from_email.toLowerCase();
+      const label = c.addedLabel ?? null;
+      const key = JSON.stringify([pattern, action, label]);
+      const t = tally.get(key) ?? { pattern, action, label, times: 0 };
+      t.times += 1;
+      tally.set(key, t);
     }
-    return [...tally.entries()]
-      .filter(([k, n]) => n >= 2 && !have.has(k.split("|")[0]!.toLowerCase()))
-      .map(([k, n]) => {
-        const [pattern, action, label] = k.split("|") as [string, "keep" | "done", string];
-        return { pattern: pattern.toLowerCase(), action: { action, labels: label ? [label] : [], priority: "normal" as const }, times: n };
-      })
+    return [...tally.values()]
+      .filter((t) => t.times >= 2 && !have.has(t.pattern))
+      .map((t) => ({ pattern: t.pattern, action: { action: t.action, labels: t.label ? [t.label] : [], priority: "normal" as const }, times: t.times }))
       .slice(0, 5);
   }
 
@@ -817,15 +861,17 @@ export class Autopilot {
     };
   }
 
-  /** How well Autopilot is doing over the last 30 days. */
+  /** How well Autopilot's model decisions are doing over the last 30 days (sender rules are counted apart). */
   metrics(userId: string) {
     const since = Date.now() - 30 * 86_400_000;
-    const rows = this.ctx.db.all<{ status: string; applied: number; source: string; draft_id: string | null; draft_body: string | null; d_status: string | null; d_body: string | null; decision: string | null }>(
+    let rows = this.ctx.db.all<{ status: string; applied: number; source: string; draft_id: string | null; draft_body: string | null; d_status: string | null; d_body: string | null; decision: string | null }>(
       `SELECT i.status, i.applied, i.source, i.draft_id, i.draft_body, d.status AS d_status, d.body_html AS d_body, i.decision FROM autopilot_items i
        LEFT JOIN drafts d ON d.id = i.draft_id WHERE i.user_id = ? AND i.stage = 'decided' AND i.decided_at >= ?`,
       userId,
       since,
     );
+    const bySenderRules = rows.filter((r) => r.source === "sender").length;
+    rows = rows.filter((r) => r.source === "model");
     const sent = rows.filter((r) => r.draft_id && r.d_status === "sent" && r.draft_body !== null);
     const edits = sent.map((r) => editRatio(r.draft_body!, htmlText(r.d_body ?? "")));
     const actions = rows.map((r) => (JSON.parse(r.decision ?? "{}") as Partial<Decision>).action);
@@ -839,6 +885,7 @@ export class Autopilot {
       draftsSent: sent.length,
       draftsSentAsWritten: edits.filter((e) => e <= 0.1).length,
       averageEdit: edits.length ? Math.round((edits.reduce((a, b) => a + b, 0) / edits.length) * 100) / 100 : null,
+      bySenderRules,
     };
   }
 
@@ -860,23 +907,25 @@ export class Autopilot {
         description:
           "Autopilot only: record one decision per conversation in the current batch (keep / done / remind, labels, priority, needsReply, summary, reason, confidence). In auto mode confident decisions are applied; otherwise they wait for the user.",
         scope: "triage",
-        // The triage it applies records its own activity.
-        readOnly: true,
+        visibleTo: (_ctx, actor) => this.isAutopilot(actor),
         input: z.object({ decisions: z.array(decisionSchema).min(1).max(BATCH) }),
-        run: async (_ctx, actor, i) => ({ result: await this.decide(only(actor), i.decisions) }),
+        run: async (_ctx, actor, i) => {
+          const r = await this.decide(only(actor), i.decisions);
+          return { result: r, summary: `Sorted ${r.recorded === 1 ? "1 conversation" : `${r.recorded} conversations`}${r.applied ? `, ${r.applied} carried out` : ""}` };
+        },
       }),
       defineCommand({
         name: "autopilot.saveVoice",
         title: "Save writing style",
         description: "Autopilot only: save a short description of how the user writes, used when drafting replies.",
         scope: "draft",
-        readOnly: true,
+        visibleTo: (_ctx, actor) => this.isAutopilot(actor),
         input: z.object({ profile: z.string().trim().min(20).max(3_000) }),
         run: (_ctx, actor, i) => {
           const a = only(actor);
           this.save(a.user.id, { ...this.settings(a.user.id), voice: i.profile });
           this.emit(a.user.id);
-          return { result: { saved: true } };
+          return { result: { saved: true }, summary: "Learned how you write" };
         },
       }),
       defineCommand({

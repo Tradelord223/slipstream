@@ -44,7 +44,7 @@ export interface EngineStatus {
   models?: string[];
   /** The model runs will use. */
   model?: string | null;
-  /** Whether runs report a dollar cost (API keys) or draw on a plan's own limits (sign-ins, CLIs). */
+  /** "api": billed to an API account (only some providers report the dollar cost); "plan": draws on a plan's own limits (sign-ins, CLIs). */
   billing: "api" | "plan";
   /** Anything a person should know before choosing it (terms, sandboxing). */
   note?: string;

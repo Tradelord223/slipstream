@@ -110,9 +110,14 @@ export class Commands {
     return c;
   }
 
+  /** Whether a command is listed to this actor (commands for one principal's own use are hidden from the rest). */
+  visible(c: Command, actor?: Actor): boolean {
+    return !c.visibleTo || (actor !== undefined && c.visibleTo(this.ctx, actor));
+  }
+
   /** JSON description of every command, for agents, the CLI and OpenAPI. */
-  describe() {
-    return this.list().map((c) => ({
+  describe(opts: { actor?: Actor; internal?: boolean } = {}) {
+    return this.list().filter((c) => opts.internal || this.visible(c, opts.actor)).map((c) => ({
       name: c.name,
       title: c.title,
       description: c.description,

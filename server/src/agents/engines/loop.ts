@@ -65,7 +65,9 @@ export async function runLoop<S>(io: RunIO, adapter: ModelAdapter<S>, message: s
       if (calls + res.calls.length > MAX_TOOL_CALLS_PER_TURN) {
         adapter.addResults(state, res.calls.map((call) => ({ call, text: "Not run: this turn reached its tool-call limit.", isError: true })));
         io.saveState(state);
-        return { outcome: "limit", error: `Stopped after ${MAX_TOOL_CALLS_PER_TURN} tool calls. Send a follow-up to let it continue.` };
+        // Not a failure: the conversation is intact and a follow-up carries on.
+        io.note(`Paused after ${MAX_TOOL_CALLS_PER_TURN} tool calls. Send a follow-up to let it continue.`);
+        return { outcome: "done" };
       }
       const results = [];
       for (const call of res.calls) {

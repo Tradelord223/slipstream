@@ -29,6 +29,8 @@ export interface Command<S extends z.ZodType = z.ZodType> {
   description: string;
   scope: Scope;
   input: S;
+  /** For one principal's own use (Autopilot's decisions): listed only to actors this accepts. */
+  visibleTo?: (ctx: AppContext, actor: Actor) => boolean;
   /** Reads don't change anything and aren't recorded as activity. */
   readOnly?: boolean;
   /** When an agent calls this, return why a person must approve it first (or null to run now). */

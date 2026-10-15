@@ -60,6 +60,17 @@ async function waitFor(check: () => boolean, ms = 3_000) {
   }
 }
 
+/** Wait until nothing has been running for a few checks in a row (a finished batch may start the next run). */
+async function quiet(busy: () => boolean) {
+  let calm = 0;
+  const end = Date.now() + 5_000;
+  while (calm < 5) {
+    if (Date.now() > end) throw new Error("timed out");
+    calm = busy() ? 0 : calm + 1;
+    await new Promise((r) => setTimeout(r, 15));
+  }
+}
+
 describe("Autopilot", () => {
   let env: TestEnv;
   let account: string;
@@ -74,10 +85,7 @@ describe("Autopilot", () => {
     env.ctx.store.ingest(env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", account)!, { messages, cursor: null, done: false });
   const settle = async () => {
     await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
-    await waitFor(() => !busy());
-    // A finished decide batch may start a drafting run.
-    await new Promise((r) => setTimeout(r, 20));
-    await waitFor(() => !busy());
+    await quiet(busy);
   };
 
   before(async () => {
@@ -257,5 +265,143 @@ describe("Autopilot helpers", () => {
   test("editRatio measures how much a draft changed before sending", () => {
     assert.equal(editRatio("Thanks, 3pm works", "Thanks, 3pm works"), 0);
     assert.equal(editRatio("Thanks, 3pm works", "Thanks, 4pm works"), 1 / 3);
+  });
+});
+
+describe("Autopilot under pressure", () => {
+  let env: TestEnv;
+  let account: string;
+  const user = () => env.ctx.users.get(LOCAL_USER_ID)!;
+  const runs = () => env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM cloud_runs WHERE origin = 'autopilot'")!.n;
+  const busy = () => env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM cloud_runs WHERE status = 'running'")!.n > 0;
+  const thread = (remote: string) => env.ctx.db.get<{ id: string; in_inbox: number }>("SELECT id, in_inbox FROM threads WHERE remote_id = ?", remote)!;
+  const item = (threadId: string) => env.ctx.db.get<{ id: string; stage: string; attempts: number; draft_id: string | null }>("SELECT * FROM autopilot_items WHERE thread_id = ?", threadId);
+  const ingest = (messages: ReturnType<typeof msg>[]) =>
+    env.ctx.store.ingest(env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", account)!, { messages, cursor: null, done: false });
+  const person = (remote: string, extra: Partial<ReturnType<typeof msg>> = {}) =>
+    msg({ from: { name: "Ana Reyes", email: `ana+${remote}@kettleby.test` }, subject: `Question ${remote}`, bodyText: "Can you confirm?", remoteThreadId: remote, sentAt: Date.now(), ...extra });
+
+  before(async () => {
+    env = makeEnv();
+    account = addAccount(env.ctx, LOCAL_USER_ID, "sam@fernpoint.test");
+    env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sensible, draft: drafter }));
+    await env.api("/api/autopilot", { method: "PUT", json: { enabled: true, mode: "auto", draftReplies: true } });
+    await new Promise((r) => setTimeout(r, 5));
+  });
+  after(() => env.cleanup());
+
+  test("overlapping passes share one run instead of colliding", async () => {
+    ingest([person("o1"), person("o2")]);
+    const before = runs();
+    await Promise.all([env.ctx.autopilot.tickUser(LOCAL_USER_ID), env.ctx.autopilot.tickUser(LOCAL_USER_ID), env.ctx.autopilot.tick()]);
+    await quiet(busy);
+    assert.equal(runs() - before, 2, "one sort run and one draft run");
+    assert.equal(item(thread("o1").id)!.attempts, 1);
+  });
+
+  test("every conversation that needs a reply gets a draft, beyond one run's share", async () => {
+    ingest(["r1", "r2", "r3", "r4", "r5", "r6", "r7"].map((r) => person(r)));
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    await quiet(busy);
+    for (const r of ["r1", "r2", "r3", "r4", "r5", "r6", "r7"]) assert.ok(item(thread(r).id)?.draft_id, `${r} has a draft`);
+  });
+
+  test("old mail imported after Autopilot was turned on isn't treated as new; backfill picks up what was sent recently", async () => {
+    const yearAgo = Date.now() - 365 * 86_400_000;
+    ingest([person("old1", { sentAt: yearAgo }), person("recent1", { sentAt: Date.now() - 3 * 86_400_000 })]);
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    await quiet(busy);
+    assert.equal(item(thread("old1").id), undefined);
+    assert.equal(item(thread("recent1").id), undefined, "sent days before it arrived: an import");
+    await env.api("/api/autopilot/backfill", { method: "POST", json: { days: 7 } });
+    await quiet(busy);
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    await quiet(busy);
+    assert.equal(item(thread("old1").id), undefined, "older than the backfill");
+    assert.equal(item(thread("recent1").id)?.stage, "decided");
+  });
+
+  test("the person's own draft in a thread is never adopted or deleted", async () => {
+    let draftId = "";
+    env.ctx.cloud.engines.set(
+      "loop:openai",
+      scripted({
+        decide: sensible,
+        draft: async (io, message) => {
+          // While Autopilot drafts, the person writes their own reply with a colleague on Cc.
+          const tid = /^Conversation (\S+):/m.exec(message)![1]!;
+          const res = await env.ctx.commands.execute({ kind: "human", user: user() }, "drafts.create", { threadId: tid, cc: ["lee@fernpoint.test"], body: "Looping in Lee." });
+          draftId = (res as { result: { id: string } }).result.id;
+        },
+      }),
+    );
+    ingest([person("mine")]);
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    await quiet(busy);
+    assert.ok(env.ctx.db.get("SELECT 1 AS x FROM drafts WHERE id = ?", draftId), "still there");
+    assert.equal(item(thread("mine").id)!.draft_id, null, "not credited to Autopilot");
+    env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sensible, draft: drafter }));
+  });
+
+  test("a model that finishes without deciding is reported, and a start that never happened costs no attempt", async () => {
+    env.ctx.cloud.engines.set("loop:openai", scripted({ decide: async () => {} }));
+    ingest([person("lazy")]);
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    await quiet(busy);
+    const o = await env.ctx.autopilot.overview(LOCAL_USER_ID);
+    assert.match(o.problem ?? "", /without deciding/);
+    assert.equal(item(thread("lazy").id)!.stage, "failed");
+    assert.equal(item(thread("lazy").id)!.attempts, 1);
+
+    // The engine can't start: the conversation waits without losing a try.
+    const failing: Engine = { ...scripted({ decide: sensible }), status: async () => ({ id: "loop:openai", label: "Scripted", kind: "loop", ready: true, detail: "", billing: "api" }) };
+    env.ctx.cloud.engines.set("loop:openai", failing);
+    for (let i = 0; i < 3; i++) env.ctx.db.run("INSERT INTO cloud_runs (id, user_id, instruction, status, created_at, engine, origin) VALUES (?, ?, 'busy', 'running', ?, 'loop:openai', 'assistant')", `run_busy_${i}`, LOCAL_USER_ID, Date.now());
+    (env.ctx.cloud as unknown as { active: Map<string, unknown> }).active.set("run_busy_0", { userId: LOCAL_USER_ID, ctl: new AbortController(), engine: "loop:openai", agentId: "x" });
+    (env.ctx.cloud as unknown as { active: Map<string, unknown> }).active.set("run_busy_1", { userId: LOCAL_USER_ID, ctl: new AbortController(), engine: "loop:openai", agentId: "x" });
+    (env.ctx.cloud as unknown as { active: Map<string, unknown> }).active.set("run_busy_2", { userId: LOCAL_USER_ID, ctl: new AbortController(), engine: "loop:openai", agentId: "x" });
+    (env.ctx.autopilot as unknown as { lastFailure: Map<string, number> }).lastFailure.clear();
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    assert.equal(item(thread("lazy").id)!.attempts, 1, "the three-run cap refused it; no try was used");
+    for (let i = 0; i < 3; i++) (env.ctx.cloud as unknown as { active: Map<string, unknown> }).active.delete(`run_busy_${i}`);
+    env.ctx.db.run("UPDATE cloud_runs SET status = 'done' WHERE id LIKE 'run_busy_%'");
+    env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sensible, draft: drafter }));
+    (env.ctx.autopilot as unknown as { lastFailure: Map<string, number> }).lastFailure.clear();
+  });
+
+  test("Autopilot's own commands aren't offered to other agents", () => {
+    const other = env.ctx.agents.create(LOCAL_USER_ID, "Helper", ["read", "triage", "draft"]).agent;
+    const names = env.ctx.commands.describe({ actor: { kind: "agent", user: user(), agent: other } }).map((c) => c.name);
+    assert.ok(!names.includes("autopilot.decide") && !names.includes("autopilot.saveVoice"));
+    assert.ok(names.includes("autopilot.list"));
+    const pilot = env.ctx.autopilot.principal(LOCAL_USER_ID);
+    assert.ok(env.ctx.commands.describe({ actor: { kind: "agent", user: user(), agent: pilot } }).some((c) => c.name === "autopilot.decide"));
+  });
+});
+
+describe("runner budgets and routines", () => {
+  let env: TestEnv;
+  before(() => {
+    env = makeEnv();
+  });
+  after(() => env.cleanup());
+
+  test("changing one budget keeps the other", () => {
+    env.ctx.cloud.setBudgets(LOCAL_USER_ID, { runBudgetCents: 50, monthlyBudgetCents: 500 });
+    env.ctx.cloud.setBudgets(LOCAL_USER_ID, { runBudgetCents: 300, monthlyBudgetCents: undefined });
+    assert.deepEqual(env.ctx.cloud.budgets(LOCAL_USER_ID), { runBudgetCents: 300, monthlyBudgetCents: 500 });
+  });
+
+  test("a run that hit its budget can't be continued", async () => {
+    env.ctx.db.run("INSERT INTO cloud_runs (id, user_id, instruction, status, created_at, engine, origin) VALUES ('run_spent', ?, 'x', 'budget', ?, 'loop:openai', 'assistant')", LOCAL_USER_ID, Date.now());
+    await assert.rejects(env.ctx.cloud.reply(LOCAL_USER_ID, "run_spent", "keep going"), /budget/);
+  });
+
+  test("a due routine waits, rather than being used up, while no model is connected", async () => {
+    const r = env.ctx.cloud.saveRoutine(LOCAL_USER_ID, { name: "Morning", instruction: "Triage", trigger: { type: "schedule", days: [0, 1, 2, 3, 4, 5, 6], time: "08:00", timezone: "UTC" }, enabled: true });
+    env.ctx.db.run("UPDATE cloud_routines SET next_run_at = ? WHERE id = ?", Date.now() - 1000, r.id);
+    await env.ctx.cloud.tick();
+    const after = env.ctx.db.get<{ next_run_at: number }>("SELECT next_run_at FROM cloud_routines WHERE id = ?", r.id)!;
+    assert.ok(after.next_run_at < Date.now(), "still due");
   });
 });

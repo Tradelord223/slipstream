@@ -25,7 +25,7 @@ export function v1Routes(ctx: AppContext) {
 
   app.get("/v1/commands", (c) => {
     const actor = c.get("actor");
-    const all = commands.describe();
+    const all = commands.describe({ actor });
     return c.json({ commands: actor.kind === "agent" ? all.filter((d) => actor.agent.scopes.includes(d.scope)) : all });
   });
 
@@ -160,6 +160,7 @@ export async function handleMcp(ctx: AppContext, actor: Actor, request: Request)
   );
   for (const cmd of ctx.commands.list()) {
     if (actor.kind === "agent" && !actor.agent.scopes.includes(cmd.scope)) continue;
+    if (!ctx.commands.visible(cmd, actor)) continue;
     server.registerTool(
       toolName(cmd.name),
       {

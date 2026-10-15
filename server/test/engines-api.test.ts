@@ -583,8 +583,8 @@ describe("turns that stop early still leave a valid conversation", () => {
         const engine = engineFor(kind);
         const io = fakeIO({ answers: answers() });
         const out = await engine.turn(io, "Go through everything.");
-        assert.equal(out.outcome, "limit");
-        assert.match((out as { error: string }).error, /25 tool calls/);
+        assert.deepEqual(out, { outcome: "done" }, "a pause, not a failure");
+        assert.match(io.notes.join(" "), /25 tool calls/);
         assert.equal(io.calls.length, 25);
         const io2 = fakeIO({ answers: answers(), state: io.state });
         assert.deepEqual(await engine.turn(io2, "Carry on."), { outcome: "done" });

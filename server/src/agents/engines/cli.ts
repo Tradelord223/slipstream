@@ -301,7 +301,10 @@ async function claudeTurn(io: RunIO, message: string, bin: string): Promise<Turn
     if (ran.aborted || ran.timedOut || !res) return endedEarly(CLAUDE, ran, token);
     // No cost is added: this is the person's plan, not an API key.
     if (res.subtype === "success" && res.is_error !== true) return { outcome: "done" };
-    if (res.subtype === "error_max_turns") return { outcome: "limit", error: `Claude Code stopped after ${MAX_TOOL_CALLS_PER_TURN} turns.` };
+    if (res.subtype === "error_max_turns") {
+      io.note(`Paused after ${MAX_TOOL_CALLS_PER_TURN} turns. Send a follow-up to let it continue.`);
+      return { outcome: "done" };
+    }
     const errors = Array.isArray(res.errors) ? (res.errors as unknown[]).filter((e) => typeof e === "string").join("; ") : "";
     return failure(str(res.result) || errors || `Claude Code failed (${str(res.subtype) ?? "error"}).`, token);
   });
