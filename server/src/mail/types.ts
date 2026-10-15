@@ -128,6 +128,10 @@ export interface MailProvider {
   sync(cursor: string | null): Promise<SyncPage>;
   apply(action: RemoteAction): Promise<{ remoteId?: string } | void>;
   fetchAttachment?(messageRemoteId: string, attachmentRemoteId: string): Promise<Buffer>;
+  /** Rename a label at the provider (labels whose remoteId is still a local "name:" placeholder are skipped). */
+  renameLabel?(label: { remoteId: string; name: string }, newName: string): Promise<void>;
+  /** Delete a label at the provider; messages keep existing, they just lose the label. */
+  deleteLabel?(label: { remoteId: string; name: string }): Promise<void>;
   close?(): Promise<void>;
 }
 

@@ -157,9 +157,16 @@ export class SyncEngine {
         const account = this.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", row.account_id);
         if (!account) continue;
         this.db.run("UPDATE pending_actions SET status = 'running' WHERE id = ? AND status = 'queued'", row.id);
-        const { action, threadId } = JSON.parse(row.payload) as { action: RemoteAction; threadId: string };
+        const { action, threadId, labelOp } = JSON.parse(row.payload) as {
+          action?: RemoteAction;
+          threadId?: string;
+          labelOp?: { kind: "rename" | "delete"; label: { remoteId: string; name: string }; newName?: string };
+        };
         try {
-          await this.provider(account).apply(action);
+          const provider = this.provider(account);
+          if (labelOp?.kind === "rename") await provider.renameLabel?.(labelOp.label, labelOp.newName!);
+          else if (labelOp?.kind === "delete") await provider.deleteLabel?.(labelOp.label);
+          else if (action) await provider.apply(action);
           this.db.run("UPDATE pending_actions SET status = 'done', last_error = NULL WHERE id = ?", row.id);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

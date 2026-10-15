@@ -24,6 +24,20 @@ Slipstream is built for people and their AI agents together. Anything you can do
   You approve with Enter and reject with Backspace.
 - **Activity and undo.** Every action is recorded with who did it, from your own keystrokes to each agent's. An agent's actions also show at the top of the conversation they touched ("Inbox agent marked this done · Undo"). Undo is exact within the triage window, and after that it runs the opposite action.
 
+## The cloud agent (one API key)
+
+Want an agent without running one? Open **Agent** in the sidebar and paste an Anthropic API key. Slipstream sets up Claude on Anthropic's Managed Agents, and its only tools are Slipstream's own commands. Anthropic runs the agent loop and Slipstream answers each tool call. So the cloud agent:
+
+- **uses the same rules as any other agent:** scopes, approvals, attribution and undo, under the name "Claude (cloud)";
+- **needs no public address:** it never reaches your mail directly, and never sees a password or token;
+- **works on demand:** type "Ask Claude…" in the Agent page or the command palette, and watch the run live;
+- **runs routines:**
+  - on a schedule ("Weekdays at 8:00: triage the inbox and draft replies to people waiting on me");
+  - when new mail matches a search ("When `from:@client.com` arrives: draft a reply");
+- **has hard budgets:** each run has a dollar cap enforced by Anthropic ($1 by default), and Slipstream stops starting runs once the month's spend reaches your limit ($20 by default).
+
+It runs Claude Opus 5.5. Your key is stored encrypted on your own disk. Runs happen while Slipstream is running, which on a laptop means while it's awake; a team server runs routines around the clock. Disconnecting revokes the agent in Slipstream. The agent definition stays in your Anthropic Console, where you can archive it.
+
 ## Give an agent access
 
 Settings → Agents → **New agent**. Choose the scopes and the approval policy, then copy the token.

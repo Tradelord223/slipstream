@@ -21,6 +21,11 @@ export interface Config {
   /** Seed a demo account on first boot (local mode only). */
   demo: boolean;
   syncIntervalSeconds: number;
+  /**
+   * Where users can get this server's source (AGPL-3.0 section 13). Point it at your fork if you run a
+   * modified Slipstream for others.
+   */
+  sourceUrl: string;
 }
 
 function env(name: string): string | undefined {
@@ -62,6 +67,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     anthropicApiKey: env("ANTHROPIC_API_KEY"),
     demo: mode === "local" && env("SLIPSTREAM_DEMO") !== "0",
     syncIntervalSeconds: Number(env("SLIPSTREAM_SYNC_SECONDS") ?? 60),
+    sourceUrl: env("SLIPSTREAM_SOURCE_URL") ?? "https://github.com/Tradelord223/slipstream",
     ...overrides,
   };
   mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });

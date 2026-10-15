@@ -149,6 +149,33 @@ describe("approvals", () => {
     assert.equal((await h(`/api/drafts/${d.body.result.id}`)).body.status, "draft");
   });
 
+  test("an agent can't dodge the bulk limit by splitting it into small calls", async () => {
+    const { token } = await makeAgent(server.url, "Splitter", ["read", "triage"], { bulkThreshold: 2 });
+    const a = agent(server.url, token);
+    const done = (await a("/api/v1/mail.search", { query: "in:done", limit: 30 })).body.result.threads as { id: string }[];
+    const ids = done.slice(10, 13).map((t) => t.id);
+    assert.equal((await a("/api/v1/triage.trash", { threadIds: ids.slice(0, 2) })).status, 200);
+    assert.equal((await a("/api/v1/triage.trash", { threadIds: ids.slice(2, 3) })).status, 202, "the 10-minute window adds up");
+  });
+
+  test("a send's review shows where links go, which images load, and which account sends it", async () => {
+    const { token } = await makeAgent(server.url, "Linker", ["read", "draft", "send"]);
+    const a = agent(server.url, token);
+    const accounts = (await a("/api/v1/accounts.list", {})).body.result as { id: string; email: string }[];
+    const d = await a("/api/v1/drafts.create", {
+      accountId: accounts[0]!.id,
+      to: ["sam@fernpoint.co"],
+      subject: "Notes",
+      bodyHtml: '<p>Notes are <a href="https://evil.example/x?u=1">here</a>.<img src="https://track.example/p.gif"></p>',
+    });
+    const send = await a("/api/v1/drafts.send", { draftId: d.body.result.id });
+    const item = ((await h("/api/v1/approvals")).body.approvals as { id: string; preview: string }[]).find((q) => q.id === send.body.approvalId)!;
+    assert.match(item.preview, /here \(https:\/\/evil\.example\/x\?u=1\)/);
+    assert.match(item.preview, /\[image: https:\/\/track\.example\/p\.gif\]/);
+    assert.match(item.preview, new RegExp(`From: .*${accounts[0]!.email.replace(".", "\\.")}`));
+    await h(`/api/v1/approvals/${item.id}/reject`, { method: "POST" });
+  });
+
   test("bulk trash over the agent's threshold needs approval; small trash doesn't", async () => {
     const { token } = await makeAgent(server.url, "Cleaner", ["read", "triage"], { bulkThreshold: 2 });
     const a = agent(server.url, token);
@@ -238,5 +265,40 @@ describe("webhooks", () => {
     } finally {
       receiver.close();
     }
+  });
+});
+
+describe("fast paths for agents", () => {
+  test("mail.digest orients an agent in one call; search results are compact by default", async () => {
+    const { token } = await makeAgent(server.url, "Orienter", ["read"]);
+    const a = agent(server.url, token);
+    const d = (await a("/api/v1/mail.digest", { perSplit: 3 })).body.result;
+    assert.ok(d.inbox.total > 0);
+    assert.ok(d.splits.length >= 2 && d.splits[0].newest.length <= 3);
+    assert.ok(Array.isArray(d.labels));
+    const compact = (await a("/api/v1/mail.search", { query: "from:priya" })).body.result.threads[0];
+    assert.ok(compact.id && compact.subject && compact.at);
+    assert.equal(compact.participants, undefined, "compact rows leave out the heavy fields");
+    const full = (await a("/api/v1/mail.search", { query: "from:priya", detail: "full" })).body.result.threads[0];
+    assert.ok(Array.isArray(full.participants));
+  });
+
+  test("batch runs several commands in one round trip, each independent", async () => {
+    const { token } = await makeAgent(server.url, "Batcher", ["read", "triage"]);
+    const a = agent(server.url, token);
+    const ids = ((await a("/api/v1/mail.search", { query: "in:inbox", limit: 2 })).body.result.threads as { id: string }[]).map((t) => t.id);
+    const r = await a("/api/v1/batch", {
+      commands: [
+        { command: "labels.create", input: { name: "Batched", color: "#B79CFF" } },
+        { command: "triage.label", input: { threadIds: ids, label: "Batched" } },
+        { command: "drafts.send", input: { draftId: "nope" } },
+        { command: "labels.list", input: {} },
+      ],
+    });
+    assert.equal(r.status, 200);
+    const results = r.body.results as { status: string; httpStatus?: number; result?: unknown }[];
+    assert.deepEqual(results.map((x) => x.status), ["done", "done", "error", "done"]);
+    assert.equal(results[2]!.httpStatus, 403, "no send scope");
+    assert.ok((results[3]!.result as { name: string; count: number }[]).some((l) => l.name === "Batched" && l.count === ids.length));
   });
 });

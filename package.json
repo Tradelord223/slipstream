@@ -14,12 +14,13 @@
     "dev": "node scripts/dev.js",
     "dev:server": "node --watch server/src/main.ts",
     "dev:web": "vite --config web/vite.config.ts",
-    "build": "vite build --config web/vite.config.ts && node scripts/build-server.js",
+    "build": "vite build --config web/vite.config.ts && node scripts/build-server.js && node scripts/third-party-notices.js",
     "start": "node dist/server.js",
     "test": "node --test --test-reporter=spec \"server/test/**/*.test.ts\"",
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "bench": "node scripts/bench.ts",
-    "test:contract": "node --test --test-reporter=spec \"contract/**/*.test.ts\""
+    "test:contract": "node --test --test-reporter=spec \"contract/**/*.test.ts\"",
+    "schema:export": "node scripts/export-schema.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",

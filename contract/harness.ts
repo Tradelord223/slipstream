@@ -16,14 +16,24 @@ export interface Server {
   stop(): Promise<void>;
 }
 
-export async function startServer(): Promise<Server> {
-  const external = process.env.SLIPSTREAM_CONTRACT_URL;
+export async function startServer(opts: { mode?: "local" | "team" } = {}): Promise<Server> {
+  const mode = opts.mode ?? "local";
+  const external = mode === "team" ? process.env.SLIPSTREAM_CONTRACT_TEAM_URL : process.env.SLIPSTREAM_CONTRACT_URL;
   if (external) return { url: external.replace(/\/$/, ""), dataDir: null, stop: async () => {} };
 
   const dataDir = mkdtempSync(join(tmpdir(), "slipstream-contract-"));
   const port = 4600 + Math.floor(Math.random() * 300);
   const child: ChildProcess = spawn(process.execPath, ["server/src/main.ts"], {
-    env: { ...process.env, SLIPSTREAM_DATA_DIR: dataDir, SLIPSTREAM_PORT: String(port), SLIPSTREAM_MODE: "local", SLIPSTREAM_DEMO: "1", SLIPSTREAM_SYNC_SECONDS: "3600" },
+    env: {
+      ...process.env,
+      SLIPSTREAM_DATA_DIR: dataDir,
+      SLIPSTREAM_PORT: String(port),
+      PORT: String(port),
+      SLIPSTREAM_MODE: mode,
+      SLIPSTREAM_DEMO: "1",
+      SLIPSTREAM_SYNC_SECONDS: "3600",
+      ...(mode === "team" ? { SLIPSTREAM_SECRET: "contract-secret", SLIPSTREAM_PUBLIC_URL: `http://127.0.0.1:${port}`, SLIPSTREAM_HOST: "127.0.0.1" } : {}),
+    },
     stdio: ["ignore", "ignore", "inherit"],
   });
   const url = `http://127.0.0.1:${port}`;
@@ -46,11 +56,12 @@ export async function startServer(): Promise<Server> {
   };
 }
 
-/** The dashboard's own client: same-origin, with the client header. */
-export function human(base: string) {
+/** The dashboard's own client: same-origin, with the client header (and a session cookie in team mode). */
+export function human(base: string, cookie?: string) {
   return async (path: string, init: RequestInit & { json?: unknown } = {}) => {
     const headers = new Headers(init.headers);
     headers.set("x-slipstream", "1");
+    if (cookie) headers.set("cookie", cookie);
     if (init.json !== undefined) headers.set("content-type", "application/json");
     const res = await fetch(`${base}${path}`, { ...init, headers, body: init.json !== undefined ? JSON.stringify(init.json) : init.body });
     return { status: res.status, body: (await res.json().catch(() => null)) as any };

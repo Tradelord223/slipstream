@@ -292,7 +292,7 @@ export class Commands {
   }
 
   /** Undo by activity id: precise within the triage window, otherwise by running the inverse command. */
-  async undo(actor: Actor, activityId: string) {
+  async undo(actor: Actor, activityId: string): Promise<{ threadIds: string[] } | Extract<ExecuteResult, { status: "pending_approval" }>> {
     const { db, triage, events } = this.ctx;
     const row = db.get<ActivityRow>("SELECT * FROM activity WHERE id = ? AND user_id = ?", activityId, actor.user.id);
     if (!row) throw new HttpError(404, "Activity not found");
@@ -305,9 +305,16 @@ export class Commands {
     if (row.undo_token) threadIds = triage.revert(actor.user.id, row.undo_token);
     if (threadIds.length === 0 && row.inverse) {
       const inv = JSON.parse(row.inverse) as { command: string; input: unknown };
-      // The inverse runs as this actor but never needs approval: it restores what was.
       const cmd = this.get(inv.command);
-      const outcome = await cmd.run(this.ctx, actor, cmd.input.parse(inv.input));
+      const input = cmd.input.parse(inv.input);
+      // An inverse is still an action: an agent's undo goes through the same scope and approval rules
+      // (the inverse of "restore from trash" is "move to trash").
+      if (actor.kind === "agent") {
+        if (!actor.agent.scopes.includes(cmd.scope)) throw new HttpError(403, `Undoing this needs the "${cmd.scope}" scope.`);
+        const reason = cmd.approval?.(this.ctx, actor, input);
+        if (reason) return this.requestApproval(actor, cmd, input, reason);
+      }
+      const outcome = await cmd.run(this.ctx, actor, input);
       threadIds = outcome.threadIds ?? [];
     } else if (threadIds.length === 0) {
       throw new HttpError(409, "This action can't be undone anymore.");

@@ -134,6 +134,27 @@ results.push(
 const firstThread = inbox[0]!.id;
 results.push(await measure("Open a conversation", () => api(`/api/threads/${firstThread}`)));
 
+// ---- The agent path, end to end through auth: HTTP API and MCP ----
+const { token } = ctx.agents.create(user.id, "Bench agent", ["read", "triage", "draft"]);
+const asAgent = async (path: string, body: unknown, extra: Record<string, string> = {}) => {
+  const res = await app.fetch(
+    new Request(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: { host: `127.0.0.1:${port}`, authorization: `Bearer ${token}`, "content-type": "application/json", ...extra },
+      body: JSON.stringify(body),
+    }),
+  );
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return res.text();
+};
+const mcp = (method: string, params: unknown) =>
+  asAgent("/mcp", { jsonrpc: "2.0", id: 1, method, params }, { accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-11-25" });
+console.log("");
+results.push(await measure("Agent: POST /api/v1/mail.search (compact)", () => asAgent("/api/v1/mail.search", { query: "w5k contract" })));
+results.push(await measure("Agent: POST /api/v1/mail.digest", () => asAgent("/api/v1/mail.digest", {})));
+results.push(await measure("Agent: MCP tools/list", () => mcp("tools/list", {})));
+results.push(await measure("Agent: MCP tools/call mail_search", () => mcp("tools/call", { name: "mail_search", arguments: { query: "w5k contract" } })));
+
 ctx.db.close();
 if (!process.env.BENCH_KEEP) rmSync(dir, { recursive: true, force: true });
 console.log(`\n(Mark done row includes the undo round-trip, so it's two writes.)`);

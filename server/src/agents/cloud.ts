@@ -279,7 +279,7 @@ export class CloudAgent {
   }
 
   /** Start a run: a new Managed Agents session seeded with the instruction. Returns at once; work streams in. */
-  async start(userId: string, instruction: string, routineId: string | null = null) {
+  async start(userId: string, instruction: string, routineId: string | null = null, context?: { threadIds?: string[]; view?: string }) {
     const c = this.config(userId);
     const key = this.apiKey(userId);
     const principal = this.principal(userId);
@@ -291,7 +291,23 @@ export class CloudAgent {
     const id = newId("run");
     const now = Date.now();
     const user = this.ctx.users.get(userId)!;
-    const context = `Now: ${new Date(now).toISOString()} (the user's zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}).`;
+    // What the person is looking at, so "this" and "these" mean something. Only their own threads.
+    const focus = (context?.threadIds ?? [])
+      .map((tid) =>
+        this.ctx.db.get<{ id: string; subject: string }>(
+          "SELECT t.id, t.subject FROM threads t JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.user_id = ?",
+          tid,
+          userId,
+        ),
+      )
+      .filter((t): t is { id: string; subject: string } => Boolean(t));
+    const contextText = [
+      `Now: ${new Date(now).toISOString()} (the user's zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}).`,
+      context?.view ? `The user is looking at: ${context.view}.` : "",
+      focus.length ? `The user is pointing at these conversations (id: subject):\n${focus.map((t) => `- ${t.id}: ${t.subject}`).join("\n")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
     this.ctx.db.run(
       "INSERT INTO cloud_runs (id, user_id, routine_id, instruction, status, transcript, created_at) VALUES (?,?,?,?,?,?,?)",
       id, userId, routineId, instruction, "starting", JSON.stringify([{ kind: "user", text: instruction, at: now }]), now,
@@ -304,7 +320,7 @@ export class CloudAgent {
         title: instruction.slice(0, 80),
         metadata: { app: "slipstream", run: id },
         budget: { type: "limit", max_list_cost: { amount: String(c.runBudgetCents), currency: "USD" } },
-        initial_events: [{ type: "user.message", content: [{ type: "text", text: `${instruction}\n\n${context}` }] }],
+        initial_events: [{ type: "user.message", content: [{ type: "text", text: `${instruction}\n\n${contextText}` }] }],
       });
       this.ctx.db.run("UPDATE cloud_runs SET session_id = ?, status = 'running' WHERE id = ?", session.id, id);
       this.ctx.commands.record({ kind: "agent", user, agent: principal }, "cloud.run", `Started: ${instruction.slice(0, 120)}`, {});

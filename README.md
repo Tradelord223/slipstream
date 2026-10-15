@@ -42,6 +42,7 @@ Slipstream keeps the speed and drops the rest.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
 - **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
 - **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agent-api.md](docs/agent-api.md).
+- **A cloud agent with one API key.** Paste an Anthropic key and Claude works your inbox on Anthropic's Managed Agents, through Slipstream's own actions. Ask it anything, or give it routines ("weekdays at 8: triage and draft replies", "when client mail arrives: draft a reply"). It has hard budgets per run and per month, and sending still waits for you.
 - **claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI.
 
 ## See it
@@ -79,6 +80,9 @@ Fly.io is the recommended host: one always-on machine with a volume, about $4 a 
 | Full-text search, worst case (a word in nearly every message) | 53 ms | 56 ms |
 | Mark done and undo it (two writes) | 0.2 ms | 0.3 ms |
 | Open a conversation | 0.05 ms | 0.08 ms |
+| Agent: search over HTTP (`/api/v1/mail.search`, with auth) | 3.7 ms | 4.2 ms |
+| Agent: search over MCP (`tools/call mail_search`) | 3.9 ms | 4.5 ms |
+| Agent: whole-inbox digest in one call (`mail.digest`) | 9.8 ms | 12.2 ms |
 
 Provider round-trips never block you: actions apply locally first and reach Gmail, Outlook or your IMAP server a few seconds later, after the undo window.
 

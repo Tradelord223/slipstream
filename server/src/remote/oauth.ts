@@ -276,6 +276,7 @@ export function oauthRoutes(ctx: AppContext, originOf: OriginOf) {
       return c.json({ status: "denied", redirect: back.toString() });
     }
     if (r.status !== "approved") return c.json({ status: r.status });
+    if (r.expires_at < Date.now()) return c.json({ status: "expired" });
     // One-time: the code is minted on the first poll after approval.
     const code = randomToken(32);
     const claimed = db.run("UPDATE oauth_requests SET status = 'used', code_hash = ?, expires_at = ? WHERE id = ? AND status = 'approved'", sha256(code), Date.now() + 60_000, r.id);

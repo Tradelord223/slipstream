@@ -68,6 +68,7 @@ export function testConfig(over: Partial<Config> = {}): Config {
     host: "127.0.0.1",
     port: 4380,
     publicUrl: "http://127.0.0.1:4380",
+    sourceUrl: "https://example.test/source",
     dataDir: "/nonexistent",
     dbPath: "/nonexistent/slipstream.db",
     allowedHosts: new Set(),

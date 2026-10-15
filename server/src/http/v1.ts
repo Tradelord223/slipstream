@@ -115,6 +115,31 @@ export function v1Routes(ctx: AppContext) {
 
   // ---- Commands -------------------------------------------------------------
 
+  /**
+   * Several commands in one round trip, run in order (later ones can use ids from earlier results only
+   * if the caller chains them itself). Each result is independent: one failure doesn't undo the others.
+   */
+  app.post("/v1/batch", async (c) => {
+    const body = z
+      .object({
+        commands: z.array(z.object({ command: z.string().max(80), input: z.unknown().optional() })).min(1).max(25),
+        stopOnError: z.boolean().default(false),
+      })
+      .parse(await c.req.json());
+    const results: unknown[] = [];
+    for (const item of body.commands) {
+      try {
+        results.push({ command: item.command, ...(await commands.execute(c.get("actor"), item.command, item.input ?? {})) });
+      } catch (err) {
+        const status = err instanceof HttpError ? err.status : err instanceof z.ZodError ? 400 : 500;
+        const error = err instanceof z.ZodError ? z.prettifyError(err) : err instanceof Error ? err.message : String(err);
+        results.push({ command: item.command, status: "error", httpStatus: status, error });
+        if (body.stopOnError) break;
+      }
+    }
+    return c.json({ results });
+  });
+
   app.post("/v1/:command", async (c) => {
     const input = await c.req.json().catch(() => ({}));
     const result = await commands.execute(c.get("actor"), c.req.param("command"), input);
