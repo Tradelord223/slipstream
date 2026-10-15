@@ -10,7 +10,8 @@ import { getRoute, navigate } from "../store/route.ts";
 import { setAccountFilter, signOut, updateSettings, useSession } from "../store/session.ts";
 import { api } from "../api.ts";
 import { openAssistant } from "../store/assistant.ts";
-import { askClaude, useConnected } from "../store/cloud.ts";
+import { askAssistant } from "../store/cloud.ts";
+import { useAssistantName, useCanRun } from "../store/engines.ts";
 import { useLabels } from "../store/labels.ts";
 import { toast } from "../store/toasts.ts";
 import { closePalette, useUi, type PaletteMode } from "../store/ui.ts";
@@ -63,7 +64,8 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
   const session = useSession((s) => s);
-  const connected = useConnected();
+  const connected = useCanRun();
+  const assistantLabel = useAssistantName();
   const labelInfos = useLabels();
   // The label picker toggles several labels, then applies them together.
   const initialPicked = useRef<Set<string>>(initialMode === "label" ? commonLabels(ids) : new Set()).current;
@@ -142,7 +144,7 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
       return c ? bindingsOf(c, session.settings.keymap)[0] : undefined;
     };
     const here = getRoute().name === "thread" ? "thread" : getRoute().name === "mail" ? "list" : "page";
-    const order = ["Triage", "Write", "Go to", "Move", "Select", "Compose", "General"];
+    const order = ["Triage", "Write", "Go to", "Autopilot", "Move", "Select", "Compose", "General"];
     const rankOf = (g: string) => (order.includes(g) ? order.indexOf(g) : 99);
     const ranked = [...COMMANDS].sort((a, b) => rankOf(a.group) - rankOf(b.group));
     for (const c of ranked) {
@@ -161,7 +163,7 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
       out.push({ id: `acct:${a.id}`, title: `Switch to ${a.email}`, group: "Accounts", binding: i < 8 ? `ctrl+${i + 2}` : undefined, run: run(() => setAccountFilter(a.id)) }),
     );
     out.push({ id: "sync", title: "Sync now", group: "Accounts", run: run(() => void Promise.all(session.accounts.map((a) => api.syncAccount(a.id))).then(() => toast.info("Syncing"))) });
-    for (const [label, section] of [["General", "general"], ["Accounts", "accounts"], ["Splits", "splits"], ["Labels", "labels"], ["Snippets", "snippets"], ["Shortcuts", "shortcuts"], ["Team", "team"], ["AI", "ai"], ["Connect an assistant", "connect"]] as const) {
+    for (const [label, section] of [["General", "general"], ["Accounts", "accounts"], ["Splits", "splits"], ["Labels", "labels"], ["Snippets", "snippets"], ["Shortcuts", "shortcuts"], ["Team", "team"], ["AI", "ai"], ["Models & accounts", "models"], ["Connect an assistant", "connect"]] as const) {
       out.push({ id: `settings:${section}`, title: `Settings: ${label}`, group: "Settings", run: run(() => navigate(`/settings/${section}`)) });
     }
     if (session.mode === "team") out.push({ id: "signout", title: "Sign out", group: "Accounts", run: run(() => void signOut()) });
@@ -191,20 +193,20 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
     if (!query || zero) return items;
     const ranked = rank(items, query);
     if (mode !== "root" || !connected) return ranked;
-    // Typing anything also offers to hand it to Claude. It's the default only when no command matches,
+    // Typing anything also offers to hand it to the assistant. It's the default only when no command matches,
     // so Enter on a typo never starts a paid run by surprise.
     const ask: Item = {
       id: "ask-claude",
-      title: `Ask Claude: ${query}`,
-      group: "Claude",
+      title: `Ask ${assistantLabel}: ${query}`,
+      group: assistantLabel,
       run: () => {
         closePalette();
         openAssistant({ runId: null });
-        void askClaude(query).then((run) => run && openAssistant({ runId: run.id }));
+        void askAssistant(query).then((run) => run && openAssistant({ runId: run.id }));
       },
     };
     return ranked.length ? [...ranked, ask] : [ask];
-  }, [items, q, mode, zero, connected]);
+  }, [items, q, mode, zero, connected, assistantLabel]);
 
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-idx="${active}"]`)?.scrollIntoView({ block: "nearest" });

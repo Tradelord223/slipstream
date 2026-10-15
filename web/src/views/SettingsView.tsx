@@ -9,6 +9,7 @@ import { AccountsSettings } from "./settings/AccountsSettings.tsx";
 import { AgentsSettings } from "./settings/AgentsSettings.tsx";
 import { ConnectSettings } from "./settings/ConnectSettings.tsx";
 import { AiSettings } from "./settings/AiSettings.tsx";
+import { ModelsSettings } from "./settings/ModelsSettings.tsx";
 import { LabelsSettings } from "./settings/LabelsSettings.tsx";
 import { GeneralSettings } from "./settings/GeneralSettings.tsx";
 import { ShortcutsSettings } from "./settings/ShortcutsSettings.tsx";
@@ -26,6 +27,7 @@ const SECTIONS = [
   { id: "shortcuts", label: "Shortcuts" },
   { id: "team", label: "Team" },
   { id: "ai", label: "AI" },
+  { id: "models", label: "Models & accounts" },
   { id: "agents", label: "Agents" },
   { id: "connect", label: "Connect" },
   { id: "about", label: "About" },
@@ -74,6 +76,7 @@ export function SettingsView({ section }: { section: string }) {
           {current.id === "shortcuts" && <ShortcutsSettings />}
           {current.id === "team" && <TeamSettings />}
           {current.id === "ai" && <AiSettings />}
+          {current.id === "models" && <ModelsSettings />}
           {current.id === "agents" && <AgentsSettings />}
           {current.id === "connect" && <ConnectSettings />}
         </div>

@@ -3,6 +3,7 @@ import type {
   Address, Bootstrap, ContactInfo, Contact, Counts, Draft, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
   ThreadPage, TriageKind, TriageResult, SharedComment,
   CloudConnectInput, CloudRun, CloudStatus, LabelInfo, LabelRule, Routine, RoutineInput,
+  AutopilotOverview, AutopilotPatch, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction,
 } from "./types.ts";
 
 export class ApiError extends Error {
@@ -37,8 +38,10 @@ async function request<T>(method: string, path: string, body?: unknown, opts: { 
   if (!res.ok) {
     let message = res.statusText;
     try {
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as { error?: string; issues?: { message?: string }[] };
       if (data.error) message = data.error;
+      // Validation failures say "Invalid request"; the first issue says what to fix.
+      if (data.issues?.[0]?.message) message = data.issues[0].message;
     } catch {
       /* not JSON */
     }
@@ -176,12 +179,37 @@ export const api = {
   cloudDisconnect: () => post<CloudStatus>("/api/cloud/disconnect"),
   cloudRuns: () => get<{ runs: CloudRun[] }>("/api/cloud/runs"),
   cloudRun: (id: string, signal?: AbortSignal) => get<CloudRun>(`/api/cloud/runs/${encodeURIComponent(id)}`, signal),
-  startRun: (instruction: string, context?: { threadIds: string[] }) => post<CloudRun>("/api/cloud/runs", context ? { instruction, context } : { instruction }),
+  startRun: (instruction: string, context?: { threadIds: string[] }, engine?: EngineId | null) =>
+    post<CloudRun>("/api/cloud/runs", { instruction, ...(context ? { context } : {}), ...(engine ? { engine } : {}) }),
   replyRun: (id: string, text: string) => post<CloudRun>(`/api/cloud/runs/${encodeURIComponent(id)}/messages`, { text }),
   stopRun: (id: string) => post<CloudRun>(`/api/cloud/runs/${encodeURIComponent(id)}/stop`),
   saveRoutine: (body: RoutineInput, id?: string) => (id ? put<Routine>(`/api/cloud/routines/${encodeURIComponent(id)}`, body) : post<Routine>("/api/cloud/routines", body)),
   deleteRoutine: (id: string) => del<{ ok: true }>(`/api/cloud/routines/${encodeURIComponent(id)}`),
   runRoutine: (id: string) => post<CloudRun>(`/api/cloud/routines/${encodeURIComponent(id)}/run`),
+
+  // Models & accounts: which engines can run agents, and the keys, sign-ins, models and budgets behind them.
+  engines: () => get<EnginesOverview>("/api/engines"),
+  setDefaultEngine: (engine: EngineId) => put<EnginesOverview>("/api/engines/default", { engine }),
+  setEngineModel: (id: EngineId, model: string | null) => put<EnginesOverview>(`/api/engines/${encodeURIComponent(id)}/model`, { model }),
+  saveEngineKey: (provider: KeyProvider, apiKey: string) => put<EnginesOverview>(`/api/engines/keys/${provider}`, { apiKey }),
+  removeEngineKey: (provider: KeyProvider) => del<EnginesOverview>(`/api/engines/keys/${provider}`),
+  saveBudgets: (b: { runBudgetCents?: number; monthlyBudgetCents?: number }) => put<EnginesOverview>("/api/engines/budgets", b),
+  chatgptSignIn: () => post<ChatGPTSignIn>("/api/engines/chatgpt/signin"),
+  chatgptComplete: (url: string) => post<EnginesOverview>("/api/engines/chatgpt/complete", { url }),
+  chatgptSignOut: () => post<EnginesOverview & { revoked: boolean }>("/api/engines/chatgpt/signout"),
+
+  // Autopilot: new mail sorted as it arrives. Every write answers with the fresh overview.
+  autopilot: (signal?: AbortSignal) => get<AutopilotOverview>("/api/autopilot", signal),
+  updateAutopilot: (patch: AutopilotPatch) => put<AutopilotOverview>("/api/autopilot", patch),
+  autopilotBackfill: (days: number) => post<AutopilotOverview>("/api/autopilot/backfill", { days }),
+  autopilotRun: () => post<AutopilotOverview>("/api/autopilot/run"),
+  autopilotLearnVoice: () => post<CloudRun>("/api/autopilot/voice"),
+  autopilotAccept: (id: string) => post<AutopilotOverview>(`/api/autopilot/items/${encodeURIComponent(id)}/accept`),
+  autopilotDismiss: (id: string) => post<AutopilotOverview>(`/api/autopilot/items/${encodeURIComponent(id)}/dismiss`),
+  autopilotUndo: (id: string) => post<AutopilotOverview>(`/api/autopilot/items/${encodeURIComponent(id)}/undo`),
+  autopilotAcceptAll: () => post<AutopilotOverview & { accepted: number }>("/api/autopilot/accept-all"),
+  saveSenderRule: (pattern: string, action: SenderRuleAction) => post<AutopilotOverview>("/api/autopilot/senders", { pattern, action }),
+  deleteSenderRule: (id: string) => del<AutopilotOverview>(`/api/autopilot/senders/${encodeURIComponent(id)}`),
 
   // Commands, called the way an agent would (people use the same registry).
   command,

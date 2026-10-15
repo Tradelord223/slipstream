@@ -1,31 +1,36 @@
 import { useEffect, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
-import { CloudSetup } from "../components/assistant/CloudForm.tsx";
+import { EmptyState } from "../components/InboxZero.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { PageHeader } from "../components/PageHeader.tsx";
 import { ago, agoShort, longTime } from "../lib/format.ts";
 import { useNow } from "../lib/hooks.ts";
 import { nextRunPhrase, STARTERS, triggerSummary, type Starter } from "../lib/routines.ts";
 import { assistant, newChat, openAssistant } from "../store/assistant.ts";
-import { dollars, deleteRoutine, loadHistory, modelName, refreshCloud, RUN_ACTIVE, runError, runRoutineNow, setRoutineEnabled, statusLabel, useCloud } from "../store/cloud.ts";
+import { dollars, deleteRoutine, loadHistory, refreshCloud, RUN_ACTIVE, runError, runRoutineNow, setRoutineEnabled, statusLabel, useCloud } from "../store/cloud.ts";
+import { refreshEngines, useAssistantName, useCanRun, useEffectiveEngine, useEngines } from "../store/engines.ts";
+import { engineLine, shortModel } from "../lib/engines.ts";
 import { navigate } from "../store/route.ts";
 import { toast } from "../store/toasts.ts";
 import type { CloudRun, CloudStatus, Routine } from "../types.ts";
 import { RoutineEditor } from "./agent/RoutineEditor.tsx";
 
-/** The full-page home for what runs on its own, what Claude has done, and what it may spend. */
+/** The full-page home for what runs on its own, what the assistant has done, and what it may spend. */
 export function AgentView() {
   const status = useCloud((s) => s.status);
   const error = useCloud((s) => s.error);
-  const connected = status?.connected === true;
+  const canRun = useCanRun();
+  const engine = useEffectiveEngine();
+  const loadedEngines = useEngines((s) => s.overview !== null);
 
   useEffect(() => {
     void refreshCloud();
+    void refreshEngines();
   }, []);
 
   return (
     <section className="mail-pane" aria-label="Agent">
-      <PageHeader title="Agent">{status && connected && <span className="cl-model cl-model-head">{modelName(status.model)}</span>}</PageHeader>
+      <PageHeader title="Agent">{status && canRun && engine && <span className="cl-model cl-model-head">{engineLine(engine)}</span>}</PageHeader>
       {!status ? (
         error ? (
           <div className="state-block">
@@ -43,12 +48,20 @@ export function AgentView() {
             <span />
           </div>
         )
-      ) : !connected ? (
-        <div className="cl-page">
-          <div className="cl-setup-wrap">
-            <CloudSetup status={status} />
+      ) : !canRun ? (
+        loadedEngines ? (
+          <div className="state-block">
+            <EmptyState title="Choose a model first" hint="Connect your ChatGPT plan, add an API key, or use Claude Code or Codex. Then chats and routines can run." />
+            <button className="btn btn-primary" onClick={() => navigate("/settings/models")}>
+              Set up a model
+            </button>
           </div>
-        </div>
+        ) : (
+          <div className="rv-skeleton" aria-busy="true" aria-label="Loading">
+            <span />
+            <span />
+          </div>
+        )
       ) : (
         <>
           <div className="cl-page">
@@ -68,23 +81,25 @@ export function AgentView() {
 
 function Chats({ status }: { status: CloudStatus }) {
   const now = useNow();
+  const name = useAssistantName();
   const [all, setAll] = useState(false);
-  const runs = status.runs;
+  // Runs Autopilot started belong to the Autopilot page.
+  const runs = status.runs.filter((r) => r.origin !== "autopilot");
   const shown = all ? runs : runs.slice(0, 8);
   return (
     <section className="cl-block" aria-labelledby="cl-chats">
       <div className="cl-block-head">
         <h2 id="cl-chats">Chats</h2>
         <button className="btn btn-sm" onClick={() => (newChat(), openAssistant({ runId: null }))}>
-          <Icon name="sparkle" size={14} /> Ask Claude
+          <Icon name="sparkle" size={14} /> Ask {name}
         </button>
       </div>
       {runs.length === 0 ? (
-        <p className="cl-empty">Nothing yet. Ask Claude something from the sidebar and it shows up here.</p>
+        <p className="cl-empty">Nothing yet. Ask the assistant something from the sidebar and it shows up here.</p>
       ) : (
         <ul className="cl-runs" role="list">
           {shown.map((r) => (
-            <RunRow key={r.id} run={r} agentId={status.agent?.id} now={now} />
+            <RunRow key={r.id} run={r} now={now} />
           ))}
         </ul>
       )}
@@ -103,9 +118,11 @@ function Chats({ status }: { status: CloudStatus }) {
   );
 }
 
-function RunRow({ run, agentId, now }: { run: CloudRun; agentId: string | undefined; now: number }) {
+function RunRow({ run, now }: { run: CloudRun; now: number }) {
   const active = RUN_ACTIVE.has(run.status);
+  const label = useEngines((s) => s.overview?.engines.find((e) => e.id === run.engine)?.label);
   const bits = [
+    label ? (run.model ? `${label} · ${shortModel(run.model)}` : label) : null,
     run.toolCalls > 0 ? `${run.toolCalls} ${run.toolCalls === 1 ? "action" : "actions"}` : null,
     run.costCents !== null ? dollars(run.costCents) : null,
   ].filter(Boolean);
@@ -132,8 +149,8 @@ function RunRow({ run, agentId, now }: { run: CloudRun; agentId: string | undefi
         <button className="btn btn-sm" onClick={() => openAssistant({ runId: run.id })} aria-label={`Open the chat: ${run.instruction}`}>
           Open
         </button>
-        {run.toolCalls > 0 && agentId && (
-          <button className="btn btn-sm btn-quiet" onClick={() => navigate(`/activity?agent=${encodeURIComponent(agentId)}`)} aria-label="View activity">
+        {run.toolCalls > 0 && (
+          <button className="btn btn-sm btn-quiet" onClick={() => navigate(run.agentId ? `/activity?agent=${encodeURIComponent(run.agentId)}` : "/activity")} aria-label="View activity">
             Activity
           </button>
         )}
@@ -160,7 +177,7 @@ function Routines({ status }: { status: CloudStatus }) {
       </div>
       {routines.length === 0 ? (
         <div className="cl-starters">
-          <p className="cl-empty">Routines run Claude for you on a schedule, or when certain mail arrives. Start from one of these.</p>
+          <p className="cl-empty">Routines do the work for you on a schedule, or when certain mail arrives. Start from one of these.</p>
           <ul role="list">
             {STARTERS.map((s) => (
               <li key={s.id}>
@@ -204,6 +221,7 @@ function Routines({ status }: { status: CloudStatus }) {
 
 function RoutineRow({ r, onEdit, onDelete }: { r: Routine; onEdit: () => void; onDelete: () => void }) {
   const now = useNow();
+  const engineName = useEngines((s) => (r.engine ? (s.overview?.engines.find((e) => e.id === r.engine)?.label ?? null) : null));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -230,6 +248,12 @@ function RoutineRow({ r, onEdit, onDelete }: { r: Routine; onEdit: () => void; o
       </div>
       <div className="cl-routine-when">{triggerSummary(r.trigger)}</div>
       <div className="cl-routine-meta">
+        {engineName && (
+          <>
+            <span>Runs on {engineName}</span>
+            <span aria-hidden="true">·</span>
+          </>
+        )}
         <span>{nextRunPhrase(r, now)}</span>
         <span aria-hidden="true">·</span>
         <span>{r.lastRunAt ? `Last ran ${ago(r.lastRunAt, now)}` : "Hasn't run yet"}</span>

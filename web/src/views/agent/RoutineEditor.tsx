@@ -4,11 +4,13 @@ import { Icon } from "../../components/Icon.tsx";
 import { DAY_LETTERS, DAY_NAMES, EVERY_DAY, WEEKDAYS, browserZone, timeZones } from "../../lib/routines.ts";
 import { SEARCH_HINTS } from "../../lib/searchHints.ts";
 import { matchText, useMatchCount } from "../../lib/useMatchCount.ts";
+import { engineLine } from "../../lib/engines.ts";
 import { saveRoutine } from "../../store/cloud.ts";
+import { useEffectiveEngine, useEngines } from "../../store/engines.ts";
 import { toast } from "../../store/toasts.ts";
-import type { Routine, RoutineInput } from "../../types.ts";
+import type { EngineId, Routine, RoutineInput } from "../../types.ts";
 
-/** Make or change a routine: what Claude should do, and what sets it off. */
+/** Make or change a routine: what the assistant should do, and what sets it off. */
 export function RoutineEditor({ routine, seed, onClose }: { routine?: Routine; seed?: RoutineInput; onClose: () => void }) {
   const start = routine ?? seed;
   const id = useId();
@@ -20,6 +22,9 @@ export function RoutineEditor({ routine, seed, onClose }: { routine?: Routine; s
   const [time, setTime] = useState(sched?.time ?? "08:00");
   const [zone, setZone] = useState(sched?.timezone ?? browserZone());
   const [query, setQuery] = useState(start?.trigger.type === "mail" ? start.trigger.query : "");
+  const [engine, setEngine] = useState<EngineId | "">(start?.engine ?? "");
+  const overview = useEngines((s) => s.overview);
+  const fallback = useEffectiveEngine();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const queryField = useRef<HTMLInputElement>(null);
@@ -50,7 +55,7 @@ export function RoutineEditor({ routine, seed, onClose }: { routine?: Routine; s
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return setError("Give the routine a name.");
-    if (!instruction.trim()) return setError("Say what Claude should do.");
+    if (!instruction.trim()) return setError("Say what the assistant should do.");
     if (type === "schedule" && days.size === 0) return setError("Pick at least one day.");
     if (type === "schedule" && !/^\d{2}:\d{2}$/.test(time)) return setError("Choose a time.");
     if (type === "mail" && !query.trim()) return setError("Enter a search for the mail that should set it off.");
@@ -60,6 +65,7 @@ export function RoutineEditor({ routine, seed, onClose }: { routine?: Routine; s
       name: name.trim(),
       instruction: instruction.trim(),
       enabled: routine?.enabled ?? true,
+      engine: engine || null,
       trigger: type === "schedule" ? { type: "schedule", days: [...days].sort((a, b) => a - b), time, timezone: zone } : { type: "mail", query: query.trim() },
     };
     try {
@@ -87,8 +93,20 @@ export function RoutineEditor({ routine, seed, onClose }: { routine?: Routine; s
             <input id="rt-name" className="field" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} autoComplete="off" />
           </label>
           <label className="form-row">
-            <span>What Claude should do</span>
+            <span>What it should do</span>
             <textarea className="field" rows={4} value={instruction} maxLength={4000} onChange={(e) => setInstruction(e.target.value)} />
+          </label>
+          <label className="form-row" htmlFor={`${id}-engine`}>
+            <span>Model</span>
+            <select id={`${id}-engine`} className="select" value={engine} onChange={(e) => setEngine(e.target.value as EngineId | "")}>
+              <option value="">Default{fallback ? ` (${engineLine(fallback)})` : ""}</option>
+              {(overview?.engines ?? []).map((e) => (
+                <option key={e.id} value={e.id} disabled={!e.ready && e.id !== engine}>
+                  {engineLine(e)}
+                  {e.ready ? "" : " (not set up)"}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="form-row">
             <span id={`${id}-when`}>Runs</span>

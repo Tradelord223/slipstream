@@ -10,16 +10,16 @@ const KEYS_URL = "https://console.anthropic.com/settings/keys";
 const DEFAULT_SCOPES: AgentScope[] = ["read", "triage", "draft"];
 const SEND_HINT = "Send drafts as you. Each send waits for your OK in Review.";
 
-function toDollars(cents: number) {
+export function toDollars(cents: number) {
   return (cents / 100).toFixed(2);
 }
 
-function parseMoney(v: string): number | null {
+export function parseMoney(v: string): number | null {
   const n = Number(v.replace(/[$,\s]/g, ""));
   return Number.isFinite(n) && v.trim() !== "" ? n : null;
 }
 
-function Money({ id, value, onChange, label }: { id: string; value: string; onChange: (v: string) => void; label: string }) {
+export function Money({ id, value, onChange, label }: { id: string; value: string; onChange: (v: string) => void; label: string }) {
   return (
     <label className="form-row" htmlFor={id}>
       <span>{label}</span>
@@ -173,6 +173,26 @@ export function CloudAccessDialog({ status, onClose }: { status: CloudStatus; on
         </div>
         <div className="ag-body">
           <CloudForm status={status} mode="edit" onDone={onClose} onCancel={onClose} />
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Connect the managed cloud agent from Models & accounts: the same form as first-run setup, in a dialog. */
+export function CloudConnectDialog({ status, onDone, onClose }: { status: CloudStatus | null; onDone: () => void; onClose: () => void }) {
+  return (
+    <Dialog label="Connect Claude (cloud)" onClose={onClose} className="dialog-agent" initialFocus="input[type=password]">
+      <div className="ag-form">
+        <div className="dialog-head ag-head">
+          <h3 aria-hidden="true">Connect Claude (cloud)</h3>
+          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+            <Icon name="x" />
+          </button>
+        </div>
+        <div className="ag-body">
+          <p className="cl-setup-lead">Claude works in your inbox through Slipstream's own actions. Sending still waits for you in Review.</p>
+          <CloudForm status={status} mode="setup" onDone={onDone} onCancel={onClose} />
         </div>
       </div>
     </Dialog>

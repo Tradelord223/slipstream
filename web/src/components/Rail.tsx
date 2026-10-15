@@ -6,6 +6,7 @@ import { LabelTree } from "./labels/LabelTree.tsx";
 import { Icon, Logo, type IconName } from "./Icon.tsx";
 import { Link } from "./Link.tsx";
 import { useReview } from "../store/agents.ts";
+import { proposalCount, useAutopilot } from "../store/autopilot.ts";
 import { useCounts } from "../store/counts.ts";
 import { useList } from "../store/list.ts";
 import { navigate, useRoute, viewPath, type MailView } from "../store/route.ts";
@@ -13,7 +14,7 @@ import { setAccountFilter, signOut, useSession } from "../store/session.ts";
 import { ui } from "../store/ui.ts";
 
 interface NavItem {
-  key: MailView["kind"] | "shared" | "review" | "activity" | "agent";
+  key: MailView["kind"] | "shared" | "review" | "activity" | "agent" | "autopilot";
   label: string;
   icon: IconName;
   to: string;
@@ -29,6 +30,7 @@ export function Rail() {
   const workspace = useSession((s) => s.workspace);
   const waiting = useReview((s) => s.pending?.length ?? 0);
   const unseen = useReview((s) => s.unseen);
+  const suggestions = useAutopilot((s) => proposalCount(s.overview));
 
   const activeView: MailView | null = route.name === "mail" ? route.view : route.name === "thread" ? listView : null;
   const items: NavItem[] = [
@@ -42,11 +44,12 @@ export function Rail() {
   ];
   const agentItems: NavItem[] = [
     { key: "agent", label: "Agent", icon: "sparkle", to: "/agent" },
+    { key: "autopilot", label: "Autopilot", icon: "zap", to: "/autopilot", count: suggestions },
     { key: "review", label: "Review", icon: "shield", to: "/review", count: waiting, notice: unseen },
     { key: "activity", label: "Activity", icon: "pulse", to: "/activity" },
   ];
   const isActive = (k: NavItem["key"]) =>
-    k === "shared" ? route.name === "shared" : k === "review" ? route.name === "review" : k === "activity" ? route.name === "activity" : k === "agent" ? route.name === "agent" : activeView?.kind === k;
+    k === "shared" ? route.name === "shared" : k === "review" ? route.name === "review" : k === "activity" ? route.name === "activity" : k === "agent" ? route.name === "agent" : k === "autopilot" ? route.name === "autopilot" : activeView?.kind === k;
   const renderItem = (it: NavItem) => (
     <li key={it.key}>
       <Link

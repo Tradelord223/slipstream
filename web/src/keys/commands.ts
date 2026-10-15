@@ -3,6 +3,7 @@ import { decide, focusedApproval, moveReviewFocus, openCreateAgent, openRelated,
 import { closeCompose, compose, discardDraft, edit, emitCompose, getEditor, instantIntro, sendCompose, sendLater, startNew, startReply } from "../store/compose.ts";
 import { clearFilter, clearSelection, focusEdge, list, loadMore, moveFocus, selectAll, setFilter, targetIds, toggleSelected } from "../store/list.ts";
 import { closeThread, goView, openThread, unsubscribeFrom } from "../store/nav.ts";
+import { acceptAll, acceptItem, autopilot, dismissItem, focusedItem, isProposal, moveFocus as moveAutopilotFocus, openItem, patchAutopilot, proposalCount, undoItem } from "../store/autopilot.ts";
 import { getRoute, navigate } from "../store/route.ts";
 import { session, setAccountFilter } from "../store/session.ts";
 import { cachedThread, loadThread } from "../store/threads.ts";
@@ -12,7 +13,7 @@ import { toggleAssistant } from "../store/assistant.ts";
 import { closePalette, openPalette, toggleContext, toggleRail, ui } from "../store/ui.ts";
 import type { ComposeKind } from "../lib/compose.ts";
 
-export type Scope = "global" | "list" | "thread" | "compose" | "page" | "review";
+export type Scope = "global" | "list" | "thread" | "compose" | "page" | "review" | "autopilot";
 
 export interface CommandDef {
   id: string;
@@ -130,6 +131,17 @@ export const COMMANDS: CommandDef[] = [
   { id: "review.reject", title: "Reject", group: "Review", keys: ["backspace"], scopes: ["review"], run: () => { const a = focusedApproval(); if (a && review.get().tab === "waiting") void decide(a, "reject"); } },
   { id: "review.open", title: "Open the conversation", group: "Review", keys: ["e"], scopes: ["review"], run: () => { const a = focusedApproval(); if (a && threadOf(a)) openRelated(a); } },
 
+  // ---- Autopilot
+  { id: "autopilot.next", title: "Next decision", group: "Autopilot", keys: ["j"], scopes: ["autopilot"], repeat: true, noPalette: true, run: () => moveAutopilotFocus(1) },
+  { id: "autopilot.prev", title: "Previous decision", group: "Autopilot", keys: ["k"], scopes: ["autopilot"], repeat: true, noPalette: true, run: () => moveAutopilotFocus(-1) },
+  { id: "autopilot.nextArrow", title: "Next decision", group: "Autopilot", keys: ["down"], scopes: ["autopilot"], repeat: true, noPalette: true, run: () => moveAutopilotFocus(1) },
+  { id: "autopilot.prevArrow", title: "Previous decision", group: "Autopilot", keys: ["up"], scopes: ["autopilot"], repeat: true, noPalette: true, run: () => moveAutopilotFocus(-1) },
+  { id: "autopilot.open", title: "Open the conversation", group: "Autopilot", keys: ["enter"], scopes: ["autopilot"], noPalette: true, run: () => openItem() },
+  { id: "autopilot.accept", title: "Accept the decision", group: "Autopilot", keys: ["a"], scopes: ["autopilot"], noPalette: true, run: () => { const i = focusedItem(); if (i && isProposal(i)) void acceptItem(i.id); } },
+  { id: "autopilot.dismiss", title: "Dismiss the decision", group: "Autopilot", keys: ["d"], scopes: ["autopilot"], noPalette: true, run: () => { const i = focusedItem(); if (i && isProposal(i)) void dismissItem(i.id); } },
+  { id: "autopilot.undo", title: "Undo what Autopilot did", group: "Autopilot", keys: ["u"], scopes: ["autopilot"], noPalette: true, run: () => { const i = focusedItem(); if (i?.applied && i.status !== "corrected") void undoItem(i.id); } },
+  { id: "autopilot.acceptAll", title: "Accept all Autopilot suggestions", group: "Autopilot", keys: ["shift+a"], scopes: ["autopilot"], noPalette: true, run: () => { if (proposalCount(autopilot.get().overview) > 0) void acceptAll(); } },
+
   // ---- Triage
   { id: "triage.done", title: "Mark done", group: "Triage", keys: ["e"], scopes: ["list", "thread"], run: () => void act.done() },
   { id: "triage.undone", title: "Move back to inbox", group: "Triage", keys: ["shift+e"], scopes: ["list", "thread"], run: () => void act.notDone() },
@@ -186,7 +198,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "shortcuts", title: "Keyboard shortcuts", group: "General", keys: ["?"], scopes: ["list", "thread", "page"], run: () => ui.set({ shortcuts: true }) },
   { id: "rail.toggle", title: "Toggle sidebar", group: "General", keys: ["\\"], scopes: ["list", "thread", "page"], run: toggleRail },
   { id: "context.toggle", title: "Toggle contact pane", group: "General", keys: [], scopes: ["thread"], run: toggleContext },
-  { id: "assistant.toggle", title: "Show or hide Claude", group: "General", keys: ["mod+."], scopes: ["global"], run: toggleAssistant },
+  { id: "assistant.toggle", title: "Show or hide the assistant", group: "General", keys: ["mod+."], scopes: ["global"], run: toggleAssistant },
   { id: "settings", title: "Settings", group: "General", keys: ["mod+,"], scopes: ["global"], run: () => navigate("/settings/general") },
   { id: "split.next", title: "Next split", group: "Move", keys: ["tab"], scopes: ["list"], needsListFocus: true, run: () => cycleSplit(1) },
   { id: "split.prev", title: "Previous split", group: "Move", keys: ["shift+tab"], scopes: ["list"], needsListFocus: true, run: () => cycleSplit(-1) },
@@ -203,6 +215,10 @@ export const COMMANDS: CommandDef[] = [
   goto("review", "Go to Review", "r", () => navigate("/review")),
   { id: "go.activity", title: "Go to Activity", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/activity") },
   goto("agent", "Go to Agent", "c", () => navigate("/agent")),
+  goto("autopilot", "Go to Autopilot", "p", () => navigate("/autopilot")),
+  { id: "go.models", title: "Go to Models & accounts", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/settings/models") },
+  { id: "autopilot.toggle", title: "Turn Autopilot on or off", group: "Autopilot", keys: [], scopes: ["global"], run: () => void patchAutopilot({ enabled: !autopilot.get().overview?.settings.enabled }) },
+  { id: "autopilot.acceptAllPalette", title: "Accept all Autopilot suggestions", group: "Autopilot", keys: [], scopes: ["global"], when: () => proposalCount(autopilot.get().overview) > 0, run: () => void acceptAll() },
   { id: "go.agents", title: "Go to agent settings", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/settings/agents") },
   { id: "agents.create", title: "Create agent token", group: "General", keys: [], scopes: ["global"], run: openCreateAgent },
 

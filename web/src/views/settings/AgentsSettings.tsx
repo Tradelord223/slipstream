@@ -14,7 +14,6 @@ import { useStore } from "../../store/createStore.ts";
 import { toast } from "../../store/toasts.ts";
 import { useSession } from "../../store/session.ts";
 import type { AgentInfo, AgentPolicy, AgentScope, Webhook } from "../../types.ts";
-import { CloudCard } from "./CloudCard.tsx";
 
 const DEFAULT_POLICY: AgentPolicy = { send: "always", bulkThreshold: 10, settings: "approve" };
 
@@ -35,7 +34,6 @@ type Dialogs =
 export function AgentsSettings() {
   return (
     <div className="settings-list">
-      <CloudCard />
       <AgentsPanel />
       <WebhooksPanel />
     </div>
@@ -45,7 +43,7 @@ export function AgentsSettings() {
 function AgentsPanel() {
   const [everyone, setAgents] = useState<AgentInfo[] | null>(null);
   const cloudId = useCloud((s) => (s.status?.connected ? s.status.agent?.id : undefined));
-  // Claude (cloud) has its own card above; it shouldn't show twice.
+  // Claude (cloud) is managed in Models & accounts; it shouldn't show twice.
   const agents = everyone && everyone.filter((a) => a.id !== cloudId);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialogs>(null);

@@ -6,12 +6,14 @@ import { useNow, useViewport, useWindowWidth } from "../../lib/hooks.ts";
 import { scopeSentence } from "../../lib/scopes.ts";
 import { assistant, ASSISTANT_INLINE_MIN, ASSISTANT_MAX, ASSISTANT_MIN, newChat, setDraft, setOpen, setWidth, showRun, useAssistant } from "../../store/assistant.ts";
 import { dollars, loadHistory, modelName, refreshCloud, replyToRun, RUN_ACTIVE, runError, startRun, statusLabel, stopRun, upsertRun, useCloud } from "../../store/cloud.ts";
+import { refreshEngines, useAssistantName, useCanRun, useEffectiveEngine, useEngines } from "../../store/engines.ts";
+import { assistantName, engineLine, shortModel } from "../../lib/engines.ts";
 import { useReview } from "../../store/agents.ts";
 import { navigate } from "../../store/route.ts";
 import type { CloudRun, CloudStatus } from "../../types.ts";
 import { Icon } from "../Icon.tsx";
 import { Keys } from "../Keycap.tsx";
-import { CloudSetup } from "./CloudForm.tsx";
+import { EnginePicker } from "./EnginePicker.tsx";
 import { Transcript } from "./Transcript.tsx";
 import { useAssistantContext } from "./useContext.ts";
 
@@ -20,22 +22,23 @@ export function AssistantHost() {
   const open = useAssistant((s) => s.open);
   const viewport = useViewport();
   const windowWidth = useWindowWidth();
+  const name = useAssistantName();
   if (viewport === "desktop" && windowWidth >= ASSISTANT_INLINE_MIN) {
     return (
-      <aside className="assistant" aria-label="Claude" aria-hidden={!open} inert={!open}>
+      <aside className="assistant" aria-label={name} aria-hidden={!open} inert={!open}>
         {open && <Resizer />}
         {open && <Panel sheet={false} />}
       </aside>
     );
   }
   if (!open) return null;
-  return <Sheet />;
+  return <Sheet name={name} />;
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** The sheet is modal: focus moves in, Tab stays inside, Escape closes, and focus goes back where it was. */
-function Sheet() {
+function Sheet({ name }: { name: string }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -65,7 +68,7 @@ function Sheet() {
   };
   return (
     <div className="assistant-scrim" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-      <aside ref={ref} className="assistant assistant-sheet" role="dialog" aria-modal="true" aria-label="Claude" tabIndex={-1} onKeyDown={onKeyDown}>
+      <aside ref={ref} className="assistant assistant-sheet" role="dialog" aria-modal="true" aria-label={name} tabIndex={-1} onKeyDown={onKeyDown}>
         <Panel sheet />
       </aside>
     </div>
@@ -123,18 +126,23 @@ function Panel({ sheet }: { sheet: boolean }) {
   const error = useCloud((s) => s.error);
   const view = useAssistant((s) => s.view);
   const runId = useAssistant((s) => s.runId);
-  const connected = status?.connected === true;
+  const overview = useEngines((s) => s.overview);
+  const canRun = useCanRun();
+  const name = useAssistantName();
 
   useEffect(() => {
     if (!status) void refreshCloud();
   }, [status]);
+  useEffect(() => {
+    if (!overview) void refreshEngines();
+  }, [overview]);
 
   return (
     <div className="as">
       <header className="as-head">
-        <h2 className="as-title">Claude</h2>
+        <h2 className="as-title">{name}</h2>
         <span className="grow" />
-        {connected && (
+        {canRun && (
           <>
             <button className="icon-btn" aria-label="Past chats" aria-pressed={view === "history"} title="Past chats" onClick={() => assistant.set({ view: view === "history" ? "chat" : "history" })}>
               <Icon name="clock" />
@@ -160,14 +168,18 @@ function Panel({ sheet }: { sheet: boolean }) {
             </button>
           </div>
         ) : (
-          <div className="rv-skeleton as-skeleton" aria-busy="true" aria-label="Loading Claude">
+          <div className="rv-skeleton as-skeleton" aria-busy="true" aria-label="Loading the assistant">
             <span />
             <span />
           </div>
         )
-      ) : !connected ? (
+      ) : !overview && !status.connected ? (
+        <div className="rv-skeleton as-skeleton" aria-busy="true" aria-label="Loading the assistant">
+          <span />
+        </div>
+      ) : !canRun ? (
         <div className="as-scroll">
-          <CloudSetup status={status} />
+          <NoModel sheet={sheet} />
         </div>
       ) : view === "history" ? (
         <History />
@@ -213,12 +225,8 @@ function Chat({ status, sheet }: { status: CloudStatus; sheet: boolean }) {
       .catch(() => showRun(null));
   }, [runId, run]);
 
-  const principal = status.agent?.id;
-  const approvals = useMemo(() => {
-    if (!run || !principal) return [];
-    const end = (run.finishedAt ?? Date.now()) + 120_000;
-    return (pending ?? []).filter((a) => a.agent.id === principal && a.createdAt >= run.createdAt - 2000 && a.createdAt <= end);
-  }, [pending, run, principal]);
+  // The server records which run asked for each approval.
+  const approvals = useMemo(() => (run ? (pending ?? []).filter((a) => a.runId === run.id) : []), [pending, run]);
 
   const onScroll = useStickToBottom(scroller, runId, [run?.transcript.length, run?.status, approvals.length]);
 
@@ -243,18 +251,28 @@ function Chat({ status, sheet }: { status: CloudStatus; sheet: boolean }) {
     <>
       <div className="as-scroll" ref={scroller} onScroll={onScroll} aria-label="Conversation" tabIndex={0}>
         <Transcript run={run} approvals={approvals} />
-        <RunFooter run={run} agentId={principal} now={now} />
+        <RunFooter run={run} now={now} />
       </div>
       <Composer status={status} run={run} sheet={sheet} />
     </>
   );
 }
 
-function RunFooter({ run, agentId, now }: { run: CloudRun; agentId: string | undefined; now: number }) {
+/** 950 stays 950; 12,400 reads 12.4k; 1,500,000 reads 1.5M. */
+function tokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+function RunFooter({ run, now }: { run: CloudRun; now: number }) {
   const active = RUN_ACTIVE.has(run.status);
+  const label = useEngines((s) => s.overview?.engines.find((e) => e.id === run.engine)?.label);
   const bits = [
+    label ? (run.model ? `${label} · ${shortModel(run.model)}` : label) : run.model ? shortModel(run.model) : null,
     run.toolCalls > 0 ? `${run.toolCalls} ${run.toolCalls === 1 ? "action" : "actions"}` : null,
     run.costCents !== null ? dollars(run.costCents) : null,
+    run.tokens && run.tokens.input + run.tokens.output > 0 ? `${tokenCount(run.tokens.input + run.tokens.output)} tokens` : null,
   ].filter(Boolean);
   return (
     <footer className="as-meta">
@@ -263,8 +281,8 @@ function RunFooter({ run, agentId, now }: { run: CloudRun; agentId: string | und
       <time className="num" dateTime={new Date(run.createdAt).toISOString()} title={longTime(run.createdAt)}>
         {agoShort(run.createdAt, now)}
       </time>
-      {run.toolCalls > 0 && agentId && (
-        <button className="trail-act" onClick={() => navigate(`/activity?agent=${encodeURIComponent(agentId)}`)}>
+      {run.toolCalls > 0 && (
+        <button className="trail-act" onClick={() => navigate(run.agentId ? `/activity?agent=${encodeURIComponent(run.agentId)}` : "/activity")}>
           View activity
         </button>
       )}
@@ -273,20 +291,38 @@ function RunFooter({ run, agentId, now }: { run: CloudRun; agentId: string | und
 }
 
 function FreshChat({ status }: { status: CloudStatus }) {
+  const engine = useEffectiveEngine();
+  const managed = engine?.id === "managed:anthropic";
   const spent = status.spentThisMonthCents;
   const cap = status.monthlyBudgetCents;
   return (
     <div className="as-fresh">
-      <h3>What should Claude do?</h3>
+      <h3>What should {assistantName(engine?.id)} do?</h3>
       <p>
-        It can {scopeSentence(status.agent?.scopes ?? [])} through your Slipstream permissions.{" "}
-        <button className="as-link" onClick={() => assistant.set({ accessOpen: true })}>
+        {managed && status.agent ? `It can ${scopeSentence(status.agent.scopes)} through your Slipstream permissions.` : "It works through your Slipstream permissions. Anything it sends waits for you in Review."}{" "}
+        <button className="as-link" onClick={() => (managed ? assistant.set({ accessOpen: true }) : navigate("/settings/models"))}>
           Change
         </button>
       </p>
-      <p className="as-quiet num">
-        {dollars(spent)} of {dollars(cap)} this month · {modelName(status.model)}
-      </p>
+      {engine && (
+        <p className="as-quiet num">
+          {engine.billing === "api" ? `${dollars(spent)} of ${dollars(cap)} this month · ` : ""}
+          {managed ? modelName(status.model) : engineLine(engine)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Nothing can run an agent yet: say so, and where to fix it. */
+function NoModel({ sheet }: { sheet: boolean }) {
+  return (
+    <div className="as-fresh">
+      <h3>Choose a model first</h3>
+      <p>Connect your ChatGPT plan, add an API key, or use Claude Code or Codex. Then ask for anything in your mail.</p>
+      <button className="btn btn-primary as-setup" onClick={() => (navigate("/settings/models"), sheet && setOpen(false))}>
+        Set up a model
+      </button>
     </div>
   );
 }
@@ -314,6 +350,9 @@ function Composer({ status, run, sheet }: { status: CloudStatus; run: CloudRun |
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const field = useRef<HTMLTextAreaElement>(null);
   const chips = useAssistantContext();
+  const engine = useEffectiveEngine();
+  // A chat that has started stays on its engine; a new one uses what the picker shows.
+  const who = assistantName(run?.engine ?? engine?.id);
   const sig = chips.map((c) => c.key).join("|");
 
   useEffect(() => setDismissed(new Set()), [sig]);
@@ -333,7 +372,8 @@ function Composer({ status, run, sheet }: { status: CloudStatus; run: CloudRun |
   }, [text]);
 
   const active = run ? RUN_ACTIVE.has(run.status) : false;
-  const closed = run ? run.status === "failed" || run.status === "budget" : false;
+  // A budget stop can't continue. A failed managed run can't either; other engines take a follow-up (a plan limit may have lifted).
+  const closed = run ? run.status === "budget" || (run.status === "failed" && (!run.engine || run.engine === "managed:anthropic")) : false;
   const live = chips.filter((c) => !dismissed.has(c.key));
   const quick = !run && live.length > 0 ? (live[0]!.kind === "thread" ? QUICK_THREAD : QUICK_SELECTION) : [];
 
@@ -350,7 +390,7 @@ function Composer({ status, run, sheet }: { status: CloudStatus; run: CloudRun |
         setFollowUp("");
       } else {
         const ids = live.flatMap((c) => c.threadIds);
-        const started = await startRun(t, ids.length ? { threadIds: ids } : undefined);
+        const started = await startRun(t, ids.length ? { threadIds: ids } : undefined, engine?.id);
         setDraft("");
         showRun(started.id);
       }
@@ -401,7 +441,7 @@ function Composer({ status, run, sheet }: { status: CloudStatus; run: CloudRun |
         <div className="form-error as-error" role="alert">
           {error.text}
           {error.budget && (
-            <button className="as-link" onClick={() => assistant.set({ accessOpen: true })}>
+            <button className="as-link" onClick={() => (status.connected ? assistant.set({ accessOpen: true }) : navigate("/settings/models"))}>
               Raise the budget
             </button>
           )}
@@ -430,26 +470,27 @@ function Composer({ status, run, sheet }: { status: CloudStatus; run: CloudRun |
           disabled={active}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={active ? "Claude is working…" : run ? "Reply to Claude…" : "Ask Claude…"}
-          aria-label={run ? "Reply to Claude" : "Ask Claude"}
+          placeholder={active ? `${who} is working…` : run ? `Reply to ${who}…` : `Ask ${who}…`}
+          aria-label={run ? `Reply to ${who}` : `Ask ${who}`}
+          title="Shift+Enter for a new line"
           maxLength={8000}
         />
         <div className="as-actions">
-          {!run && <span className="as-hint">Shift+Enter for a new line</span>}
+          {!run && <EnginePicker onSetup={() => sheet && setOpen(false)} />}
           <span className="grow" />
           {active && run ? (
             <button className="btn btn-sm" onClick={() => void stopRun(run.id)} disabled={run.status !== "running"}>
               Stop
             </button>
           ) : (
-            <button className="btn btn-sm btn-primary" onClick={() => void send()} disabled={busy || !text.trim()} aria-label={run ? "Send reply" : "Ask Claude"}>
+            <button className="btn btn-sm btn-primary" onClick={() => void send()} disabled={busy || !text.trim()} aria-label={run ? "Send reply" : `Ask ${who}`}>
               {busy ? <span className="spinner" aria-hidden="true" /> : <Icon name="arrow-up" size={14} />}
               {run ? "Reply" : "Ask"} <Keys binding="enter" />
             </button>
           )}
         </div>
       </div>
-      {status.agent && !sheet && <div className="sr-only">Claude can {scopeSentence(status.agent.scopes)}.</div>}
+      {status.agent && !sheet && engine?.id === "managed:anthropic" && <div className="sr-only">Claude can {scopeSentence(status.agent.scopes)}.</div>}
     </div>
   );
 }
@@ -457,7 +498,9 @@ function Composer({ status, run, sheet }: { status: CloudStatus; run: CloudRun |
 // ---- Past chats ----------------------------------------------------------------------------------
 
 function History() {
-  const runs = useCloud((s) => s.status?.runs ?? []);
+  const all = useCloud((s) => s.status?.runs);
+  // Runs Autopilot started belong to Autopilot, not to your chats.
+  const runs = useMemo(() => (all ?? []).filter((r) => r.origin !== "autopilot"), [all]);
   const current = useAssistant((s) => s.runId);
   const [q, setQ] = useState("");
   const now = useNow();
@@ -480,7 +523,7 @@ function History() {
       </button>
       <div className="as-scroll as-list">
         {groups.length === 0 ? (
-          <p className="as-empty">{q.trim() ? `No chats match “${q.trim()}”.` : "Your chats with Claude will show up here."}</p>
+          <p className="as-empty">{q.trim() ? `No chats match “${q.trim()}”.` : "Your chats will show up here."}</p>
         ) : (
           groups.map((g) => (
             <section key={g.label} aria-label={g.label}>

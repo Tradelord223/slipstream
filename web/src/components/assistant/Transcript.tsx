@@ -50,7 +50,7 @@ function TurnView({ turn, live }: { turn: Turn; live: boolean }) {
     }
     case "note":
       return (
-        <p className="tr-note" role="note">
+        <p className={`tr-note ${/^Paused after /.test(turn.text) ? "calm" : ""}`} role="note">
           {turn.text}
         </p>
       );
@@ -88,7 +88,7 @@ function ToolGroup({ entries, live }: { entries: { text: string }[]; live: boole
     );
   }
   return (
-    <ul className="tr-tools" role="list" aria-label="What Claude did">
+    <ul className="tr-tools" role="list" aria-label="What the assistant did">
       {entries.map((e, i) => (
         <ToolLine key={i} text={e.text} />
       ))}

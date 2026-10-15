@@ -1,7 +1,9 @@
 import type { ServerEvent } from "../types.ts";
 import { bumpActivity, refreshApprovals } from "./agents.ts";
+import { refreshAutopilot } from "./autopilot.ts";
 import { cloudRunChanged, refreshCloud } from "./cloud.ts";
 import { onDraftEvent } from "./compose.ts";
+import { refreshEngines } from "./engines.ts";
 import { refreshLabels } from "./labels.ts";
 import { createStore, useStore } from "./createStore.ts";
 import { refreshCounts } from "./counts.ts";
@@ -39,6 +41,8 @@ export function connectEvents() {
       refreshApprovals(true);
       bumpActivity();
       void refreshCloud();
+      void refreshEngines();
+      refreshAutopilot(true);
       refreshLabels(true);
       void refreshSession();
     }
@@ -46,7 +50,7 @@ export function connectEvents() {
   es.onerror = () => {
     hadError = true;
   };
-  for (const type of ["threads", "sync", "drafts", "team", "import", "activity", "approval", "cloud"] as const) {
+  for (const type of ["threads", "sync", "drafts", "team", "import", "activity", "approval", "cloud", "autopilot"] as const) {
     es.addEventListener(type, (ev) => {
       try {
         handle(JSON.parse((ev as MessageEvent<string>).data) as ServerEvent);
@@ -91,6 +95,9 @@ function handle(e: ServerEvent) {
       break;
     case "cloud":
       cloudRunChanged(e.runId);
+      break;
+    case "autopilot":
+      refreshAutopilot();
       break;
     case "team":
       teamTick.set((s) => ({ n: s.n + 1 }));

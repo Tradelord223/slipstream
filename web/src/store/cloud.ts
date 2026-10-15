@@ -1,5 +1,5 @@
 import { api, ApiError } from "../api.ts";
-import type { CloudConnectInput, CloudRun, CloudStatus, Routine, RoutineInput } from "../types.ts";
+import type { CloudConnectInput, CloudRun, CloudStatus, EngineId, Routine, RoutineInput } from "../types.ts";
 import { createStore, useStore } from "./createStore.ts";
 import { toast } from "./toasts.ts";
 
@@ -105,8 +105,8 @@ export async function disconnectCloud(): Promise<void> {
   cloud.set({ status });
 }
 
-export async function startRun(instruction: string, context?: { threadIds: string[] }): Promise<CloudRun> {
-  const run = await api.startRun(instruction, context);
+export async function startRun(instruction: string, context?: { threadIds: string[] }, engine?: EngineId | null): Promise<CloudRun> {
+  const run = await api.startRun(instruction, context, engine);
   upsertRun(run);
   return run;
 }
@@ -135,7 +135,7 @@ export async function saveRoutine(input: RoutineInput, id?: string): Promise<Rou
 export async function setRoutineEnabled(r: Routine, enabled: boolean) {
   patchStatus((s) => ({ routines: s.routines.map((x) => (x.id === r.id ? { ...x, enabled } : x)) }));
   try {
-    const saved = await api.saveRoutine({ name: r.name, instruction: r.instruction, trigger: r.trigger, enabled }, r.id);
+    const saved = await api.saveRoutine({ name: r.name, instruction: r.instruction, trigger: r.trigger, enabled, engine: r.engine }, r.id);
     patchStatus((s) => ({ routines: s.routines.map((x) => (x.id === r.id ? saved : x)) }));
   } catch (err) {
     patchStatus((s) => ({ routines: s.routines.map((x) => (x.id === r.id ? r : x)) }));
@@ -156,7 +156,7 @@ export async function runRoutineNow(id: string): Promise<CloudRun> {
 }
 
 /** Palette and quick actions: start a run and say so if it can't start. */
-export async function askClaude(text: string, context?: { threadIds: string[] }): Promise<CloudRun | null> {
+export async function askAssistant(text: string, context?: { threadIds: string[] }): Promise<CloudRun | null> {
   try {
     return await startRun(text, context);
   } catch (err) {

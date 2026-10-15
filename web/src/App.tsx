@@ -17,6 +17,8 @@ import { useCompose } from "./store/compose.ts";
 import { refreshApprovals } from "./store/agents.ts";
 import { ASSISTANT_INLINE_MIN, assistant, effectiveWidth, useAssistant } from "./store/assistant.ts";
 import { refreshCloud, useCloud } from "./store/cloud.ts";
+import { refreshEngines } from "./store/engines.ts";
+import { refreshAutopilot } from "./store/autopilot.ts";
 import { refreshLabels } from "./store/labels.ts";
 import { refreshCounts, useCounts } from "./store/counts.ts";
 import { connectEvents, disconnectEvents } from "./store/events.ts";
@@ -28,6 +30,7 @@ import { ui, useUi } from "./store/ui.ts";
 import { AuthView, JoinSignedIn } from "./views/AuthView.tsx";
 import { ActivityView } from "./views/ActivityView.tsx";
 import { AgentView } from "./views/AgentView.tsx";
+import { AutopilotView } from "./views/AutopilotView.tsx";
 import { MailView } from "./views/MailView.tsx";
 import { ReviewView } from "./views/ReviewView.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
@@ -93,6 +96,8 @@ function Shell() {
     refreshCounts(true);
     refreshApprovals(true);
     void refreshCloud();
+    void refreshEngines();
+    refreshAutopilot(true);
     refreshLabels(true);
     const off = installKeys();
     return () => {
@@ -184,6 +189,7 @@ function Shell() {
   else if (route.name === "review") main = <ReviewView tab={route.tab} />;
   else if (route.name === "activity") main = <ActivityView />;
   else if (route.name === "agent") main = <AgentView />;
+  else if (route.name === "autopilot") main = <AutopilotView />;
   else if (route.name === "join") main = <JoinSignedIn invite={route.invite} />;
   else main = <JoinOrHome />;
 

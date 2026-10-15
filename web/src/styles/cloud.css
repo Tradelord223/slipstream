@@ -280,6 +280,11 @@
   color: var(--rose);
   font-size: 13px;
 }
+/* A pause isn't a failure: the same note, without the alarm colours. */
+.tr-note.calm {
+  background: var(--hover);
+  color: var(--text-2);
+}
 .tr-working {
   display: flex;
   align-items: center;

@@ -237,6 +237,7 @@ export type ServerEvent =
   | { type: "activity"; activityId: string }
   | { type: "approval"; approvalId: string; status: string }
   | { type: "cloud"; runId: string }
+  | { type: "autopilot" }
   | { type: "import"; jobId: string; accountId: string; status: "running" | "done" | "failed"; imported: number; error?: string };
 
 // ---- Agents ----------------------------------------------------------------
@@ -280,6 +281,8 @@ export interface Approval {
   threadIds: string[];
   /** What the agent asked for (for drafts.send, input.draftId). */
   input: Record<string, unknown>;
+  /** The agent run that asked, when it came from one. */
+  runId: string | null;
 }
 
 export type ActivityActor = { kind: "agent"; id: string; name: string } | { kind: "human"; name: string };
@@ -343,6 +346,15 @@ export interface CloudRun {
   id: string;
   sessionId: string | null;
   routineId: string | null;
+  /** Who started it: the sidebar, a routine, or Autopilot (those belong to the Autopilot page). */
+  origin: "assistant" | "routine" | "autopilot";
+  /** The engine and model it ran on. */
+  engine: EngineId | null;
+  model: string | null;
+  /** The agent that acted, so Review and Activity can be matched to this run. */
+  agentId: string | null;
+  /** Tokens used, for engines that report them. */
+  tokens?: { input: number; output: number };
   instruction: string;
   status: RunStatus;
   transcript: TranscriptEntry[];
@@ -364,6 +376,8 @@ export interface Routine {
   instruction: string;
   trigger: RoutineTrigger;
   enabled: boolean;
+  /** null follows the default engine. */
+  engine: EngineId | null;
   nextRunAt: number | null;
   lastRunAt: number | null;
 }
@@ -373,6 +387,7 @@ export interface RoutineInput {
   instruction: string;
   trigger: RoutineTrigger;
   enabled: boolean;
+  engine?: EngineId | null;
 }
 
 export interface CloudStatus {
@@ -412,3 +427,146 @@ export interface LabelRule {
   enabled: boolean;
   createdAt: number;
 }
+
+// ---- Models & accounts -----------------------------------------------------------------
+
+export type EngineId =
+  | "managed:anthropic"
+  | "loop:chatgpt"
+  | "loop:anthropic"
+  | "loop:openai"
+  | "loop:gemini"
+  | "loop:openrouter"
+  | "cli:claude-code"
+  | "cli:codex";
+
+export type KeyProvider = "openai" | "anthropic" | "gemini" | "openrouter";
+
+export interface EngineStatus {
+  id: EngineId;
+  label: string;
+  kind: "managed" | "loop" | "cli";
+  /** Can start a run right now. */
+  ready: boolean;
+  /** One line for people: "Signed in as ana@…", "Add an API key". */
+  detail: string;
+  needs?: "key" | "signin" | "install" | "login";
+  models?: string[];
+  /** The model runs will use. */
+  model?: string | null;
+  /** API keys report a dollar cost; plans and CLIs use their own limits. */
+  billing: "api" | "plan";
+  /** Terms, billing and sandboxing words a person should read before choosing it. */
+  note?: string;
+  /** Sign-in is waiting for the person to finish in their browser. */
+  pending?: boolean;
+  account?: { email?: string; plan?: string };
+}
+
+export interface EnginesOverview {
+  engines: EngineStatus[];
+  defaultEngine: EngineId | null;
+  /** The engine a new run would use right now. */
+  resolvedEngine: EngineId | null;
+  keys: Record<KeyProvider, "saved" | "environment" | null>;
+  budgets: { runBudgetCents: number; monthlyBudgetCents: number };
+  mode: "local" | "team";
+}
+
+export interface ChatGPTSignIn {
+  authorizeUrl: string;
+  mode: "loopback" | "paste";
+}
+
+// ---- Autopilot ------------------------------------------------------------------------------
+
+export type AutopilotAction = "keep" | "done" | "remind";
+export type AutopilotPriority = "urgent" | "normal" | "low";
+
+export interface AutopilotSettings {
+  enabled: boolean;
+  mode: "suggest" | "auto";
+  engine: EngineId | null;
+  playbook: string;
+  draftReplies: boolean;
+  since: number;
+  /** Where a backfill reaches back to, when one was asked for. */
+  backfillFrom: number | null;
+  voice: string;
+}
+
+export interface AutopilotDecision {
+  action: AutopilotAction;
+  remindAt?: string;
+  labels: string[];
+  priority: AutopilotPriority;
+  needsReply: boolean;
+  summary: string;
+  reason: string;
+  confidence: number;
+  warnings?: string[];
+}
+
+export interface AutopilotItem {
+  id: string;
+  threadId: string;
+  subject: string;
+  from: Address;
+  stage: "queued" | "deciding" | "decided" | "failed";
+  source: "model" | "sender";
+  decision: AutopilotDecision | null;
+  applied: boolean;
+  status: "open" | "accepted" | "dismissed" | "corrected";
+  correction: unknown;
+  draftId: string | null;
+  draftSent: boolean;
+  inInbox: boolean;
+  createdAt: number;
+  decidedAt: number | null;
+}
+
+export interface SenderRuleAction {
+  action: "keep" | "done";
+  labels: string[];
+  priority: AutopilotPriority;
+}
+
+export interface SenderRule {
+  id: string;
+  pattern: string;
+  action: SenderRuleAction;
+}
+
+export interface SenderSuggestion {
+  pattern: string;
+  action: SenderRuleAction;
+  times: number;
+}
+
+export interface AutopilotMetrics {
+  decided: number;
+  corrected: number;
+  accepted: number;
+  dismissed: number;
+  outOfInbox: number;
+  draftsWritten: number;
+  draftsSent: number;
+  draftsSentAsWritten: number;
+  /** Mail your own sender rules handled (the other numbers count model decisions only). */
+  bySenderRules: number;
+  averageEdit: number | null;
+}
+
+export interface AutopilotOverview {
+  settings: AutopilotSettings;
+  engine: { id: EngineId; label: string } | null;
+  problem: string | null;
+  running: boolean;
+  labels: string[];
+  items: AutopilotItem[];
+  senderRules: SenderRule[];
+  suggestions: SenderSuggestion[];
+  metrics: AutopilotMetrics;
+}
+
+export type AutopilotPatch = Partial<Pick<AutopilotSettings, "enabled" | "mode" | "engine" | "playbook" | "draftReplies" | "voice">>;
