@@ -17,6 +17,7 @@ import { DEMO_IDENTITY } from "./providers/demo.ts";
 import { Agents } from "./agents/agents.ts";
 import { Webhooks } from "./agents/webhooks.ts";
 import { CloudAgent } from "./agents/cloud.ts";
+import { runRules } from "./mail/labels.ts";
 import { buildCatalog } from "./commands/catalog.ts";
 import { Commands } from "./commands/service.ts";
 
@@ -73,6 +74,15 @@ export async function start(config = loadConfig()) {
   ctx.sync.start();
   ctx.webhooks.start();
   ctx.cloud.startScheduler();
+  // Auto-label rules: new mail is labelled within a few seconds of arriving.
+  const rulesTimer = setInterval(() => {
+    try {
+      runRules(ctx);
+    } catch (err) {
+      console.error("[slipstream] label rules:", err);
+    }
+  }, 5_000);
+  rulesTimer.unref();
 
   const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   // Local mode: a loopback listener that only serves MCP + OAuth, for Tailscale Serve/Funnel or a tunnel.
@@ -87,6 +97,7 @@ export async function start(config = loadConfig()) {
     stopWatching();
     ctx.webhooks.close();
     ctx.cloud.close();
+    clearInterval(rulesTimer);
     await ctx.sync.stop();
     ctx.db.close();
     process.exit(0);

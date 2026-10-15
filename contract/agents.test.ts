@@ -267,3 +267,38 @@ describe("webhooks", () => {
     }
   });
 });
+
+describe("fast paths for agents", () => {
+  test("mail.digest orients an agent in one call; search results are compact by default", async () => {
+    const { token } = await makeAgent(server.url, "Orienter", ["read"]);
+    const a = agent(server.url, token);
+    const d = (await a("/api/v1/mail.digest", { perSplit: 3 })).body.result;
+    assert.ok(d.inbox.total > 0);
+    assert.ok(d.splits.length >= 2 && d.splits[0].newest.length <= 3);
+    assert.ok(Array.isArray(d.labels));
+    const compact = (await a("/api/v1/mail.search", { query: "from:priya" })).body.result.threads[0];
+    assert.ok(compact.id && compact.subject && compact.at);
+    assert.equal(compact.participants, undefined, "compact rows leave out the heavy fields");
+    const full = (await a("/api/v1/mail.search", { query: "from:priya", detail: "full" })).body.result.threads[0];
+    assert.ok(Array.isArray(full.participants));
+  });
+
+  test("batch runs several commands in one round trip, each independent", async () => {
+    const { token } = await makeAgent(server.url, "Batcher", ["read", "triage"]);
+    const a = agent(server.url, token);
+    const ids = ((await a("/api/v1/mail.search", { query: "in:inbox", limit: 2 })).body.result.threads as { id: string }[]).map((t) => t.id);
+    const r = await a("/api/v1/batch", {
+      commands: [
+        { command: "labels.create", input: { name: "Batched", color: "#B79CFF" } },
+        { command: "triage.label", input: { threadIds: ids, label: "Batched" } },
+        { command: "drafts.send", input: { draftId: "nope" } },
+        { command: "labels.list", input: {} },
+      ],
+    });
+    assert.equal(r.status, 200);
+    const results = r.body.results as { status: string; httpStatus?: number; result?: unknown }[];
+    assert.deepEqual(results.map((x) => x.status), ["done", "done", "error", "done"]);
+    assert.equal(results[2]!.httpStatus, 403, "no send scope");
+    assert.ok((results[3]!.result as { name: string; count: number }[]).some((l) => l.name === "Batched" && l.count === ids.length));
+  });
+});

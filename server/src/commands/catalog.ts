@@ -9,6 +9,7 @@ import { unsubscribe } from "../mail/unsubscribe.ts";
 import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, sendDraft, updateDraft } from "../mail/drafts.ts";
 import { counts, getThread, listThreads } from "../mail/views.ts";
 import { createSnippet, createSplit, deleteSplit, listSnippets, listSplits } from "../prefs.ts";
+import { createLabel, createRule, deleteLabel, deleteRule, listLabels, listRules, ruleMatches, updateLabel, updateRule } from "../mail/labels.ts";
 import { addComment, shareThread } from "../team.ts";
 import { defineCommand, type Actor, type Command, type CommandOutcome } from "./registry.ts";
 
@@ -130,12 +131,39 @@ function triageCommand(spec: TriageSpec): Command {
   });
 }
 
+type ListResult = ReturnType<typeof listThreads>;
+
+/** Token-cheap rows for agents: enough to decide what to read or triage. */
+function compactList(r: ListResult) {
+  return {
+    threads: r.threads.map((t) => ({
+      id: t.id,
+      subject: t.subject,
+      from: t.participants.slice(0, 3).map((p) => (p.name ? `${p.name} <${p.email}>` : p.email)),
+      at: new Date(t.lastMessageAt).toISOString(),
+      messages: t.messageCount,
+      snippet: t.snippet.slice(0, 140),
+      ...(t.unread ? { unread: true } : {}),
+      ...(t.starred ? { starred: true } : {}),
+      ...(t.hasAttachments ? { attachments: true } : {}),
+      ...(t.labels.length ? { labels: t.labels } : {}),
+      ...(t.snoozedUntil ? { remindAt: new Date(t.snoozedUntil).toISOString() } : {}),
+      ...(t.inInbox ? {} : { inInbox: false }),
+    })),
+    next: r.next,
+  };
+}
+
+const detail = z.enum(["compact", "full"]).default("compact").describe("compact (default) is smaller and enough to choose what to read; full includes every field");
+const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/).describe("Color as #RRGGBB");
+
 const listInput = z.object({
   view: z.enum(["inbox", "split"]).default("inbox").describe("inbox = everything in the inbox; split = one split (pass split id)"),
   split: z.string().optional(),
   account: z.string().optional().describe("Limit to one account id"),
   limit: z.number().int().min(1).max(100).default(25),
   before: z.string().optional().describe("Pagination cursor from a previous result's `next`"),
+  detail,
 });
 
 function senderSendable(ctx: AppContext, userId: string, threadId?: string | null): string {
@@ -178,7 +206,10 @@ export function buildCatalog(): Command[] {
       scope: "read",
       readOnly: true,
       input: listInput,
-      run: (ctx, actor, i) => ({ result: listThreads(ctx, actor.user.id, i) }),
+      run: (ctx, actor, i) => {
+        const r = listThreads(ctx, actor.user.id, i);
+        return { result: i.detail === "full" ? r : compactList(r) };
+      },
     }),
     defineCommand({
       name: "mail.search",
@@ -191,8 +222,12 @@ export function buildCatalog(): Command[] {
         account: z.string().optional(),
         limit: z.number().int().min(1).max(100).default(25),
         before: z.string().optional(),
+        detail,
       }),
-      run: (ctx, actor, i) => ({ result: listThreads(ctx, actor.user.id, { view: "search", q: i.query, account: i.account, limit: i.limit, before: i.before }) }),
+      run: (ctx, actor, i) => {
+        const r = listThreads(ctx, actor.user.id, { view: "search", q: i.query, account: i.account, limit: i.limit, before: i.before });
+        return { result: i.detail === "full" ? r : compactList(r) };
+      },
     }),
     defineCommand({
       name: "mail.read",
@@ -329,6 +364,152 @@ export function buildCatalog(): Command[] {
         } catch (err) {
           throw new HttpError(502, explainAiError(err));
         }
+      },
+    }),
+
+    defineCommand({
+      name: "mail.digest",
+      title: "Inbox at a glance",
+      description: `Everything an agent needs to get oriented, in one call: counts, each split's newest conversations, reminders coming back today, labels, waiting approvals and recent activity. ${UNTRUSTED}`,
+      scope: "read",
+      readOnly: true,
+      input: z.object({ perSplit: z.number().int().min(0).max(25).default(5) }),
+      run: (ctx, actor, i) => {
+        const userId = actor.user.id;
+        const c = counts(ctx, userId);
+        const endOfDay = new Date().setHours(23, 59, 59, 999);
+        return {
+          result: {
+            inbox: c.inbox,
+            doneToday: c.doneToday,
+            splits: listSplits(ctx, userId).map((s) => ({
+              id: s.id,
+              name: s.name,
+              ...c.splits[s.id],
+              newest: i.perSplit ? compactList(listThreads(ctx, userId, { view: "split", split: s.id, limit: i.perSplit })).threads : [],
+            })),
+            remindersToday: compactList(listThreads(ctx, userId, { view: "search", q: `in:snoozed`, limit: 50 })).threads.filter(
+              (t) => t.remindAt && Date.parse(t.remindAt) <= endOfDay,
+            ),
+            labels: listLabels(ctx, userId).map((l) => ({ name: l.name, count: l.count, unread: l.unread })),
+            pendingApprovals: ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM approvals WHERE user_id = ? AND status = 'pending'", userId)!.n,
+            recentActivity: ctx.commands.activity(userId, { limit: 5 }).map((a) => ({ actor: a.actor.name, summary: a.summary, at: new Date(a.createdAt).toISOString() })),
+          },
+        };
+      },
+    }),
+
+    // ---- Labels -------------------------------------------------------------
+    defineCommand({
+      name: "labels.list",
+      title: "List labels",
+      description: "Every label with its color, parent (labels nest with \"/\"), conversation count and unread count.",
+      scope: "read",
+      readOnly: true,
+      input: z.object({}),
+      run: (ctx, actor) => ({ result: listLabels(ctx, actor.user.id) }),
+    }),
+    defineCommand({
+      name: "labels.create",
+      title: "Create a label",
+      description: "Create a label (use \"Parent/Child\" to nest).",
+      scope: "triage",
+      input: z.object({ name: z.string().trim().min(1).max(200), color: hex.optional() }),
+      run: (ctx, actor, i) => {
+        const l = createLabel(ctx, actor.user.id, i.name, i.color ?? null);
+        return { result: l, summary: `Created the label "${l.name}"`, inverse: { command: "labels.delete", input: { name: l.name } } };
+      },
+    }),
+    defineCommand({
+      name: "labels.update",
+      title: "Rename or recolor a label",
+      description: "Rename a label (nested labels move with it) and/or change its color.",
+      scope: "triage",
+      input: z.object({ name: z.string().trim().min(1).max(200), newName: z.string().trim().min(1).max(200).optional(), color: hex.nullable().optional() }),
+      run: (ctx, actor, i) => {
+        const before = listLabels(ctx, actor.user.id).find((l) => l.name.toLowerCase() === i.name.toLowerCase());
+        const l = updateLabel(ctx, actor.user.id, i.name, { newName: i.newName, color: i.color });
+        return {
+          result: l,
+          summary: i.newName ? `Renamed the label "${i.name}" to "${l.name}"` : `Changed the color of "${l.name}"`,
+          inverse: { command: "labels.update", input: { name: l.name, newName: i.newName ? i.name : undefined, color: i.color !== undefined ? (before?.color ?? null) : undefined } },
+        };
+      },
+    }),
+    defineCommand({
+      name: "labels.delete",
+      title: "Delete a label",
+      description: "Delete a label everywhere. Conversations stay; they just lose the label. Can't be undone.",
+      scope: "triage",
+      input: z.object({ name: z.string().trim().min(1).max(200) }),
+      approval: (_c, actor) => (actor.agent.policy.settings === "approve" ? "Deleting a label from every conversation" : null),
+      preview: (ctx, actor, i) => {
+        const l = listLabels(ctx, actor.user.id).find((x) => x.name.toLowerCase() === i.name.toLowerCase());
+        return `Delete the label "${i.name}"${l ? ` (on ${l.count} conversation${l.count === 1 ? "" : "s"})` : ""}`;
+      },
+      run: (ctx, actor, i) => {
+        const r = deleteLabel(ctx, actor.user.id, i.name);
+        return { result: r, summary: `Deleted the label "${i.name}"` };
+      },
+    }),
+    defineCommand({
+      name: "labelRules.list",
+      title: "List auto-label rules",
+      description: "Rules that label new mail matching a search.",
+      scope: "read",
+      readOnly: true,
+      input: z.object({}),
+      run: (ctx, actor) => ({ result: listRules(ctx, actor.user.id) }),
+    }),
+    defineCommand({
+      name: "labelRules.create",
+      title: "Add an auto-label rule",
+      description: "Label new mail that matches a search (same language as mail.search). applyToExisting also labels matching mail you already have.",
+      scope: "settings",
+      input: z.object({ label: z.string().trim().min(1).max(200), query: z.string().trim().min(1).max(500), applyToExisting: z.boolean().default(false) }),
+      approval: (_c, actor) => (actor.agent.policy.settings === "approve" ? "Adding an auto-label rule" : null),
+      preview: (_c, _a, i) => `Label new mail matching ${i.query} as "${i.label}"${i.applyToExisting ? " (and existing mail)" : ""}`,
+      run: (ctx, actor, i) => {
+        const rule = createRule(ctx, actor.user.id, i.label, i.query);
+        let labelled: string[] = [];
+        let undoToken: string | null = null;
+        if (i.applyToExisting) {
+          labelled = ruleMatches(ctx, { user_id: actor.user.id, label: rule.label, query: rule.query }, null);
+          if (labelled.length) {
+            undoToken = ctx.triage.apply(actor.user.id, { kind: "addLabel", threadIds: labelled, label: rule.label }).undoToken;
+            ctx.events.emitToUser(actor.user.id, { type: "threads", accountId: "", threadIds: labelled });
+          }
+        }
+        return {
+          result: { ...rule, labelled: labelled.length },
+          summary: `Added a rule: ${rule.query} → "${rule.label}"${labelled.length ? ` (labelled ${labelled.length})` : ""}`,
+          threadIds: labelled,
+          undoToken,
+        };
+      },
+    }),
+    defineCommand({
+      name: "labelRules.update",
+      title: "Edit an auto-label rule",
+      description: "Change a rule's label, search, or turn it on or off.",
+      scope: "settings",
+      input: z.object({ id: z.string(), label: z.string().trim().min(1).max(200).optional(), query: z.string().trim().min(1).max(500).optional(), enabled: z.boolean().optional() }),
+      approval: (_c, actor) => (actor.agent.policy.settings === "approve" ? "Changing an auto-label rule" : null),
+      run: (ctx, actor, i) => {
+        const r = updateRule(ctx, actor.user.id, i.id, i);
+        return { result: r, summary: `Updated the rule ${r.query} → "${r.label}"${r.enabled ? "" : " (off)"}` };
+      },
+    }),
+    defineCommand({
+      name: "labelRules.delete",
+      title: "Remove an auto-label rule",
+      description: "Stop a rule. Labels it already applied stay.",
+      scope: "settings",
+      input: z.object({ id: z.string() }),
+      approval: (_c, actor) => (actor.agent.policy.settings === "approve" ? "Removing an auto-label rule" : null),
+      run: (ctx, actor, i) => {
+        const r = deleteRule(ctx, actor.user.id, i.id);
+        return { result: { ok: true }, summary: `Removed the rule ${r.query} → "${r.label}"`, inverse: { command: "labelRules.create", input: { label: r.label, query: r.query } } };
       },
     }),
 

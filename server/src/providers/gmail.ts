@@ -351,6 +351,20 @@ export class GmailProvider implements MailProvider {
     return t.messages?.findLast((m) => !m.labelIds?.includes("DRAFT"))?.id;
   }
 
+  async renameLabel(label: { remoteId: string; name: string }, newName: string): Promise<void> {
+    const found = await this.resolveLabel(label, false);
+    if (!found) return;
+    await this.api("PATCH", `/labels/${enc(found.id)}`, { name: newName });
+    this.labelCache = null;
+  }
+
+  async deleteLabel(label: { remoteId: string; name: string }): Promise<void> {
+    const found = await this.resolveLabel(label, false);
+    if (!found) return;
+    await this.api("DELETE", `/labels/${enc(found.id)}`);
+    this.labelCache = null;
+  }
+
   /** Finds a user label by id or name (names are case-insensitive in Gmail), creating it when asked. */
   private async resolveLabel(label: { remoteId: string; name: string }, create: boolean): Promise<GmailLabel | undefined> {
     const name = label.name.trim().toLowerCase();

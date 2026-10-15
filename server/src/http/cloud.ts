@@ -25,8 +25,13 @@ export function cloudRoutes(ctx: AppContext) {
 
   app.get("/cloud/runs", (c) => c.json({ runs: ctx.cloud.runs(c.get("user").id, 50) }));
   app.post("/cloud/runs", async (c) => {
-    const { instruction } = z.object({ instruction: z.string().trim().min(1).max(8_000) }).parse(await c.req.json());
-    return c.json(await ctx.cloud.start(c.get("user").id, instruction));
+    const { instruction, context } = z
+      .object({
+        instruction: z.string().trim().min(1).max(8_000),
+        context: z.object({ threadIds: z.array(z.string().max(100)).max(100).optional(), view: z.string().max(200).optional() }).optional(),
+      })
+      .parse(await c.req.json());
+    return c.json(await ctx.cloud.start(c.get("user").id, instruction, null, context));
   });
   app.get("/cloud/runs/:id", (c) => c.json(ctx.cloud.run(c.get("user").id, c.req.param("id"))));
   app.post("/cloud/runs/:id/messages", async (c) => {
