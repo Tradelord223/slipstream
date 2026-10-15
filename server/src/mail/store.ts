@@ -74,6 +74,7 @@ export class MailStore {
         const tid = this.deleteMessage(account.id, rid);
         if (tid) touched.add(tid);
       }
+      if (page.done) for (const tid of this.purgeOrphans(account.id)) touched.add(tid);
       for (const tid of touched) this.recomputeThread(tid);
     });
     return [...touched];
@@ -82,18 +83,55 @@ export class MailStore {
   private upsertMessage(account: AccountRow, m: IncomingMessage): string | null {
     // A message we sent is stored right away under a provisional id; adopt the provider's id when it syncs back.
     if (m.messageIdHeader && !m.remoteId.startsWith("sent:")) {
-      this.db.run(
-        "UPDATE messages SET remote_id = ? WHERE account_id = ? AND message_id_header = ? AND remote_id LIKE 'sent:%'",
-        m.remoteId,
+      const provisional = this.db.get<{ id: string; remote_id: string }>(
+        "SELECT id, remote_id FROM messages WHERE account_id = ? AND message_id_header = ? AND remote_id LIKE 'sent:%'",
         account.id,
         m.messageIdHeader,
       );
+      if (provisional) {
+        this.db.run("UPDATE messages SET remote_id = ? WHERE id = ?", m.remoteId, provisional.id);
+        this.db.run(
+          "UPDATE message_locations SET remote_id = ? WHERE account_id = ? AND remote_id = ?",
+          m.remoteId,
+          account.id,
+          provisional.remote_id,
+        );
+      }
     }
-    const existing = this.db.get<{ id: string; thread_id: string }>(
-      "SELECT id, thread_id FROM messages WHERE account_id = ? AND remote_id = ?",
+
+    // Known copy, or another copy of a message we already have (IMAP Inbox + Sent, a move between mailboxes).
+    let existing = this.db.get<{ id: string; thread_id: string }>(
+      `SELECT m.id, m.thread_id FROM message_locations l JOIN messages m ON m.id = l.message_id
+       WHERE l.account_id = ? AND l.remote_id = ?`,
       account.id,
       m.remoteId,
     );
+    if (!existing && m.messageIdHeader) {
+      existing = this.db.get<{ id: string; thread_id: string }>(
+        "SELECT id, thread_id FROM messages WHERE account_id = ? AND message_id_header = ? ORDER BY orphaned_at IS NOT NULL LIMIT 1",
+        account.id,
+        m.messageIdHeader,
+      );
+      if (existing) {
+        this.db.run(
+          "INSERT INTO message_locations (account_id, remote_id, message_id, inbox, trash, spam) VALUES (?,?,?,?,?,?)",
+          account.id,
+          m.remoteId,
+          existing.id,
+          m.folders.inbox ? 1 : 0,
+          m.folders.trash ? 1 : 0,
+          m.folders.spam ? 1 : 0,
+        );
+        // If the primary copy is gone (moved), this copy becomes the one actions and downloads use.
+        this.db.run(
+          `UPDATE messages SET orphaned_at = NULL, remote_id = CASE WHEN EXISTS (
+             SELECT 1 FROM message_locations l WHERE l.account_id = messages.account_id AND l.remote_id = messages.remote_id
+           ) THEN remote_id ELSE ? END WHERE id = ?`,
+          m.remoteId,
+          existing.id,
+        );
+      }
+    }
     if (existing) {
       // A thread we started locally learns its provider conversation id on the first sync back.
       if (m.remoteThreadId) {
@@ -114,16 +152,6 @@ export class MailStore {
         labels: m.labels,
       });
       return existing.thread_id;
-    }
-
-    // The same message can arrive twice through different folders (IMAP Sent + Inbox).
-    if (m.messageIdHeader) {
-      const dup = this.db.get<{ thread_id: string }>(
-        "SELECT thread_id FROM messages WHERE account_id = ? AND message_id_header = ?",
-        account.id,
-        m.messageIdHeader,
-      );
-      if (dup && !m.remoteThreadId) return dup.thread_id;
     }
 
     const outgoing = m.outgoing ?? m.from.email.toLowerCase() === account.email.toLowerCase();
@@ -169,6 +197,16 @@ export class MailStore {
     );
 
     this.db.run(
+      "INSERT INTO message_locations (account_id, remote_id, message_id, inbox, trash, spam) VALUES (?,?,?,?,?,?)",
+      account.id,
+      m.remoteId,
+      id,
+      m.folders.inbox ? 1 : 0,
+      m.folders.trash ? 1 : 0,
+      m.folders.spam ? 1 : 0,
+    );
+
+    this.db.run(
       "INSERT INTO messages_fts (rowid, subject, body, sender, recipients) VALUES (?,?,?,?,?)",
       res.lastInsertRowid,
       m.subject,
@@ -195,7 +233,7 @@ export class MailStore {
       );
     }
 
-    if (m.labels) this.setMessageLabels(account.id, threadId, m.labels);
+    if (m.labels) this.setMessageLabels(account.id, id, m.labels);
     this.recordContacts(account.id, m, outgoing);
     return threadId;
   }
@@ -238,48 +276,112 @@ export class MailStore {
 
   private applyFlagUpdate(accountId: string, f: FlagUpdate): string | null {
     const msg = this.db.get<{ id: string; thread_id: string }>(
-      "SELECT id, thread_id FROM messages WHERE account_id = ? AND remote_id = ?",
+      `SELECT m.id, m.thread_id FROM message_locations l JOIN messages m ON m.id = l.message_id
+       WHERE l.account_id = ? AND l.remote_id = ?`,
       accountId,
       f.remoteId,
     );
     if (!msg) return null;
-    const sets: string[] = [];
-    const params: (number | string)[] = [];
-    const flag = (col: string, v: boolean | undefined) => {
-      if (v === undefined) return;
-      sets.push(`${col} = ?`);
-      params.push(v ? 1 : 0);
-    };
-    flag("unread", f.unread);
-    flag("starred", f.starred);
-    flag("in_inbox", f.folders?.inbox);
-    flag("in_trash", f.folders?.trash);
-    flag("in_spam", f.folders?.spam);
-    if (sets.length) this.db.run(`UPDATE messages SET ${sets.join(", ")} WHERE id = ?`, ...params, msg.id);
-    if (f.labels) this.setMessageLabels(accountId, msg.thread_id, f.labels);
+    const bit = (v: boolean | undefined) => (v === undefined ? null : v ? 1 : 0);
+    if (f.folders) {
+      this.db.run(
+        `UPDATE message_locations SET inbox = coalesce(?, inbox), trash = coalesce(?, trash), spam = coalesce(?, spam)
+         WHERE account_id = ? AND remote_id = ?`,
+        bit(f.folders.inbox),
+        bit(f.folders.trash),
+        bit(f.folders.spam),
+        accountId,
+        f.remoteId,
+      );
+      this.foldersFromLocations(msg.id);
+    }
+    this.db.run(
+      "UPDATE messages SET unread = coalesce(?, unread), starred = coalesce(?, starred) WHERE id = ?",
+      bit(f.unread),
+      bit(f.starred),
+      msg.id,
+    );
+    if (f.labels) this.setMessageLabels(accountId, msg.id, f.labels);
     return msg.thread_id;
   }
 
+  /** A message is in a folder if any of its copies is. */
+  private foldersFromLocations(messageId: string) {
+    this.db.run(
+      `UPDATE messages SET
+         in_inbox = (SELECT max(inbox) FROM message_locations WHERE message_id = messages.id),
+         in_trash = (SELECT max(trash) FROM message_locations WHERE message_id = messages.id),
+         in_spam = (SELECT max(spam) FROM message_locations WHERE message_id = messages.id)
+       WHERE id = ? AND EXISTS (SELECT 1 FROM message_locations WHERE message_id = messages.id)`,
+      messageId,
+    );
+  }
+
+  /**
+   * One copy is gone. The message only goes away when no copies remain at the end of the sync round,
+   * because a move between mailboxes shows up as a removal plus an addition, in either order.
+   */
   private deleteMessage(accountId: string, remoteId: string): string | null {
-    const msg = this.db.get<{ id: string; thread_id: string; rowid: number }>(
-      "SELECT id, thread_id, rowid FROM messages WHERE account_id = ? AND remote_id = ?",
+    const msg = this.db.get<{ id: string; thread_id: string; remote_id: string }>(
+      `SELECT m.id, m.thread_id, m.remote_id FROM message_locations l JOIN messages m ON m.id = l.message_id
+       WHERE l.account_id = ? AND l.remote_id = ?`,
       accountId,
       remoteId,
     );
     if (!msg) return null;
-    this.db.run("DELETE FROM messages_fts WHERE rowid = ?", msg.rowid);
-    this.db.run("DELETE FROM messages WHERE id = ?", msg.id);
+    this.db.run("DELETE FROM message_locations WHERE account_id = ? AND remote_id = ?", accountId, remoteId);
+    const other = this.db.get<{ remote_id: string }>("SELECT remote_id FROM message_locations WHERE message_id = ? LIMIT 1", msg.id);
+    if (!other) {
+      this.db.run("UPDATE messages SET orphaned_at = ? WHERE id = ?", Date.now(), msg.id);
+    } else {
+      if (msg.remote_id === remoteId) this.db.run("UPDATE messages SET remote_id = ? WHERE id = ?", other.remote_id, msg.id);
+      this.foldersFromLocations(msg.id);
+    }
     return msg.thread_id;
   }
 
-  private setMessageLabels(accountId: string, threadId: string, labels: { remoteId: string; name: string; color?: string }[]) {
+  private purgeOrphans(accountId: string): string[] {
+    const orphans = this.db.all<{ id: string; thread_id: string; rowid: number }>(
+      "SELECT id, thread_id, rowid FROM messages WHERE account_id = ? AND orphaned_at IS NOT NULL",
+      accountId,
+    );
+    for (const o of orphans) {
+      this.db.run("DELETE FROM messages_fts WHERE rowid = ?", o.rowid);
+      this.db.run("DELETE FROM messages WHERE id = ?", o.id);
+    }
+    return orphans.map((o) => o.thread_id);
+  }
+
+  /**
+   * After a local triage change, write the messages' folder state through to their copies,
+   * so a later sync of an untouched copy can't undo what the user did.
+   */
+  mirrorLocations(threadId: string): void {
+    this.db.run(
+      `UPDATE message_locations SET
+         inbox = CASE WHEN m.in_inbox = 0 THEN 0 WHEN message_locations.remote_id = m.remote_id THEN 1 ELSE message_locations.inbox END,
+         trash = m.in_trash,
+         spam = m.in_spam
+       FROM messages m WHERE m.id = message_locations.message_id AND m.thread_id = ?`,
+      threadId,
+    );
+  }
+
+  /** Records a message's full label set. Thread labels are rebuilt from these in recomputeThread. */
+  private setMessageLabels(accountId: string, messageId: string, labels: { remoteId: string; name: string; color?: string }[]) {
+    const ids: string[] = [];
     for (const l of labels) {
       let label = this.db.get<{ id: string }>(
-        "SELECT id FROM labels WHERE account_id = ? AND remote_id = ?",
+        "SELECT id FROM labels WHERE account_id = ? AND (remote_id = ? OR (remote_id = ? AND lower(name) = lower(?)))",
         accountId,
         l.remoteId,
+        `name:${l.name}`,
+        l.name,
       );
-      if (!label) {
+      if (label) {
+        // A label created locally by name learns its provider id here.
+        this.db.run("UPDATE labels SET remote_id = ? WHERE id = ? AND remote_id LIKE 'name:%'", l.remoteId, label.id);
+      } else {
         const id = newId("lbl");
         this.db.run(
           "INSERT INTO labels (id, account_id, remote_id, name, color) VALUES (?,?,?,?,?)",
@@ -291,8 +393,9 @@ export class MailStore {
         );
         label = { id };
       }
-      this.db.run("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?,?)", threadId, label.id);
+      ids.push(label.id);
     }
+    this.db.run("UPDATE messages SET label_ids = ? WHERE id = ?", JSON.stringify(ids), messageId);
   }
 
   private recordContacts(accountId: string, m: IncomingMessage, outgoing: boolean) {
@@ -325,7 +428,8 @@ export class MailStore {
       snoozed_until: number | null;
       reminded_at: number | null;
       muted: number;
-    }>("SELECT id, account_id, snoozed_until, reminded_at, muted FROM threads WHERE id = ?", threadId);
+      last_inbound_at: number | null;
+    }>("SELECT id, account_id, snoozed_until, reminded_at, muted, last_inbound_at FROM threads WHERE id = ?", threadId);
     if (!thread) return;
     const msgs = this.db.all<MessageAgg>(
       `SELECT m.id, from_name, from_email, to_json, cc_json, subject, sent_at, snippet, unread, starred, in_inbox, in_trash,
@@ -414,9 +518,21 @@ export class MailStore {
       return;
     }
 
-    // A new inbound message cancels a reminder (the thread is back because someone wrote).
+    // Thread labels are the union of its messages' labels, when the provider reports labels at all.
+    const labelSets = this.db
+      .all<{ label_ids: string | null }>("SELECT label_ids FROM messages WHERE thread_id = ?", threadId)
+      .filter((r) => r.label_ids !== null)
+      .map((r) => JSON.parse(r.label_ids!) as string[]);
+    if (labelSets.length > 0) {
+      this.db.run("DELETE FROM thread_labels WHERE thread_id = ?", threadId);
+      for (const id of new Set(labelSets.flat())) this.db.run("INSERT INTO thread_labels (thread_id, label_id) VALUES (?,?)", threadId, id);
+    }
+
+    // A new message from someone cancels a reminder: the thread is back because they wrote.
+    // (Copies moving between mailboxes don't count; only genuinely newer inbound mail does.)
     let snoozed = thread.snoozed_until;
-    if (snoozed && inInbox) snoozed = null;
+    const someoneWrote = lastInbound !== null && lastInbound > (thread.last_inbound_at ?? 0);
+    if (snoozed && someoneWrote && inInbox) snoozed = null;
     // Muted threads never come back to the inbox on their own.
     const inboxFlag = inInbox && !thread.muted && !snoozed ? 1 : 0;
 
@@ -442,7 +558,7 @@ export class MailStore {
     );
     if (!t) throw new Error(`Unknown thread ${threadId}`);
     const messages = this.db.all<{ remoteId: string; messageIdHeader: string | null }>(
-      "SELECT remote_id AS remoteId, message_id_header AS messageIdHeader FROM messages WHERE thread_id = ? AND remote_id NOT LIKE 'local:%'",
+      "SELECT remote_id AS remoteId, message_id_header AS messageIdHeader FROM messages WHERE thread_id = ? AND remote_id NOT LIKE 'local:%' ORDER BY sent_at",
       threadId,
     );
     return { accountId: t.account_id, threadRemoteId: t.remote_id, messages };

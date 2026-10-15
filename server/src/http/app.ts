@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 import { HttpError, LOCAL_USER_ID } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 import { accountRoutes } from "./accounts.ts";
+import { aiRoutes } from "./ai.ts";
 import { authRoutes, SESSION_COOKIE } from "./auth.ts";
 import { composeRoutes } from "./compose.ts";
 import { mailRoutes } from "./mail.ts";
@@ -30,6 +31,9 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
 
   // Host allowlist: the local server holds mail credentials, so a page on another domain
   // that rebinds its DNS to 127.0.0.1 must not be able to talk to it.
+  // Platform health checks hit the container directly, without the public hostname.
+  app.get("/api/health", (c) => c.json({ ok: true }));
+
   app.use("*", async (c, next) => {
     const host = c.req.header("host") ?? "";
     if (!config.allowedHosts.has(host)) return c.text("Unknown host", 421);
@@ -61,13 +65,13 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
     return next();
   });
 
-  app.get("/api/health", (c) => c.json({ ok: true }));
   app.route("/api/auth", authRoutes(ctx));
   app.route("/api", mailRoutes(ctx));
   app.route("/api", composeRoutes(ctx));
   app.route("/api", accountRoutes(ctx));
   app.route("/api", prefsRoutes(ctx));
   app.route("/api", teamRoutes(ctx));
+  app.route("/api", aiRoutes(ctx));
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));
 
   if (staticDir && existsSync(staticDir)) {

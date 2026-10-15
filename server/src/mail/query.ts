@@ -115,7 +115,19 @@ export function compile(input: string, now = Date.now()): Compiled {
   const params: (string | number)[] = [];
   let scoped = false;
 
-  for (const clause of clauses) {
+  // Plain words are ANDed into one full-text match: one index lookup instead of one per word
+  // (a common word on its own would otherwise drag the whole query).
+  const words = clauses.filter((c) => c.length === 1 && c[0]!.key === null && !c[0]!.neg).map((c) => c[0]!.value);
+  const rest = clauses.filter((c) => !(c.length === 1 && c[0]!.key === null && !c[0]!.neg));
+  if (words.length > 0) {
+    const q = words.map(ftsQuery).filter(Boolean).join(" ");
+    if (q) {
+      params.push(q);
+      parts.push(`(t.id IN (SELECT m.thread_id FROM messages m WHERE m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)))`);
+    }
+  }
+
+  for (const clause of rest) {
     const ors: string[] = [];
     for (const term of clause) {
       const sql = termSql(term, params, now);

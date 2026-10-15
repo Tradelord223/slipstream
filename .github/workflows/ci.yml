@@ -1,0 +1,37 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t slipstream-mail .
+      - name: Boot the image and check health
+        run: |
+          docker run -d --name ss -p 8080:8080 \
+            -e SLIPSTREAM_SECRET=ci-only-secret \
+            -e SLIPSTREAM_PUBLIC_URL=http://localhost:8080 slipstream-mail
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/api/health; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/api/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-slipstream: 1' http://localhost:8080/api/bootstrap)" = "401"
+          docker logs ss

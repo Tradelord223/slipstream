@@ -28,12 +28,20 @@ function env(name: string): string | undefined {
   return v === undefined || v === "" ? undefined : v;
 }
 
+/** Public URL from the hosting platform, so a one-click deploy works without extra settings. */
+function platformUrl(): string | undefined {
+  if (env("FLY_APP_NAME")) return `https://${env("FLY_APP_NAME")}.fly.dev`;
+  if (env("RENDER_EXTERNAL_URL")) return env("RENDER_EXTERNAL_URL");
+  if (env("RAILWAY_PUBLIC_DOMAIN")) return `https://${env("RAILWAY_PUBLIC_DOMAIN")}`;
+  return undefined;
+}
+
 export function loadConfig(overrides: Partial<Config> = {}): Config {
   const mode: Mode = env("SLIPSTREAM_MODE") === "team" ? "team" : "local";
   const port = Number(env("PORT") ?? env("SLIPSTREAM_PORT") ?? 4380);
   // Local mode never listens beyond loopback: it holds mail credentials and has no login.
   const host = mode === "local" ? "127.0.0.1" : (env("SLIPSTREAM_HOST") ?? "0.0.0.0");
-  const publicUrl = (env("SLIPSTREAM_PUBLIC_URL") ?? `http://127.0.0.1:${port}`).replace(/\/$/, "");
+  const publicUrl = (env("SLIPSTREAM_PUBLIC_URL") ?? platformUrl() ?? `http://127.0.0.1:${port}`).replace(/\/$/, "");
   const dataDir = resolve(env("SLIPSTREAM_DATA_DIR") ?? join(homedir(), ".slipstream"));
 
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);

@@ -274,4 +274,23 @@ export const migrations: string[] = [
     expires_at INTEGER NOT NULL
   );
   `,
+  /* 2: per-message labels, so a label removed at the provider leaves the thread */ `
+  ALTER TABLE messages ADD COLUMN label_ids TEXT;
+  `,
+  /* 3: every provider copy of a message (IMAP Inbox + Sent, Gmail All Mail + Trash), so moves keep the thread */ `
+  CREATE TABLE message_locations (
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    remote_id TEXT NOT NULL,
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    inbox INTEGER NOT NULL DEFAULT 0,
+    trash INTEGER NOT NULL DEFAULT 0,
+    spam INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, remote_id)
+  );
+  CREATE INDEX message_locations_message ON message_locations (message_id);
+  INSERT INTO message_locations (account_id, remote_id, message_id, inbox, trash, spam)
+    SELECT account_id, remote_id, id, in_inbox, in_trash, in_spam FROM messages;
+  -- Set when a message's last copy disappears; purged at the end of the sync round unless a copy reappears.
+  ALTER TABLE messages ADD COLUMN orphaned_at INTEGER;
+  `,
 ];

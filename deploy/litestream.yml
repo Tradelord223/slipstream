@@ -1,0 +1,6 @@
+# Continuous SQLite backup to any S3-compatible bucket (AWS S3, Cloudflare R2, Tigris, Backblaze B2, MinIO).
+# Credentials come from LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY.
+dbs:
+  - path: ${SLIPSTREAM_DATA_DIR}/slipstream.db
+    replica:
+      url: ${LITESTREAM_REPLICA_URL}

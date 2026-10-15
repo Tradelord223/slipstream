@@ -18,11 +18,12 @@
     "start": "node dist/server.js",
     "test": "node --test --test-reporter=spec \"server/test/**/*.test.ts\"",
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
-    "seed:bench": "node server/src/bench.ts"
+    "bench": "node scripts/bench.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
     "@hono/node-server": "^2.1.4",
-    "chrono-node": "^2.10.3",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "hono": "^4.13.13",
     "imapflow": "^2.4.0",
     "mailparser": "^3.9.38",
@@ -40,6 +41,7 @@
     "@types/react-dom": "^19.3.0",
     "@types/sanitize-html": "^2.16.2",
     "@vitejs/plugin-react": "^6.1.2",
+    "chrono-node": "^2.10.3",
     "dompurify": "^3.4.17",
     "esbuild": "^0.28.2",
     "playwright-core": "^1.64.0",
@@ -47,5 +49,25 @@
     "react-dom": "^19.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
-  }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tradelord223/slipstream.git"
+  },
+  "keywords": [
+    "email",
+    "mail-client",
+    "local-first",
+    "keyboard",
+    "gmail",
+    "outlook",
+    "imap",
+    "self-hosted"
+  ]
 }

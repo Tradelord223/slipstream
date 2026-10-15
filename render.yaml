@@ -1,0 +1,24 @@
+# Render Blueprint. A persistent disk needs a paid instance (Starter or above).
+services:
+  - type: web
+    name: slipstream
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    disk:
+      name: slipstream-data
+      mountPath: /data
+      sizeGB: 3
+    envVars:
+      - key: SLIPSTREAM_MODE
+        value: team
+      - key: SLIPSTREAM_DATA_DIR
+        value: /data
+      - key: SLIPSTREAM_SECRET
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
