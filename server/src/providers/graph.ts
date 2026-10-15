@@ -339,7 +339,8 @@ export class GraphProvider implements MailProvider {
         ops = ids.map(patch({ isRead: true }));
         break;
       case "markUnread":
-        ops = ids.map(patch({ isRead: false }));
+        // Like Gmail and the local store: only the newest message (messages arrive oldest first).
+        ops = ids.slice(-1).map(patch({ isRead: false }));
         break;
       case "star":
         ops = ids.map(patch({ flag: { flagStatus: "flagged" } }));

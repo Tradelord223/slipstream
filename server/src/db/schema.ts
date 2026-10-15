@@ -274,4 +274,7 @@ export const migrations: string[] = [
     expires_at INTEGER NOT NULL
   );
   `,
+  /* 2: per-message labels, so a label removed at the provider leaves the thread */ `
+  ALTER TABLE messages ADD COLUMN label_ids TEXT;
+  `,
 ];

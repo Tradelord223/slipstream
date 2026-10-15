@@ -166,3 +166,42 @@ describe("store, splits and triage", () => {
     assert.equal(cancel.status, 200);
   });
 });
+
+describe("labels follow the provider", () => {
+  let env: TestEnv;
+  before(() => (env = makeEnv()));
+  after(() => env.cleanup());
+
+  test("a label removed at the provider leaves the thread; a local label survives until the provider confirms", async () => {
+    const id = addAccount(env.ctx, LOCAL_USER_ID);
+    const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", id)!;
+    const labelsOf = (tid: string) =>
+      env.ctx.db.all<{ name: string }>("SELECT l.name FROM thread_labels tl JOIN labels l ON l.id = tl.label_id WHERE tl.thread_id = ? ORDER BY l.name", tid).map((r) => r.name);
+    env.ctx.store.ingest(account, {
+      messages: [msg({ from: ana, remoteId: "L1", remoteThreadId: "lt", labels: [{ remoteId: "Label_1", name: "Clients" }, { remoteId: "Label_2", name: "Q4" }] })],
+      cursor: null,
+      done: true,
+    });
+    const tid = env.ctx.db.get<{ id: string }>("SELECT id FROM threads WHERE remote_id = 'lt'")!.id;
+    assert.deepEqual(labelsOf(tid), ["Clients", "Q4"]);
+
+    env.ctx.store.ingest(account, { messages: [], flagUpdates: [{ remoteId: "L1", labels: [{ remoteId: "Label_1", name: "Clients" }] }], cursor: null, done: true });
+    assert.deepEqual(labelsOf(tid), ["Clients"]);
+
+    // Local label: applied instantly, and a stale sync during the undo window doesn't strip it.
+    await env.api("/api/triage", { method: "POST", json: { kind: "addLabel", threadIds: [tid], label: "Urgent" } });
+    env.ctx.store.ingest(account, { messages: [], flagUpdates: [{ remoteId: "L1", labels: [{ remoteId: "Label_1", name: "Clients" }] }], cursor: null, done: true });
+    assert.deepEqual(labelsOf(tid), ["Clients", "Urgent"]);
+
+    // Once the provider has it, it reports the label with its real id, which the local label adopts.
+    env.ctx.db.run("UPDATE pending_actions SET status = 'done'");
+    env.ctx.store.ingest(account, {
+      messages: [],
+      flagUpdates: [{ remoteId: "L1", labels: [{ remoteId: "Label_1", name: "Clients" }, { remoteId: "Label_9", name: "Urgent" }] }],
+      cursor: null,
+      done: true,
+    });
+    assert.deepEqual(labelsOf(tid), ["Clients", "Urgent"]);
+    assert.equal(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM labels WHERE name = 'Urgent'")!.n, 1);
+  });
+});

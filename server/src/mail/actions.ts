@@ -47,7 +47,7 @@ interface ThreadState {
 interface UndoEntry {
   userId: string;
   before: ThreadState[];
-  messageFlags: { id: string; unread: number; starred: number; in_inbox: number; in_trash: number; in_spam: number }[];
+  messageFlags: { id: string; unread: number; starred: number; in_inbox: number; in_trash: number; in_spam: number; label_ids: string | null }[];
   labels: { threadId: string; labelIds: string[] }[];
   expires: number;
 }
@@ -80,7 +80,7 @@ export class Triage {
         entry.before.push(this.db.get<ThreadState>("SELECT * FROM threads WHERE id = ?", id)!);
         entry.messageFlags.push(
           ...this.db.all<UndoEntry["messageFlags"][number]>(
-            "SELECT id, unread, starred, in_inbox, in_trash, in_spam FROM messages WHERE thread_id = ?",
+            "SELECT id, unread, starred, in_inbox, in_trash, in_spam, label_ids FROM messages WHERE thread_id = ?",
             id,
           ),
         );
@@ -124,8 +124,8 @@ export class Triage {
       }
       for (const m of entry.messageFlags) {
         this.db.run(
-          "UPDATE messages SET unread=?, starred=?, in_inbox=?, in_trash=?, in_spam=? WHERE id=?",
-          m.unread, m.starred, m.in_inbox, m.in_trash, m.in_spam, m.id,
+          "UPDATE messages SET unread=?, starred=?, in_inbox=?, in_trash=?, in_spam=?, label_ids=? WHERE id=?",
+          m.unread, m.starred, m.in_inbox, m.in_trash, m.in_spam, m.label_ids, m.id,
         );
       }
       for (const l of entry.labels) {
@@ -251,6 +251,13 @@ export class Triage {
         if (req.kind === "addLabel")
           this.db.run("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?,?)", threadId, label.id);
         else this.db.run("DELETE FROM thread_labels WHERE thread_id = ? AND label_id = ?", threadId, label.id);
+        // Keep per-message labels in step, so the next recompute agrees with what the user did.
+        for (const m of this.db.all<{ id: string; label_ids: string | null }>("SELECT id, label_ids FROM messages WHERE thread_id = ?", threadId)) {
+          const set = new Set<string>(m.label_ids ? (JSON.parse(m.label_ids) as string[]) : []);
+          if (req.kind === "addLabel") set.add(label.id);
+          else set.delete(label.id);
+          this.db.run("UPDATE messages SET label_ids = ? WHERE id = ?", JSON.stringify([...set]), m.id);
+        }
         setThread("updated_at = updated_at");
         return [{ kind: req.kind, label: { remoteId: label.remote_id, name: label.name }, ...thread }];
       }

@@ -195,7 +195,7 @@ export class MailStore {
       );
     }
 
-    if (m.labels) this.setMessageLabels(account.id, threadId, m.labels);
+    if (m.labels) this.setMessageLabels(account.id, id, m.labels);
     this.recordContacts(account.id, m, outgoing);
     return threadId;
   }
@@ -256,7 +256,7 @@ export class MailStore {
     flag("in_trash", f.folders?.trash);
     flag("in_spam", f.folders?.spam);
     if (sets.length) this.db.run(`UPDATE messages SET ${sets.join(", ")} WHERE id = ?`, ...params, msg.id);
-    if (f.labels) this.setMessageLabels(accountId, msg.thread_id, f.labels);
+    if (f.labels) this.setMessageLabels(accountId, msg.id, f.labels);
     return msg.thread_id;
   }
 
@@ -272,14 +272,21 @@ export class MailStore {
     return msg.thread_id;
   }
 
-  private setMessageLabels(accountId: string, threadId: string, labels: { remoteId: string; name: string; color?: string }[]) {
+  /** Records a message's full label set. Thread labels are rebuilt from these in recomputeThread. */
+  private setMessageLabels(accountId: string, messageId: string, labels: { remoteId: string; name: string; color?: string }[]) {
+    const ids: string[] = [];
     for (const l of labels) {
       let label = this.db.get<{ id: string }>(
-        "SELECT id FROM labels WHERE account_id = ? AND remote_id = ?",
+        "SELECT id FROM labels WHERE account_id = ? AND (remote_id = ? OR (remote_id = ? AND lower(name) = lower(?)))",
         accountId,
         l.remoteId,
+        `name:${l.name}`,
+        l.name,
       );
-      if (!label) {
+      if (label) {
+        // A label created locally by name learns its provider id here.
+        this.db.run("UPDATE labels SET remote_id = ? WHERE id = ? AND remote_id LIKE 'name:%'", l.remoteId, label.id);
+      } else {
         const id = newId("lbl");
         this.db.run(
           "INSERT INTO labels (id, account_id, remote_id, name, color) VALUES (?,?,?,?,?)",
@@ -291,8 +298,9 @@ export class MailStore {
         );
         label = { id };
       }
-      this.db.run("INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?,?)", threadId, label.id);
+      ids.push(label.id);
     }
+    this.db.run("UPDATE messages SET label_ids = ? WHERE id = ?", JSON.stringify(ids), messageId);
   }
 
   private recordContacts(accountId: string, m: IncomingMessage, outgoing: boolean) {
@@ -414,6 +422,16 @@ export class MailStore {
       return;
     }
 
+    // Thread labels are the union of its messages' labels, when the provider reports labels at all.
+    const labelSets = this.db
+      .all<{ label_ids: string | null }>("SELECT label_ids FROM messages WHERE thread_id = ?", threadId)
+      .filter((r) => r.label_ids !== null)
+      .map((r) => JSON.parse(r.label_ids!) as string[]);
+    if (labelSets.length > 0) {
+      this.db.run("DELETE FROM thread_labels WHERE thread_id = ?", threadId);
+      for (const id of new Set(labelSets.flat())) this.db.run("INSERT INTO thread_labels (thread_id, label_id) VALUES (?,?)", threadId, id);
+    }
+
     // A new inbound message cancels a reminder (the thread is back because someone wrote).
     let snoozed = thread.snoozed_until;
     if (snoozed && inInbox) snoozed = null;
@@ -442,7 +460,7 @@ export class MailStore {
     );
     if (!t) throw new Error(`Unknown thread ${threadId}`);
     const messages = this.db.all<{ remoteId: string; messageIdHeader: string | null }>(
-      "SELECT remote_id AS remoteId, message_id_header AS messageIdHeader FROM messages WHERE thread_id = ? AND remote_id NOT LIKE 'local:%'",
+      "SELECT remote_id AS remoteId, message_id_header AS messageIdHeader FROM messages WHERE thread_id = ? AND remote_id NOT LIKE 'local:%' ORDER BY sent_at",
       threadId,
     );
     return { accountId: t.account_id, threadRemoteId: t.remote_id, messages };

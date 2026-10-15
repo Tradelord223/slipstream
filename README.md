@@ -1,0 +1,90 @@
+# Slipstream
+
+**Email at the speed of thought, on your own machine.** Slipstream is an open-source, keyboard-first email client. It works with Gmail, Outlook and any IMAP server, keeps your mail in a local database so every keystroke is instant, and runs on your laptop or on your team's own server.
+
+<!-- screenshots -->
+
+```bash
+npx slipstream-mail
+```
+
+That's it: Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. Needs Node.js 22.13+.
+
+## Why
+
+Premium "fast email" clients proved that email can feel calm and quick: one key to finish a conversation, reminders that bring mail back when you need it, an inbox you actually clear. They also cost $30–40 a seat every month, only work with Gmail and Microsoft 365, keep your mailbox credentials on their servers, and put tracking pixels in the mail you send.
+
+Slipstream keeps the speed and drops the rest.
+
+|  | Slipstream |
+|---|---|
+| Mail providers | Gmail, Outlook / Microsoft 365, iCloud, Fastmail, Yahoo, Proton Bridge, any IMAP server, plus `.mbox` / `.eml` import |
+| Where your mail lives | A SQLite file on your disk (or your team's server) |
+| Credentials | Encrypted locally with AES-256-GCM |
+| Inboxes | One unified inbox across every account, or one at a time |
+| Tracking | None. Remote images are blocked until you choose to see them |
+| Shortcuts | Every one remappable |
+| AI | Optional, your own key, no tools, hardened against prompt injection |
+| Price | Free, AGPL-3.0 |
+
+## What it does
+
+- **Triage with one key.** `E` done, `H` remind me, `#` trash, `S` star, `U` unread, `J`/`K` to move, `Z` to undo anything. `Cmd+K` finds every command; `?` shows every shortcut.
+- **Split Inbox.** Important (people) and Other (newsletters, notifications) out of the box; add splits for VIPs, a client, a project, anything you can search for.
+- **Remind Me.** Type "tomorrow 9am" or "next week". The conversation leaves your inbox and comes back to the top when it's time, or as soon as someone replies.
+- **Send Later, Undo Send, follow-up reminders.** Schedule mail, take it back within ten seconds, and get nudged if nobody replies in three days.
+- **Snippets with variables.** Type `;` in a draft to insert one; `{first_name}` fills itself in. Share them with your team.
+- **Instant Intro.** On an introduction, `Cmd+Shift+I` thanks the introducer and moves them to Bcc.
+- **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `after:`, `label:` and more, over everything you've synced or imported.
+- **Get Me To Zero.** Clear a backlog older than a day, a week or a month in one undoable step.
+- **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
+- **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
+- **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
+- **Mail MCP server.** `npx slipstream-mail mcp` lets Claude Code or Claude Desktop search your mail and leave drafts for you. It can never send.
+
+## Connect your mail
+
+Settings → Accounts. Gmail works in two minutes with an app password over IMAP; Google and Microsoft OAuth take a one-time setup because each install brings its own OAuth app. Full guide: [docs/connect-accounts.md](docs/connect-accounts.md).
+
+## Run it for a team
+
+```bash
+fly launch --no-deploy --copy-config
+fly volumes create slipstream_data --size 3
+fly secrets set SLIPSTREAM_SECRET="$(openssl rand -base64 32)"
+fly deploy
+```
+
+Fly.io is the recommended host: one always-on machine with a volume, about $4 a month. Docker Compose works on any server; Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](docs/self-hosting.md).
+
+## Fast, measured
+
+50,000 messages (16,667 conversations) in a local store, Apple Silicon laptop, `npm run bench`:
+
+| Operation | p50 | p95 |
+|---|---|---|
+| Open a split (first 100 conversations) | 0.9 ms | 1.2 ms |
+| Unread counts for every split | 6.9 ms | 8.1 ms |
+| Full-text search, typical two-word query | 22 ms | 33 ms |
+| Full-text search, worst case (a word in nearly every message) | 54 ms | 67 ms |
+| Mark done and undo it (two writes) | 0.2 ms | 0.3 ms |
+| Open a conversation | 0.05 ms | 0.08 ms |
+
+Provider round-trips never block you: actions apply locally first and reach Gmail, Outlook or your IMAP server a few seconds later, after the undo window.
+
+## Develop
+
+```bash
+git clone https://github.com/Tradelord223/slipstream && cd slipstream
+npm install
+npm run dev        # server on :4392 with a demo inbox + web app on :5180
+npm test           # server tests (node:test)
+npm run typecheck
+npm run build && npm start
+```
+
+The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. No native dependencies anywhere. More in [docs/architecture.md](docs/architecture.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
+
+## License
+
+[AGPL-3.0](LICENSE). Use it, run it for your company, change it. If you offer a modified Slipstream to others as a service, share your changes.
