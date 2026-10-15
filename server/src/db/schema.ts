@@ -441,4 +441,7 @@ export const migrations: string[] = [
   CREATE INDEX label_rules_user ON label_rules (user_id);
   CREATE INDEX labels_name ON labels (account_id, name COLLATE NOCASE);
   `,
+  /* 9: approvals created during a cloud agent run point back at it */ `
+  ALTER TABLE approvals ADD COLUMN run_id TEXT;
+  `,
 ];

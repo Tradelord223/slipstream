@@ -16,9 +16,9 @@ import { fileURLToPath } from "node:url";
 
 const COSTS = [
   [/costly/i, 150],
-  [/newsletters/i, 118],
-  [/invoices/i, 85],
-  [/thursday/i, 100],
+  [/newsletters/i, 22],
+  [/invoices/i, 31],
+  [/kettleby/i, 46],
 ];
 
 export class FakeManagedAgents {
@@ -96,7 +96,7 @@ export class FakeManagedAgents {
         s.threadId = thread.id;
         this.tool(sid, "drafts_create", {
           threadId: thread.id,
-          body: "Hi Priya,\n\nThursday at 2pm works. I'll bring the round 2 dashboard notes and we can go through the lane grouping together.\n\nSee you then,\nJordan",
+          body: "Hi Priya,\n\nThursday at 10 works. I'll bring the round 2 dashboard notes and we can go through the lane grouping together.\n\nSee you then,\nJordan",
         });
       } else if (n === 2) {
         const draftId = parse().id;
@@ -106,7 +106,7 @@ export class FakeManagedAgents {
         }
         this.tool(sid, "drafts_send", { draftId });
       } else {
-        this.say(sid, "- Found Priya's thread about Thursday.\n- Drafted a reply confirming 2pm.\n- The send is waiting for your OK in Review.");
+        this.say(sid, "- Found Priya's thread about Thursday.\n- Drafted a reply confirming Thursday at 10.\n- The send is waiting for your OK in Review.");
         this.finish(sid);
       }
       return;

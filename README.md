@@ -42,6 +42,7 @@ Slipstream keeps the speed and drops the rest.
 - **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `after:`, `label:` and more, over everything you've synced or imported.
 - **Get Me To Zero.** Clear the whole backlog, or everything older than a week or a month, in one undoable step.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
+- **Labels.** Colors, nesting ("Clients/Kettleby"), and auto-label rules that file new mail as it arrives. Labels you apply sync to Gmail labels, Outlook categories and IMAP keywords; renames and deletes sync to Gmail.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
 - **AI, if you want it.** Summaries and reply drafts with your own Anthropic key.
 - **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agent-api.md](docs/agent-api.md).
@@ -52,9 +53,11 @@ Slipstream keeps the speed and drops the rest.
 
 | | |
 |---|---|
+| ![Claude in the sidebar, working on the open conversation](docs/screenshots/assistant-dark.png) | ![Review: approve or reject what agents want to do](docs/screenshots/review-dark.png) |
+| ![The cloud agent: chats, routines and budget](docs/screenshots/agent-dark.png) | ![Labels with colors, nesting and auto-label rules](docs/screenshots/labels-dark.png) |
 | ![Conversation](docs/screenshots/thread-dark.png) | ![Compose with snippets](docs/screenshots/compose-dark.png) |
 | ![Remind me](docs/screenshots/remind-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |
-| ![Inbox zero](docs/screenshots/zero-dark.png) | ![Light theme](docs/screenshots/inbox-light.png) |
+| ![Connect an assistant over MCP](docs/screenshots/connect-dark.png) | ![Light theme](docs/screenshots/inbox-light.png) |
 
 ## Connect your mail
 

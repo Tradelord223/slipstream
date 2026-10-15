@@ -26,6 +26,7 @@ interface ActivityRow {
 interface ApprovalRow {
   id: string;
   thread_ids: string;
+  run_id: string | null;
   user_id: string;
   agent_id: string;
   command: string;
@@ -202,6 +203,7 @@ export class Commands {
       reason: r.reason,
       input: JSON.parse(r.input) as unknown,
       threadIds: JSON.parse(r.thread_ids) as string[],
+      runId: r.run_id,
       status: r.status,
       error: r.error,
       createdAt: r.created_at,

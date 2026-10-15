@@ -35,8 +35,13 @@ export function cloudRoutes(ctx: AppContext) {
   });
   app.get("/cloud/runs/:id", (c) => c.json(ctx.cloud.run(c.get("user").id, c.req.param("id"))));
   app.post("/cloud/runs/:id/messages", async (c) => {
-    const { text } = z.object({ text: z.string().trim().min(1).max(8_000) }).parse(await c.req.json());
-    return c.json(await ctx.cloud.reply(c.get("user").id, c.req.param("id"), text));
+    const { text, context } = z
+      .object({
+        text: z.string().trim().min(1).max(8_000),
+        context: z.object({ threadIds: z.array(z.string().max(100)).max(100).optional(), view: z.string().max(200).optional() }).optional(),
+      })
+      .parse(await c.req.json());
+    return c.json(await ctx.cloud.reply(c.get("user").id, c.req.param("id"), text, context));
   });
   app.post("/cloud/runs/:id/stop", async (c) => c.json(await ctx.cloud.stop(c.get("user").id, c.req.param("id"))));
 

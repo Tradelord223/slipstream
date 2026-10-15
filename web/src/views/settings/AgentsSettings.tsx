@@ -12,6 +12,7 @@ import { agentsUi } from "../../store/agents.ts";
 import { useCloud } from "../../store/cloud.ts";
 import { useStore } from "../../store/createStore.ts";
 import { toast } from "../../store/toasts.ts";
+import { useSession } from "../../store/session.ts";
 import type { AgentInfo, AgentPolicy, AgentScope, Webhook } from "../../types.ts";
 import { CloudCard } from "./CloudCard.tsx";
 
@@ -300,13 +301,14 @@ function RevealDialog({
 }
 
 function TokenDialog({ agent, token, onClose }: { agent: AgentInfo; token: string; onClose: () => void }) {
+  const cli = useSession((s) => s.features.cli);
   const origin = location.origin;
   return (
     <RevealDialog title={`Token for ${agent.name}`} value={token} valueLabel="token" need={`${agent.name} needs it to connect.`} onClose={onClose}>
       {(markCopied) => (
         <div className="ag-snips">
           <Snippet title="Claude Code" text={claudeCodeCommand(origin, token)} onCopied={markCopied} />
-          <Snippet title="Claude Desktop, Cursor and other stdio clients" hint="A local install creates its own token, so this needs none." text={stdioConfig} />
+          <Snippet title="Claude Desktop, Cursor and other stdio clients" hint="A local install creates its own token, so this needs none." text={stdioConfig(cli)} />
           <Snippet title="HTTP API" text={curlCommand(origin, token)} onCopied={markCopied} />
         </div>
       )}

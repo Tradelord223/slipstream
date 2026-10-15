@@ -53,6 +53,10 @@ export interface Features {
   google: boolean;
   microsoft: boolean;
   undoSendSeconds: number;
+  /** Where this server's source is (AGPL-3.0). */
+  sourceUrl?: string;
+  /** How to run this install's CLI from another program, with absolute paths (local mode). */
+  cli?: { command: string; args: string[] } | null;
 }
 
 export interface Bootstrap {

@@ -191,7 +191,8 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
     if (!query || zero) return items;
     const ranked = rank(items, query);
     if (mode !== "root" || !connected) return ranked;
-    // Typing anything offers to hand it to Claude, above the commands; Enter on it starts a run.
+    // Typing anything also offers to hand it to Claude. It's the default only when no command matches,
+    // so Enter on a typo never starts a paid run by surprise.
     const ask: Item = {
       id: "ask-claude",
       title: `Ask Claude: ${query}`,
@@ -202,7 +203,7 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
         void askClaude(query).then((run) => run && openAssistant({ runId: run.id }));
       },
     };
-    return [ask, ...ranked];
+    return ranked.length ? [...ranked, ask] : [ask];
   }, [items, q, mode, zero, connected]);
 
   useEffect(() => {

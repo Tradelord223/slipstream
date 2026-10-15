@@ -125,7 +125,7 @@ export function nextScheduled(days: number[], time: string, tz: string, from = D
 
 export class CloudAgent {
   private ctx: AppContext;
-  private active = new Map<string, AbortController>();
+  private active = new Map<string, { userId: string; ctl: AbortController }>();
   private timer: NodeJS.Timeout | null = null;
 
   constructor(ctx: AppContext) {
@@ -262,7 +262,7 @@ export class CloudAgent {
     const c = this.config(userId);
     if (c) this.ctx.agents.revoke(userId, c.principalId);
     this.ctx.db.run("DELETE FROM settings WHERE user_id = ? AND key = 'cloudAgent'", userId);
-    for (const [, ctl] of this.active) ctl.abort();
+    for (const [, run] of this.active) if (run.userId === userId) run.ctl.abort();
     // The Managed Agent itself stays in the Anthropic Console (archiving is permanent; that's the user's call).
   }
 
@@ -286,26 +286,13 @@ export class CloudAgent {
     if (!c || !key || !principal) throw new HttpError(400, "Connect the cloud agent first (Settings → Agents).");
     const status = this.status(userId);
     if (status.spentThisMonthCents >= c.monthlyBudgetCents) throw new HttpError(402, "The cloud agent reached this month's budget. Raise it in Settings → Agents.");
-    if ([...this.active.keys()].length >= 3) throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
+    if ([...this.active.values()].filter((r) => r.userId === userId).length >= 3)
+      throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
 
     const id = newId("run");
     const now = Date.now();
     const user = this.ctx.users.get(userId)!;
-    // What the person is looking at, so "this" and "these" mean something. Only their own threads.
-    const focus = (context?.threadIds ?? [])
-      .map((tid) =>
-        this.ctx.db.get<{ id: string; subject: string }>(
-          "SELECT t.id, t.subject FROM threads t JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.user_id = ?",
-          tid,
-          userId,
-        ),
-      )
-      .filter((t): t is { id: string; subject: string } => Boolean(t));
-    const contextText = [
-      `Now: ${new Date(now).toISOString()} (the user's zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}).`,
-      context?.view ? `The user is looking at: ${context.view}.` : "",
-      focus.length ? `The user is pointing at these conversations (id: subject):\n${focus.map((t) => `- ${t.id}: ${t.subject}`).join("\n")}` : "",
-    ]
+    const contextText = [`Now: ${new Date(now).toISOString()} (the user's zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}).`, this.contextText(userId, context)]
       .filter(Boolean)
       .join("\n");
     this.ctx.db.run(
@@ -332,13 +319,35 @@ export class CloudAgent {
     return this.run(userId, id);
   }
 
+  /** What the person is looking at, so "this" and "these" mean something. Only their own threads. */
+  private contextText(userId: string, context?: { threadIds?: string[]; view?: string }): string {
+    const focus = (context?.threadIds ?? [])
+      .map((tid) =>
+        this.ctx.db.get<{ id: string; subject: string }>(
+          "SELECT t.id, t.subject FROM threads t JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.user_id = ?",
+          tid,
+          userId,
+        ),
+      )
+      .filter((t): t is { id: string; subject: string } => Boolean(t));
+    return [
+      context?.view ? `The user is looking at: ${context.view}.` : "",
+      focus.length ? `The user is pointing at these conversations (id: subject):\n${focus.map((t) => `- ${t.id}: ${t.subject}`).join("\n")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
   /** Follow-up message in a run whose session is still alive. */
-  async reply(userId: string, runId: string, text: string) {
+  async reply(userId: string, runId: string, text: string, context?: { threadIds?: string[]; view?: string }) {
     const r = this.ctx.db.get<RunRow>("SELECT * FROM cloud_runs WHERE id = ? AND user_id = ?", runId, userId);
     const key = this.apiKey(userId);
     if (!r?.session_id || !key) throw new HttpError(404, "Run not found");
     if (r.status === "budget") throw new HttpError(402, "This run hit its budget. Start a new one.");
-    await this.client(key).beta.sessions.events.send(r.session_id, { events: [{ type: "user.message", content: [{ type: "text", text }] }] });
+    const extra = this.contextText(userId, context);
+    await this.client(key).beta.sessions.events.send(r.session_id, {
+      events: [{ type: "user.message", content: [{ type: "text", text: extra ? `${text}\n\n${extra}` : text }] }],
+    });
     this.append(runId, { kind: "user", text, at: Date.now() });
     this.ctx.db.run("UPDATE cloud_runs SET status = 'running', finished_at = NULL WHERE id = ?", runId);
     this.emit(userId, runId);
@@ -348,10 +357,11 @@ export class CloudAgent {
 
   async stop(userId: string, runId: string) {
     const r = this.ctx.db.get<RunRow>("SELECT * FROM cloud_runs WHERE id = ? AND user_id = ?", runId, userId);
+    if (!r) throw new HttpError(404, "Run not found");
     const key = this.apiKey(userId);
-    if (!r?.session_id || !key) throw new HttpError(404, "Run not found");
-    await this.client(key).beta.sessions.events.send(r.session_id, { events: [{ type: "user.interrupt" }] }).catch(() => {});
-    this.active.get(runId)?.abort();
+    // A run still starting has no session yet; stopping it just marks it.
+    if (r.session_id && key) await this.client(key).beta.sessions.events.send(r.session_id, { events: [{ type: "user.interrupt" }] }).catch(() => {});
+    this.active.get(runId)?.ctl.abort();
     this.finish(userId, runId, "stopped", null);
     return this.run(userId, runId);
   }
@@ -369,7 +379,7 @@ export class CloudAgent {
     const actor: Actor = { kind: "agent", user, agent: principal };
     const client = this.client(key);
     const ctl = new AbortController();
-    this.active.set(runId, ctl);
+    this.active.set(runId, { userId, ctl });
     const seen = new Set<string>();
     const answered = new Set<string>();
 
@@ -394,6 +404,7 @@ export class CloudAgent {
           let isError = false;
           try {
             const res = await this.ctx.commands.execute(actor, name, event.input);
+            if (res.status === "pending_approval") this.ctx.db.run("UPDATE approvals SET run_id = ? WHERE id = ?", runId, res.approvalId);
             text =
               res.status === "pending_approval"
                 ? `Waiting for the user's approval (${res.reason}). It's in their Review queue; it runs when they approve. Don't retry.`
@@ -536,14 +547,24 @@ export class CloudAgent {
     return this.start(userId, `${r.instruction}${extra}`, r.id);
   }
 
+  /** After a restart: pick runs that were mid-flight back up from their session's history, or close them. */
+  resumeInterrupted() {
+    const stuck = this.ctx.db.all<RunRow>("SELECT * FROM cloud_runs WHERE status IN ('starting','running')");
+    for (const r of stuck) {
+      if (r.session_id && this.apiKey(r.user_id) && this.config(r.user_id)) void this.drive(r.user_id, r.id, r.session_id);
+      else this.finish(r.user_id, r.id, "failed", "Interrupted when Slipstream restarted.");
+    }
+  }
+
   startScheduler() {
+    this.resumeInterrupted();
     this.timer = setInterval(() => void this.tick().catch((e) => console.error("[slipstream] cloud agent:", e)), 30_000);
     this.timer.unref();
   }
 
   close() {
     if (this.timer) clearInterval(this.timer);
-    for (const [, ctl] of this.active) ctl.abort();
+    for (const [, run] of this.active) run.ctl.abort();
   }
 
   /** Fire due schedules, and mail routines whose search matches newly arrived mail. */

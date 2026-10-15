@@ -7,10 +7,12 @@ import { claudeCodeCommand, cliCommand, curlCommand, mcpUrl, openApiUrl, stdioCo
 import { navigate } from "../../store/route.ts";
 import { openCreateAgent } from "../../store/agents.ts";
 import { toast } from "../../store/toasts.ts";
+import { useSession } from "../../store/session.ts";
 import type { RemoteMode, RemoteStatus } from "../../types.ts";
 
 export function ConnectSettings() {
   const origin = location.origin;
+  const cli = useSession((s) => s.features.cli);
 
   return (
     <div className="settings-list">
@@ -25,7 +27,7 @@ export function ConnectSettings() {
         </div>
         <div className="ag-snips">
           <Snippet title="Claude Code" hint="Adds Slipstream as an MCP server." text={claudeCodeCommand(origin)} />
-          <Snippet title="Claude Desktop, Cursor and other stdio clients" hint="A local install creates its own token." text={stdioConfig} />
+          <Snippet title="Claude Desktop, Cursor and other stdio clients" hint="A local install creates its own token." text={stdioConfig(cli)} />
           <Snippet
             title="HTTP API"
             hint={
@@ -39,7 +41,7 @@ export function ConnectSettings() {
             }
             text={curlCommand(origin)}
           />
-          <Snippet title="Command line" hint="Run any action from a terminal." text={cliCommand} />
+          <Snippet title="Command line" hint="Run any action from a terminal." text={cliCommand(cli)} />
         </div>
       </section>
       <RemoteAccess />

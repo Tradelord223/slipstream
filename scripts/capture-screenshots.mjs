@@ -71,7 +71,7 @@ async function seedLabels() {
   const cmd = (name, input) => call("POST", `/api/v1/${name}`, input ?? {});
   for (const [name, color] of [["Clients", "#3e8bff"], ["Research", "#12a594"], ["Team", "#ab4aba"], ["Travel", "#f76b15"]]) await cmd("labels.update", { name, color });
   await cmd("labels.create", { name: "Clients/Kettleby", color: "#30a46c" });
-  await cmd("labels.create", { name: "Clients/Fernpoint", color: "#d6409f" });
+  await cmd("labels.create", { name: "Clients/Lumenridge", color: "#d6409f" });
   const kettleby = [bySubject("Dispatch dashboard"), bySubject("Invitation")].filter(Boolean).map((t) => t.id);
   if (kettleby.length) await call("POST", "/api/triage", { kind: "addLabel", threadIds: kettleby, label: "Clients/Kettleby" });
   await cmd("labelRules.create", { label: "Clients/Kettleby", query: "from:@kettlebyfreight.com", applyToExisting: true });
@@ -95,7 +95,7 @@ async function seedCloud() {
   for (const [key, instruction] of [
     ["news", "Mark newsletters from before last week done"],
     ["invoices", "Remind me about the unpaid invoices on Friday"],
-    ["walk", "Check that Thursday's walkthrough is on my calendar"],
+    ["walk", "Label this month's Kettleby mail as Clients/Kettleby"],
     ["priya", "Reply to Priya's dispatch dashboard feedback and send it"],
   ]) {
     const started = await call("POST", "/api/cloud/runs", { instruction });
@@ -141,7 +141,7 @@ async function seedAgents() {
     to: [{ name: "Priya Raman", email: "priya@fernpoint.co" }],
     cc: ["sam@fernpoint.co"],
     subject: "Thursday walkthrough",
-    body: "Hi Priya,\n\nThursday at 2pm works. I'll bring the round 2 dashboard notes and we can go through the lane grouping together.\n\nSee you then,\nJordan",
+    body: "Hi Priya,\n\nThursday at 10 works. I'll bring the round 2 dashboard notes and we can go through the lane grouping together.\n\nSee you then,\nJordan",
   });
   if (second.result?.id) await writer("drafts.send", { draftId: second.result.id });
   await sweeper("triage.trash", { threadIds: threads.slice(0, 11).map((t) => t.id) });

@@ -15,6 +15,7 @@ import { ShortcutsSettings } from "./settings/ShortcutsSettings.tsx";
 import { SnippetsSettings } from "./settings/SnippetsSettings.tsx";
 import { SplitsSettings } from "./settings/SplitsSettings.tsx";
 import { TeamSettings } from "./settings/TeamSettings.tsx";
+import { AboutSettings } from "./settings/AboutSettings.tsx";
 
 const SECTIONS = [
   { id: "general", label: "General" },
@@ -27,6 +28,7 @@ const SECTIONS = [
   { id: "ai", label: "AI" },
   { id: "agents", label: "Agents" },
   { id: "connect", label: "Connect" },
+  { id: "about", label: "About" },
 ] as const;
 
 const TITLES: Record<string, string> = { connect: "Connect an assistant" };
@@ -64,6 +66,7 @@ export function SettingsView({ section }: { section: string }) {
         <div className="settings-content">
           <h2 className="settings-title">{TITLES[current.id] ?? current.label}</h2>
           {current.id === "general" && <GeneralSettings />}
+          {current.id === "about" && <AboutSettings />}
           {current.id === "accounts" && <AccountsSettings />}
           {current.id === "splits" && <SplitsSettings />}
           {current.id === "labels" && <LabelsSettings />}
