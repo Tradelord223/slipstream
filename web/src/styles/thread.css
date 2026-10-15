@@ -47,6 +47,9 @@
   letter-spacing: -0.02em;
   line-height: 1.25;
 }
+.thread-subject + .msg {
+  margin-top: 14px;
+}
 .thread-labels {
   display: flex;
   gap: 6px;

@@ -660,3 +660,10 @@ a.sync-warn:hover {
     right: 0;
   }
 }
+
+@media (max-width: 719px) {
+  .tab-add {
+    min-width: 44px;
+    justify-content: center;
+  }
+}

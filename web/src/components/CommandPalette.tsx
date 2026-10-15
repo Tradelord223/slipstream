@@ -94,8 +94,13 @@ function Palette({ mode: initialMode, ids }: { mode: PaletteMode; ids: string[] 
       const c = COMMANDS.find((x) => x.id === cmdId);
       return c ? bindingsOf(c, session.settings.keymap)[0] : undefined;
     };
-    for (const c of COMMANDS) {
+    const here = getRoute().name === "thread" ? "thread" : getRoute().name === "mail" ? "list" : "page";
+    const order = ["Triage", "Write", "Go to", "Move", "Select", "Compose", "General"];
+    const rankOf = (g: string) => (order.includes(g) ? order.indexOf(g) : 99);
+    const ranked = [...COMMANDS].sort((a, b) => rankOf(a.group) - rankOf(b.group));
+    for (const c of ranked) {
       if (c.noPalette) continue;
+      if (!c.scopes.some((x) => x === here || x === "global" || x === "compose")) continue;
       if (c.when && !c.when()) continue;
       if (c.id === "compose.replyAllList") continue;
       if (c.id === "compose.ai" && !session.features.ai) continue;
