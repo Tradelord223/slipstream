@@ -28,6 +28,10 @@ export interface Account {
   lastSyncedAt: number | null;
   /** When the first full sync finished; null while it's still running. */
   firstSyncedAt: number | null;
+  /** An archive import is still running. Missing on servers that don't report it. */
+  importing?: boolean;
+  /** Messages the archive import has stored so far, for a screen that opened mid-import. */
+  imported?: number;
   /** Other addresses this account can send as (aliases, custom domains). */
   identities: Identity[];
 }

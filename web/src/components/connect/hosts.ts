@@ -14,26 +14,44 @@ export const KIND_NAME: Record<Kind, string> = {
   other: "another provider",
 };
 
-const DOMAINS: [Kind, RegExp][] = [
-  ["gmail", /^(gmail|googlemail)\.com$/],
-  ["outlook", /^(outlook|hotmail|live|msn)\.[a-z.]+$/],
-  ["icloud", /^(icloud|me|mac)\.com$/],
-  ["yahoo", /^(yahoo|ymail|rocketmail)\.[a-z.]+$/],
-  ["fastmail", /^(fastmail\.(com|fm)|messagingengine\.com)$/],
-  ["zoho", /^zoho(mail)?\.(com|eu|in)$/],
-  ["proton", /^(proton\.me|protonmail\.(com|ch)|pm\.me)$/],
-];
+/** The consumer domains whose provider is certain from the name alone. Anything else needs the server's lookup. */
+const WELL_KNOWN: Record<string, Kind> = {
+  "gmail.com": "gmail",
+  "googlemail.com": "gmail",
+  "outlook.com": "outlook",
+  "hotmail.com": "outlook",
+  "live.com": "outlook",
+  "msn.com": "outlook",
+  "icloud.com": "icloud",
+  "me.com": "icloud",
+  "mac.com": "icloud",
+  "yahoo.com": "yahoo",
+  "ymail.com": "yahoo",
+  "rocketmail.com": "yahoo",
+  "fastmail.com": "fastmail",
+  "fastmail.fm": "fastmail",
+  "zoho.com": "zoho",
+  "zohomail.com": "zoho",
+  "proton.me": "proton",
+  "protonmail.com": "proton",
+  "protonmail.ch": "proton",
+  "pm.me": "proton",
+};
 
-const domainOf = (email: string) => email.trim().toLowerCase().split("@")[1] ?? "";
+export const domainOf = (email: string) => email.trim().toLowerCase().split("@")[1] ?? "";
 
 /** What we know about an address from its domain alone, when the server can't look it up. */
 export function kindFromDomain(email: string): Kind | null {
-  const domain = domainOf(email);
-  return DOMAINS.find(([, re]) => re.test(domain))?.[0] ?? null;
+  return WELL_KNOWN[domainOf(email)] ?? null;
 }
 
+/**
+ * Which sign-in a lookup points to. Outlook is sign-in only, so it has no IMAP preset; every other named provider needs
+ * one. A provider with no preset (Zoho's regional servers) is "other", with the servers the lookup found.
+ */
 export function kindFromDiscovery(d: Discovery): Kind {
-  return d.provider === "imap" ? "other" : d.provider;
+  if (d.provider === "gmail" || d.provider === "outlook") return d.provider;
+  return d.provider !== "imap" && d.preset ? d.provider : "other";
 }
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -48,19 +66,15 @@ export function nameFromEmail(email: string): string {
     .join(" ");
 }
 
-/** A plain label for an account's provider. App-password accounts are stored as generic mail servers, so go by the address. */
-export function providerLabel(a: Pick<Account, "provider" | "email">): string {
+/** A plain label for an account's provider, from what was stored when it was connected, never guessed from the address. */
+export function providerLabel(a: Pick<Account, "provider"> & { preset?: string | null }): string {
   switch (a.provider) {
     case "demo":
       return "Demo mailbox";
     case "archive":
       return "Imported archive";
-    case "gmail":
-      return "Gmail";
-    case "outlook":
-      return "Outlook";
   }
-  const kind = kindFromDomain(a.email);
+  const kind = [a.provider, a.preset].find((k): k is Kind => typeof k === "string" && k !== "other" && Object.hasOwn(KIND_NAME, k));
   return kind ? KIND_NAME[kind] : "Email account";
 }
 

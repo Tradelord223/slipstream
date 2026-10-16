@@ -72,6 +72,7 @@ function AccountRow({ account: a }: { account: Account }) {
   const status =
     a.syncStatus === "reauth" ? { text: "Needs to reconnect", tone: "warn" }
     : a.syncStatus === "error" ? { text: a.syncError ? `Sync problem: ${a.syncError}` : "Sync problem", tone: "bad" }
+    : a.importing ? { text: a.imported ? `Importing… ${a.imported.toLocaleString("en-US")} messages` : "Importing…", tone: "muted" }
     : a.syncStatus === "syncing" ? { text: "Syncing…", tone: "muted" }
     : { text: `Synced ${ago(a.lastSyncedAt, now)}`, tone: "muted" };
 

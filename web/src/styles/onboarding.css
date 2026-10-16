@@ -315,6 +315,9 @@
 .ob-note-title:focus {
   outline: none;
 }
+.ob-note .link-btn {
+  justify-self: start;
+}
 .ob-note a {
   display: inline-flex;
   align-items: center;

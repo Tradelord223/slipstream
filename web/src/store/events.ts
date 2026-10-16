@@ -70,6 +70,14 @@ export function disconnectEvents() {
   source = null;
 }
 
+// The stream is bound to the person who opened it, so it closes when the session goes back to signing in (sign-out, an
+// expired cookie). It lives here rather than in signOut because session.ts can't import this file: compose.ts
+// subscribes to the session while it loads, and the cycle would reach it first.
+session.subscribe(() => {
+  const status = session.get().status;
+  if (status === "signin" || status === "setup") disconnectEvents();
+});
+
 function handle(e: ServerEvent) {
   switch (e.type) {
     case "threads":
@@ -90,12 +98,12 @@ function handle(e: ServerEvent) {
               syncStatus: e.status,
               syncError: e.error ?? null,
               lastSyncedAt: e.status === "idle" ? Date.now() : a.lastSyncedAt,
-              firstSyncedAt: a.firstSyncedAt ?? (e.status === "idle" ? Date.now() : null),
             }
           : a,
       );
       session.set({ accounts });
-      // First-run setup waits on this; pick up the server's own account state once a sync settles.
+      // An idle event doesn't mean the first sync is complete (a run can end early), so first-run setup waits for the
+      // server's own firstSyncedAt, picked up here once a run settles.
       if (session.get().status === "onboarding" && e.status !== "syncing") void refreshSession();
       break;
     }

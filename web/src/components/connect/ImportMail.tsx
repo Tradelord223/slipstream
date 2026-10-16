@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { api } from "../../api.ts";
 import { importState, useImportJob } from "../../store/events.ts";
+import { refreshSession } from "../../store/session.ts";
 import { toast } from "../../store/toasts.ts";
 import { Icon } from "../Icon.tsx";
 
@@ -26,7 +27,9 @@ export function ImportMail({ defaultOwner = "", onStarted, autoFocus = false }: 
     importState.set({ job: null });
     try {
       const { accountId } = await api.importMail(file, owner.trim());
-      await onStarted?.(accountId);
+      // Callers that take over (onStarted) refresh themselves; otherwise the new archive account should show up now.
+      if (onStarted) await onStarted(accountId);
+      else await refreshSession();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Couldn't start the import";
       setProblem(message);

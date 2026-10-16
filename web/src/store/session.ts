@@ -100,24 +100,34 @@ export function markOnboarding(on: boolean) {
 /** Accounts that hold real mail. The invented demo mailbox doesn't count. */
 export const realAccounts = (accounts: Account[]) => accounts.filter((a) => a.provider !== "demo");
 
-/** First-run setup comes before the app: nobody with real mail connected gets in without it (developers with the demo mailbox on skip it). */
-function needsOnboarding(accounts: Account[], features: Features, settings: Settings): boolean {
+/**
+ * First-run setup comes before the app. On this computer nobody gets in without a real mailbox (developers with the demo
+ * mailbox skip it). On a team server a person with no mailbox can skip for now, which sets `onboarded`.
+ */
+function needsOnboarding(mode: Session["mode"], accounts: Account[], features: Features, settings: Settings): boolean {
   if (features.demo) return false;
-  return realAccounts(accounts).length === 0 || (onboardingUnderway() && !settings.onboarded);
+  const partway = onboardingUnderway() && !settings.onboarded;
+  const none = realAccounts(accounts).length === 0;
+  return mode === "team" ? !settings.onboarded && (none || partway) : none || partway;
 }
 
-/** Leave first-run setup and open the app. */
-export async function finishOnboarding(patch: Partial<Settings> = {}): Promise<void> {
-  const settings = { ...session.get().settings, ...patch, onboarded: true };
-  session.set({ settings });
-  markOnboarding(false);
-  navigate("/", { replace: true });
-  session.set({ status: "ready" });
+/**
+ * Leave first-run setup and open the app. The settings save comes first: the screen only changes once the server has
+ * it, so a failed save leaves the person where they were (with a message) rather than claiming a choice that didn't stick.
+ */
+export async function finishOnboarding(patch: Partial<Settings> = {}): Promise<boolean> {
   try {
     await api.saveSettings({ onboarded: true, ...patch });
-  } catch {
-    /* the inbox opens either way; the steps are skipped next time only if this saved */
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : "Couldn't save that. Try again.");
+    return false;
   }
+  session.set({ settings: { ...session.get().settings, ...patch, onboarded: true } });
+  markOnboarding(false);
+  // An invite link waiting in the address bar stays put: the app opens on it.
+  if (getRoute().name !== "join") navigate("/", { replace: true });
+  session.set({ status: "ready" });
+  return true;
 }
 
 export async function loadSession(): Promise<void> {
@@ -126,7 +136,7 @@ export async function loadSession(): Promise<void> {
     const settings = { ...DEFAULT_SETTINGS, ...b.settings };
     const filter = session.get().accountFilter;
     session.set({
-      status: needsOnboarding(b.accounts, b.features, settings) ? "onboarding" : "ready",
+      status: needsOnboarding(b.mode, b.accounts, b.features, settings) ? "onboarding" : "ready",
       error: null,
       logosChoice: typeof b.settings.senderLogos === "boolean" ? b.settings.senderLogos : null,
       mode: b.mode,
@@ -160,15 +170,21 @@ export async function refreshSession(): Promise<void> {
   try {
     const b = await api.bootstrap();
     const filter = session.get().accountFilter;
+    const { status, mode, settings: current } = session.get();
+    // `onboarded` only ever turns on, so an answer that was already on its way when it did can't turn it back off.
+    const settings = { ...DEFAULT_SETTINGS, ...b.settings, onboarded: Boolean(b.settings.onboarded || current.onboarded) };
     session.set({
       workspace: b.workspace,
       accounts: b.accounts,
       splits: b.splits,
       labels: b.labels,
       features: b.features,
-      settings: { ...DEFAULT_SETTINGS, ...b.settings },
+      settings,
       logosChoice: typeof b.settings.senderLogos === "boolean" ? b.settings.senderLogos : null,
       accountFilter: filter && b.accounts.some((a) => a.id === filter) ? filter : null,
+      // Removing the last mailbox on this computer sends the person back to setup. Leaving setup is only
+      // ever finishOnboarding's doing: a refresh already in flight must not undo it with an older answer.
+      ...(status === "ready" && needsOnboarding(mode, b.accounts, b.features, settings) ? { status: "onboarding" as const } : {}),
     });
   } catch {
     /* the next event retries */
@@ -261,6 +277,7 @@ export async function signOut(): Promise<void> {
   } catch {
     /* the cookie is cleared server-side on success; either way we leave */
   }
+  // The signed-in status going away also closes the event stream (events.ts), which is bound to the person who opened it.
   session.set({ status: "signin", user: null, workspace: null, accounts: [], splits: [], labels: [], snippets: [] });
   navigate("/login", { replace: true });
 }

@@ -3,7 +3,7 @@ import { api, ApiError } from "../../api.ts";
 import { useSession } from "../../store/session.ts";
 import type { Discovery } from "../../types.ts";
 import { Icon, Logo, type IconName } from "../Icon.tsx";
-import { EMAIL_RE, GUIDE_URL, KIND_NAME, kindFromDiscovery, kindFromDomain, nameFromEmail, type Kind } from "./hosts.ts";
+import { domainOf, EMAIL_RE, GUIDE_URL, KIND_NAME, kindFromDiscovery, kindFromDomain, nameFromEmail, type Kind } from "./hosts.ts";
 import { ImportMail } from "./ImportMail.tsx";
 
 export interface Connected {
@@ -80,6 +80,7 @@ export function ConnectFlow({
   lead,
   brand = false,
   allowImport = false,
+  footer,
   initial,
   onConnected,
   onBeforeOAuth,
@@ -90,6 +91,8 @@ export function ConnectFlow({
   lead?: ReactNode;
   brand?: boolean;
   allowImport?: boolean;
+  /** Shown under the first step only, for a way out that belongs to the caller. */
+  footer?: ReactNode;
   /** Start on a provider's sign-in with a problem to show (Google or Microsoft sent the person back with an error). */
   initial?: { kind: Kind; error: string };
   onConnected: (c: Connected) => void | Promise<void>;
@@ -106,6 +109,10 @@ export function ConnectFlow({
   const [email, setEmail] = useState("");
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [looking, setLooking] = useState(false);
+  // Which address lookup is current; one that comes back after the person has moved on is dropped.
+  const lookup = useRef(0);
+  // The IMAP preset to send: the lookup's, or the chosen tile's. None for "Other" and for providers without one.
+  const [presetId, setPresetId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [presets, setPresets] = useState<Preset[]>([]);
 
@@ -142,9 +149,16 @@ export function ConnectFlow({
     [],
   );
 
+  const abandonLookup = () => {
+    lookup.current++;
+    setLooking(false);
+  };
+
   const enter = (next: Kind, d: Discovery | null, address = email) => {
+    abandonLookup();
     setKind(next);
     setDiscovery(d);
+    setPresetId(next === "other" ? null : d ? d.preset : presets.length === 0 || presets.some((p) => p.id === next) ? next : null);
     setErrors({});
     setPassword("");
     setReveal(false);
@@ -171,6 +185,7 @@ export function ConnectFlow({
     }
     setErrors({});
     setNotice("");
+    const id = ++lookup.current;
     setLooking(true);
     let found: Discovery | null = null;
     try {
@@ -178,6 +193,7 @@ export function ConnectFlow({
     } catch {
       found = null; // the lookup is a convenience; the provider tiles always work
     }
+    if (id !== lookup.current) return; // the person picked a provider or changed the address meanwhile
     setLooking(false);
     if (found) return enter(kindFromDiscovery(found), found, value);
     const known = kindFromDomain(value);
@@ -186,14 +202,28 @@ export function ConnectFlow({
     requestAnimationFrame(() => root.current?.querySelector<HTMLElement>(".ob-tile")?.focus());
   };
 
+  const openImport = () => {
+    abandonLookup();
+    setStep("import");
+  };
+
   const back = () => {
+    abandonLookup();
     setStep("email");
     setErrors({});
     setNotice("");
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape" && step !== "email" && !busy) {
+    if (e.key !== "Escape") return;
+    if ((e.target as HTMLElement).id === "ob-secret") {
+      // Stepping back would wipe what was typed (or pasted) here; Escape only leaves the field.
+      e.preventDefault();
+      e.stopPropagation();
+      (e.target as HTMLElement).blur();
+      return;
+    }
+    if (step !== "email" && !busy) {
       e.preventDefault();
       e.stopPropagation(); // inside a dialog, Escape goes back a step first and only closes at the first one
       back();
@@ -219,6 +249,12 @@ export function ConnectFlow({
     window.location.href = `/api/oauth/${provider}/start`;
   };
 
+  const usePasswordInstead = () => {
+    setUsePassword(true);
+    // The button that had focus is about to disappear; land on the field that replaces it.
+    requestAnimationFrame(() => document.getElementById(email.trim() ? "ob-secret" : "ob-email")?.focus());
+  };
+
   const connect = async (e: React.FormEvent) => {
     e.preventDefault();
     const address = email.trim();
@@ -240,7 +276,7 @@ export function ConnectFlow({
     setBusy(true);
     setErrors({});
     const body: Record<string, unknown> = { email: address, name: (name ?? nameFromEmail(address)).trim(), password: secret };
-    if (kind !== "other") body.preset = kind;
+    if (presetId) body.preset = presetId;
     if (kind === "proton" && (username ?? address).trim() !== address) body.username = (username ?? address).trim();
     if (kind === "other") {
       body.imapHost = server.imapHost.trim();
@@ -318,7 +354,7 @@ export function ConnectFlow({
             autoComplete="email"
             placeholder="you@example.com"
             value={email}
-            onChange={(e) => (setEmail(e.target.value), setErrors({}), setNotice(""))}
+            onChange={(e) => (abandonLookup(), setEmail(e.target.value), setErrors({}), setNotice(""))}
             aria-invalid={Boolean(errors.email)}
             aria-describedby={errors.email ? "ob-email-error" : undefined}
             data-autofocus
@@ -344,7 +380,7 @@ export function ConnectFlow({
       </div>
       <div className="ob-tiles" role="group" aria-labelledby="ob-providers">
         {TILES.map((t) => (
-          <button key={t.kind} type="button" className="ob-tile" onClick={() => enter(t.kind, kindFromDomain(email) === t.kind ? discovery : null)}>
+          <button key={t.kind} type="button" className="ob-tile" onClick={() => enter(t.kind, discovery && discovery.domain === domainOf(email) && kindFromDiscovery(discovery) === t.kind ? discovery : null)}>
             <Icon name={t.icon} size={20} />
             <span>{t.label}</span>
           </button>
@@ -353,12 +389,14 @@ export function ConnectFlow({
 
       {allowImport && (
         <div className="ob-aside">
-          <button type="button" className="link-btn" onClick={() => setStep("import")}>
+          <button type="button" className="link-btn" onClick={openImport}>
             Import a mail file instead
           </button>
           <p className="form-hint">An .mbox or .eml file from Thunderbird or Google Takeout.</p>
         </div>
       )}
+
+      {footer}
     </div>
   );
 
@@ -408,7 +446,7 @@ export function ConnectFlow({
       <header className="ob-head">
         {heading(kind === "other" ? "Connect your email" : kind === "outlook" ? "Connect Outlook" : `Connect ${KIND_NAME[kind]}`)}
         {kind === "gmail" && showOAuth && <p className="ob-lead">Sign in with Google and Slipstream takes it from there. A Google Workspace address works too.</p>}
-        {kind === "gmail" && !showOAuth && <p className="ob-lead">An app password lets Slipstream read and send your mail without your Google password. A Google Workspace address works the same.</p>}
+        {kind === "gmail" && !showOAuth && <p className="ob-lead">An app password lets Slipstream read and send your mail without your Google password. Google Workspace addresses work too, unless your administrator has turned app passwords off.</p>}
         {kind === "outlook" && <p className="ob-lead">For Outlook.com, Hotmail and Microsoft 365 addresses.</p>}
         {kind === "other" && <p className="ob-lead">Enter your address and password. Most providers need nothing else.</p>}
         {(kind === "icloud" || kind === "yahoo" || kind === "fastmail" || kind === "zoho") && <p className="ob-lead">{label} asks for an app password: a separate password just for Slipstream.</p>}
@@ -423,7 +461,7 @@ export function ConnectFlow({
             {leaving ? `Opening ${oauthKind === "google" ? "Google" : "Microsoft"}…` : oauthKind === "google" ? "Continue with Google" : "Continue with Microsoft"}
           </button>
           {kind === "gmail" && (
-            <button type="button" className="link-btn" onClick={() => setUsePassword(true)}>
+            <button type="button" className="link-btn" onClick={usePasswordInstead}>
               Use an app password instead
             </button>
           )}
@@ -437,10 +475,18 @@ export function ConnectFlow({
             <p className="ob-note-title" tabIndex={-1} data-autofocus>
               Outlook sign-in isn't set up on this install yet.
             </p>
-            <p>Microsoft no longer accepts app passwords, so Outlook needs a one-time setup by whoever runs Slipstream.</p>
+            <p>
+              Microsoft no longer accepts app passwords.{" "}
+              {mode === "team" ? "Ask whoever runs this Slipstream to set up Microsoft sign-in." : "Set MICROSOFT_CLIENT_ID to turn on Microsoft sign-in (see the guide)."}
+            </p>
             <a href={GUIDE_URL} target="_blank" rel="noopener noreferrer">
               Read the setup guide <Icon name="external" size={13} />
             </a>
+            {allowImport && (
+              <button type="button" className="link-btn" onClick={openImport}>
+                Import a mail file instead
+              </button>
+            )}
           </div>
         </div>
       )}

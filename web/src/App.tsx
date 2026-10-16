@@ -74,8 +74,16 @@ export function App() {
     );
   }
   if (status === "signin" || status === "setup") return <AuthView />;
-  // First run: no rail, no inbox, no shortcuts until a real mailbox is connected.
-  if (status === "onboarding") return <OnboardingView />;
+  // First run: no rail, no inbox, no shortcuts until a real mailbox is connected. An invite link still comes first,
+  // so opening one never loses it.
+  if (status === "onboarding") {
+    return (
+      <>
+        {route.name === "join" ? <JoinSignedIn invite={route.invite} /> : <OnboardingView />}
+        <Toasts />
+      </>
+    );
+  }
   return <Shell />;
 }
 
@@ -121,7 +129,7 @@ function Shell() {
     const connected = q.get("connected");
     const error = q.get("error");
     if (!connected && !error) return;
-    if (connected) toast.info(connected === "microsoft" ? "Outlook connected" : "Gmail connected");
+    if (connected) toast.info(q.get("provider") === "microsoft" || connected === "microsoft" ? "Outlook connected" : "Gmail connected");
     else if (error) toast.error(oauthErrorText(error));
     navigate(location.pathname, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps

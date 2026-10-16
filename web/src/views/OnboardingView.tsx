@@ -6,8 +6,8 @@ import { oauthErrorText, providerLabel, type Kind } from "../components/connect/
 import { Dialog } from "../components/Dialog.tsx";
 import { Icon, Logo } from "../components/Icon.tsx";
 import { claudeCodeCommand, cliCommand, stdioConfig } from "../lib/connect.ts";
-import { connectEvents, useImportJob, useSyncFetched } from "../store/events.ts";
-import { navigate, useRoute } from "../store/route.ts";
+import { connectEvents, disconnectEvents, useImportJob, useSyncFetched } from "../store/events.ts";
+import { getRoute, navigate, useRoute } from "../store/route.ts";
 import { finishOnboarding, markOnboarding, realAccounts, refreshSession, signOut, useSession } from "../store/session.ts";
 import { toast } from "../store/toasts.ts";
 import type { Account } from "../types.ts";
@@ -18,7 +18,9 @@ type Phase = "connect" | "progress" | "personalize";
 function returnTrip(): { connected: boolean; error: string | null; kind: Kind | null } {
   const q = new URLSearchParams(location.search);
   const error = q.get("error");
-  const where = error?.startsWith("microsoft") || q.get("connected") === "microsoft" ? "outlook" : "gmail";
+  // The server names the provider on every return; the guesses are for a server that doesn't.
+  const provider = q.get("provider");
+  const where = provider === "microsoft" ? "outlook" : provider === "google" ? "gmail" : error?.startsWith("microsoft") || q.get("connected") === "microsoft" ? "outlook" : "gmail";
   return { connected: Boolean(q.get("connected")), error, kind: error ? where : null };
 }
 
@@ -43,6 +45,8 @@ export function OnboardingView() {
     markOnboarding(true);
     connectEvents();
     if (route.name !== "join") navigate("/", { replace: true });
+    // The app opens its own stream; one left over would stay bound to whoever signs out from here.
+    return disconnectEvents;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -59,14 +63,22 @@ export function OnboardingView() {
     setPhase("progress");
   };
 
-  const leave = async (afterwards?: string) => {
-    await finishOnboarding(afterwards === "assistant" ? { assistant: "on" } : {});
-    if (afterwards === "assistant") navigate("/settings/models");
+  const leave = async (afterwards?: string): Promise<boolean> => {
+    const saved = await finishOnboarding(afterwards === "assistant" ? { assistant: "on" } : {});
+    if (saved && afterwards === "assistant" && getRoute().name !== "join") navigate("/settings/models");
+    return saved;
   };
 
   const openInbox = () => {
     if (settings.onboarded) void leave();
     else setPhase("personalize");
+  };
+
+  // Team only: a person can look around before connecting a mailbox. On this computer there's nothing to look at without one.
+  const [skipping, setSkipping] = useState(false);
+  const skip = async () => {
+    setSkipping(true);
+    if (!(await leave())) setSkipping(false);
   };
 
   // Every step opens on its heading so a screen reader starts at the top.
@@ -87,6 +99,15 @@ export function OnboardingView() {
             initial={trip.error && trip.kind ? { kind: trip.kind, error: oauthErrorText(trip.error) } : undefined}
             onConnected={connected}
             onBeforeOAuth={() => markOnboarding(true)}
+            footer={
+              mode === "team" && (
+                <div className="ob-aside">
+                  <button type="button" className="btn btn-quiet" onClick={() => void skip()} disabled={skipping}>
+                    {skipping ? "Opening…" : "Skip for now"}
+                  </button>
+                </div>
+              )
+            }
           />
         )}
         {phase === "progress" && accountId && <Arriving accountId={accountId} onOpen={openInbox} onStartOver={() => setPhase("connect")} />}
@@ -113,9 +134,9 @@ export function OnboardingView() {
 // ---- Bringing in your mail ----------------------------------------------------------------------
 
 /** The sr-only line changes only at milestones, so a screen reader isn't read every new message. */
-function milestone(count: number): string {
-  if (count <= 0) return "Connecting to your mailbox.";
-  if (count < 100) return "Your first messages are arriving.";
+function milestone(count: number, archive: boolean): string {
+  if (count <= 0) return archive ? "Reading your archive." : "Connecting to your mailbox.";
+  if (count < 100) return archive ? "Your first messages are in." : "Your first messages are arriving.";
   return `More than ${(Math.floor(count / 500) * 500 || 100).toLocaleString("en-US")} messages so far.`;
 }
 
@@ -128,7 +149,6 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
 
   const archive = account?.provider === "archive";
   const mine = job && job.accountId === accountId ? job : null;
-  const count = archive ? (mine?.imported ?? 0) : fetched;
   const problem = archive
     ? mine?.status === "failed"
       ? (mine.error ?? "The file couldn't be read.")
@@ -138,8 +158,14 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
       : account?.syncStatus === "reauth"
         ? "Slipstream can't sign in to this account anymore."
         : null;
-  const done = Boolean(account && (account.firstSyncedAt || mine?.status === "done" || (!archive && account.syncStatus === "idle" && account.lastSyncedAt !== null)));
-  const ready = !problem && (count > 0 || done);
+  // Done is the server's word that the whole first sync or import finished. A sync that merely went idle doesn't count:
+  // a run can stop early (the page cap) with more mail still to come.
+  const done = Boolean(account && (archive ? mine?.status === "done" || (account.firstSyncedAt && account.importing !== true) : account.firstSyncedAt));
+  // The count is for this view's own run. After a reload there is no run to count, only an import's stored total.
+  const running = !done && !problem && (archive ? mine?.status === "running" || account?.importing === true : account?.syncStatus === "syncing");
+  const count = archive ? (mine?.imported ?? account?.imported ?? 0) : fetched;
+  const shown = running ? count : 0;
+  const ready = !problem && (done || count > 0);
 
   // The event stream is the fast path; asking now and then covers a stream that dropped.
   useEffect(() => {
@@ -159,7 +185,10 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
       setRetrying(false);
     }
   };
+  // A mailbox that is stuck or failed is removed so the next try starts clean. One that finished stays; it's a
+  // working account, and the person is only here to add another.
   const startOver = async () => {
+    if (done) return onStartOver();
     setRemoving(true);
     try {
       await api.removeAccount(accountId);
@@ -171,6 +200,12 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
     }
   };
 
+  const differentAccount = (
+    <button className="btn btn-quiet btn-lg" onClick={() => void startOver()} disabled={retrying || removing}>
+      Use a different account
+    </button>
+  );
+
   return (
     <div className="ob-step-pane">
       <header className="ob-head">
@@ -179,7 +214,7 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
           <span>Slipstream</span>
         </div>
         <h1 className="ob-title" tabIndex={-1} data-heading>
-          {problem ? "That didn't work" : done ? "Your mail is here" : "Bringing in your mail"}
+          {problem ? "That didn't work" : done ? "Your mail is here" : archive ? "Importing your mail" : "Bringing in your mail"}
         </h1>
       </header>
 
@@ -202,31 +237,41 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
             <button className="btn btn-primary btn-lg" onClick={() => void retry()} disabled={retrying || removing}>
               {retrying ? "Trying…" : "Try again"}
             </button>
-            <button className="btn btn-quiet btn-lg" onClick={() => void startOver()} disabled={retrying || removing}>
-              Use a different account
-            </button>
+            {differentAccount}
           </div>
         </>
       ) : (
         <>
-          <div className="ob-count" aria-hidden="true">
-            {count > 0 ? (
-              <>
-                <span className="ob-count-num num">{count.toLocaleString("en-US")}</span>
-                <span className="ob-count-label">{done ? "messages" : "messages so far"}</span>
-              </>
-            ) : (
-              <span className="ob-count-label">{done ? "Nothing in this mailbox yet." : "Connecting to your mailbox…"}</span>
-            )}
-          </div>
+          {!done && (
+            <div className="ob-count" aria-hidden="true">
+              {shown > 0 ? (
+                <>
+                  {archive && <span className="ob-count-label">Importing…</span>}
+                  <span className="ob-count-num num">{shown.toLocaleString("en-US")}</span>
+                  <span className="ob-count-label">{archive ? "messages" : "messages so far"}</span>
+                </>
+              ) : (
+                <span className="ob-count-label">{archive ? "Importing…" : "Connecting to your mailbox…"}</span>
+              )}
+            </div>
+          )}
           <p className="sr-only" role="status" aria-live="polite">
-            {done ? "Your mail is here." : milestone(count)}
+            {done ? "Your mail is here." : milestone(shown, archive)}
           </p>
-          <p className="ob-lead">{done ? "Everything is in. New mail will keep arriving on its own." : "Your newest mail comes first. You can start now; the rest keeps arriving in the background."}</p>
+          <p className="ob-lead">
+            {done
+              ? archive
+                ? "Everything in the file is in."
+                : "Everything is in. New mail will keep arriving on its own."
+              : archive
+                ? "You can start now; the rest keeps coming in as the file is read."
+                : "Your newest mail comes first. You can start now; the rest keeps arriving in the background."}
+          </p>
           <div className="ob-actions">
             <button className="btn btn-primary btn-lg" onClick={onOpen} disabled={!ready} data-autofocus>
               Open my inbox
             </button>
+            {differentAccount}
           </div>
         </>
       )}
@@ -238,7 +283,7 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
 
 type Ai = "none" | "agent" | "builtin";
 
-function MakeItYours({ onFinish }: { onFinish: (afterwards?: string) => Promise<void> }) {
+function MakeItYours({ onFinish }: { onFinish: (afterwards?: string) => Promise<boolean> }) {
   const accounts = useSession((s) => s.accounts);
   const cli = useSession((s) => s.features.cli);
   const [choice, setChoice] = useState<Ai>("none");
@@ -250,7 +295,7 @@ function MakeItYours({ onFinish }: { onFinish: (afterwards?: string) => Promise<
 
   const finish = async (skip: boolean) => {
     setBusy(true);
-    await onFinish(!skip && choice === "builtin" ? "assistant" : undefined);
+    if (!(await onFinish(!skip && choice === "builtin" ? "assistant" : undefined))) setBusy(false);
   };
 
   const options: { id: Ai; title: string; text: string; body?: React.ReactNode }[] = [
