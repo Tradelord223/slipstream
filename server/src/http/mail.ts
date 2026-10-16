@@ -7,7 +7,7 @@ import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 import type { ServerEvent } from "../events.ts";
-import { PROVIDERS } from "../agents/engines/accounts.ts";
+import { assistantSetting } from "../agents/assistant.ts";
 import { triageCommandName } from "../commands/catalog.ts";
 import { listIdentities } from "../mail/identities.ts";
 import { extractCode } from "../mail/signals.ts";
@@ -281,7 +281,7 @@ export function mailRoutes(ctx: AppContext) {
           }
         }),
     );
-    settings.assistant ??= assistantDefault(ctx, user.id);
+    settings.assistant = assistantSetting(ctx, user.id);
     return c.json({
       mode: ctx.config.mode,
       user,
@@ -302,23 +302,6 @@ export function mailRoutes(ctx: AppContext) {
   });
 
   return app;
-}
-
-/**
- * Until someone picks on/off, the assistant follows whether they've set up a model: a default engine or model,
- * a saved or environment key, a ChatGPT sign-in, the cloud agent, or any agent run.
- */
-function assistantDefault(ctx: AppContext, userId: string): "on" | "off" {
-  const { db } = ctx;
-  const engines = db.get<{ value: string }>("SELECT value FROM settings WHERE user_id = ? AND key = 'engines'", userId);
-  const prefs = engines ? (JSON.parse(engines.value) as { defaultEngine?: string; models?: object }) : {};
-  const configured =
-    Boolean(prefs.defaultEngine) ||
-    Object.keys(prefs.models ?? {}).length > 0 ||
-    PROVIDERS.some((p) => ctx.cloud.accounts.keySource(userId, p)) ||
-    Boolean(db.get("SELECT 1 AS x FROM settings WHERE user_id = ? AND (key LIKE 'secret:%' OR key = 'cloudAgent')", userId)) ||
-    Boolean(db.get("SELECT 1 AS x FROM cloud_runs WHERE user_id = ? LIMIT 1", userId));
-  return configured ? "on" : "off";
 }
 
 /**

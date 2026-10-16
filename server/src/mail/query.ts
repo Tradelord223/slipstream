@@ -3,7 +3,7 @@
  *
  *   from:ana  to:@acme.com  subject:"q3 plan"  label:clients  has:attachment
  *   is:unread is:starred is:snoozed is:done is:vip is:muted is:important
- *   is:code is:delivery (is:package) is:security (is:signin) is:urgent   (what the latest incoming message is about)
+ *   is:code is:delivery (is:package) is:security (is:signin) is:urgent   (anything the latest incoming message is about)
  *   in:inbox|sent|trash|spam|done|snoozed|all   category:news|notification|important|other
  *   after:2026-01-31  before:2026-03-01  newer:7d  older:2w   account:me@work.com
  *   -from:ana (negation)   a OR b   "exact phrase"   free text (full-text, prefix match)
@@ -84,6 +84,20 @@ export interface Compiled {
   scoped: boolean;
 }
 
+/** Operators that match message text (the subject, attachment names); free words do too. Everything else matches fields. */
+const TEXT_KEYS = new Set(["subject", "filename"]);
+const isTextTerm = (t: Term) => t.key === null || TEXT_KEYS.has(t.key);
+
+/**
+ * Conversations where some message carries a one-time code, or hasn't been scanned yet and might.
+ * Reads the messages, not the thread's chip: a code in an older message leaks through a text match just the same.
+ */
+const HAS_CODE = `EXISTS (SELECT 1 FROM messages cm WHERE cm.thread_id = t.id AND (cm.signals IS NULL OR cm.signals LIKE '%"kind":"code"%'))`;
+
+/** Whether the conversation's latest incoming message has a signal of this kind (threads.signal is an array of signals). */
+const hasSignal = (kind: string) =>
+  `EXISTS (SELECT 1 FROM json_each(t.signal) j WHERE CASE WHEN j.type = 'object' THEN json_extract(j.value, '$.kind') END = '${kind}')`;
+
 const DAY = 86_400_000;
 
 export function parseRelative(v: string, now: number): number | null {
@@ -110,7 +124,13 @@ export function ftsQuery(text: string): string | null {
   return words.map((w) => `"${w}"*`).join(" ");
 }
 
-export function compile(input: string, now = Date.now()): Compiled {
+/**
+ * `agent`: the reader is an agent, which must never learn a one-time code. Masking hides the code in what an agent reads, but a
+ * text match against the real body would still answer "is it 618?" one guess at a time. So a search that matches message text
+ * (free words, subject:, filename:, negated or not) never returns, and never counts, a conversation that carries a code.
+ * is:code, from: and the other field operators still list them.
+ */
+export function compile(input: string, now = Date.now(), opts: { agent?: boolean } = {}): Compiled {
   const clauses = parse(input);
   const parts: string[] = [];
   const params: (string | number)[] = [];
@@ -138,6 +158,7 @@ export function compile(input: string, now = Date.now()): Compiled {
     }
     if (ors.length) parts.push(ors.length === 1 ? ors[0]! : `(${ors.join(" OR ")})`);
   }
+  if (opts.agent && clauses.some((c) => c.some(isTextTerm))) parts.push(`NOT ${HAS_CODE}`);
   return { where: parts.length ? parts.join(" AND ") : "1", params, scoped };
 }
 
@@ -191,12 +212,12 @@ function termSql(term: Term, params: (string | number)[], now: number): string |
         case "done": return `t.in_inbox = 0 AND t.in_trash = 0 AND t.in_spam = 0 AND t.snoozed_until IS NULL`;
         case "muted": return `t.muted = 1`;
         case "important": return `t.category = 'important'`;
-        case "code": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'code'`;
+        case "code": return hasSignal("code");
         case "delivery":
-        case "package": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'delivery'`;
+        case "package": return hasSignal("delivery");
         case "security":
-        case "signin": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'security'`;
-        case "urgent": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'urgent'`;
+        case "signin": return hasSignal("security");
+        case "urgent": return hasSignal("urgent");
         case "vip":
           return `EXISTS (SELECT 1 FROM messages m JOIN contacts c ON c.account_id = m.account_id AND c.email = m.from_email
                    WHERE m.thread_id = t.id AND c.vip = 1)`;

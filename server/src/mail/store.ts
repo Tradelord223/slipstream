@@ -6,7 +6,7 @@ import { baseSubject, htmlToText, makeSnippet } from "../lib/text.ts";
 import { categorize, isBulkMessage } from "./classify.ts";
 import { ownAddresses } from "./identities.ts";
 import { registrableDomain } from "./logos.ts";
-import { scanSignals, topSignal } from "./signals.ts";
+import { orderSignals, scanSignals, type Signal } from "./signals.ts";
 import type { Address, FlagUpdate, IncomingMessage, SyncPage, ThreadRef } from "./types.ts";
 
 export interface AccountRow {
@@ -21,6 +21,8 @@ export interface AccountRow {
   sync_status: string;
   sync_error: string | null;
   last_synced_at: number | null;
+  /** When the account's first full sync finished; NULL until then. */
+  first_synced_at: number | null;
   created_at: number;
 }
 
@@ -42,6 +44,7 @@ interface MessageAgg {
   is_bulk: number;
   list_unsubscribe: string | null;
   signals: string | null;
+  created_at: number;
   has_att: number;
 }
 
@@ -448,7 +451,7 @@ export class MailStore {
     if (!thread) return;
     const msgs = this.db.all<MessageAgg>(
       `SELECT m.id, from_name, from_email, to_json, cc_json, subject, sent_at, snippet, unread, starred, in_inbox, in_trash,
-              in_spam, outgoing, is_bulk, list_unsubscribe, signals,
+              in_spam, outgoing, is_bulk, list_unsubscribe, signals, m.created_at,
               EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id AND a.inline = 0) AS has_att
        FROM messages m WHERE thread_id = ? ORDER BY sent_at`,
       threadId,
@@ -506,12 +509,13 @@ export class MailStore {
     const inInbox = msgs.some((m) => m.in_inbox && !m.in_trash && !m.in_spam);
     const lastInbound = inbound.at(-1)?.sent_at ?? null;
     const sortAt = Math.max(last.sent_at, thread.reminded_at ?? 0);
-    // The chip a list row shows comes from the latest message someone sent us.
+    // The chips a list row shows come from the latest message someone sent us: all its signals, most important first.
+    // A date from the future can't keep a chip fresh, so the time is the earlier of when it says it was sent and when it arrived.
     const latestIn = inbound.at(-1);
-    const top = latestIn?.signals ? topSignal(JSON.parse(latestIn.signals)) : null;
+    const ordered = latestIn?.signals ? orderSignals(JSON.parse(latestIn.signals) as Signal[]) : [];
     const base = {
-      signal: top ? json(top) : null,
-      signal_at: top && latestIn ? latestIn.sent_at : null,
+      signal: ordered.length ? json(ordered) : null,
+      signal_at: ordered.length && latestIn ? Math.min(latestIn.sent_at, latestIn.created_at) : null,
       subject: baseSubject(first.subject) || baseSubject(last.subject),
       snippet: last.snippet,
       participants: json(participants.slice(0, 8)),

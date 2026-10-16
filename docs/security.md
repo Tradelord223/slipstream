@@ -127,7 +127,8 @@ What it doesn't cover: other browsers (it runs Chromium), messages beyond these 
 Nothing, until you turn something on. Slipstream sends mail text to a model only through these, each of which uses the model or key you chose:
 
 - **Summaries and reply drafts** need an Anthropic key (in Settings, or `ANTHROPIC_API_KEY` in the server's environment). They run only when you press the button, send that conversation's text (newest messages first, up to about 120,000 characters, quoted history trimmed) and give the model no tools.
-- **The assistant, routines and the cloud agent** read mail through Slipstream's commands, within the scopes you gave them. What they read goes to their model's provider.
+- **The assistant, routines and the cloud agent** read mail through Slipstream's commands, within the scopes you gave them. What they read goes to their model's provider. The server honours the assistant switch in Settings → AI: with it off, no chat or routine starts and Autopilot reads no new mail (`409 The assistant is off`). Agents you connect yourself over MCP, the API or the CLI are not part of that switch.
+- **One-time codes** are masked in everything above, in summaries and drafts, and in the subjects the assistant and routines are told. An agent's searches can't be used to guess one either: a search that matches message text never returns a conversation with a code in it.
 - **Autopilot** is off until you turn it on. For each new message it sends the sender, subject, recipients (the first five), date, header facts and the opening of the text (1,500 characters, or 300 for bulk mail). To draft a reply it reads that conversation and samples of your earlier sent mail.
 - **Your own agent** (Claude Code, Codex or any MCP client) reads whatever its token's scopes allow.
 

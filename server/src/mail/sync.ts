@@ -149,14 +149,20 @@ export class SyncEngine {
     try {
       const provider = this.provider(account);
       let cursor = account.sync_cursor;
+      let caughtUp = false;
       for (let pages = 0; pages < 500; pages++) {
         const page = await provider.sync(cursor);
         const touched = this.store.ingest(account, page);
         cursor = page.cursor;
         this.db.run("UPDATE accounts SET sync_cursor = ? WHERE id = ?", cursor, accountId);
         if (touched.length) this.events.emitToUser(account.user_id, { type: "threads", accountId, threadIds: touched });
-        if (page.done) break;
+        if (page.done) {
+          caughtUp = true;
+          break;
+        }
       }
+      // The first sync that reaches the end of the mailbox: mail stored before it is history, not news.
+      if (caughtUp) this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
       await this.refreshIdentities(account, provider);
       setStatus("idle");
     } catch (err) {

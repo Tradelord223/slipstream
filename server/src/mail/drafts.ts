@@ -136,7 +136,12 @@ export function updateDraft(ctx: AppContext, userId: string, id: string, body: D
   if (d.status === "sending" || d.status === "sent") throw new HttpError(409, "This message was already sent");
   const account = assertAccount(ctx, userId, body.accountId);
   let from: string | null;
-  if (body.fromEmail !== undefined) from = storedFrom(ctx, body.accountId, account.email, body.fromEmail);
+  // The editor sends the From it holds with every autosave. One that matches what's stored isn't a change, so it isn't
+  // re-checked: removing a send-as address later must not make the body of a draft that still names it unsavable.
+  // (Send checks the address again when it's queued and when it goes out.)
+  const unchanged = body.accountId === d.account_id && Boolean(body.fromEmail) && body.fromEmail!.toLowerCase() === d.from_email?.toLowerCase();
+  if (unchanged) from = d.from_email;
+  else if (body.fromEmail !== undefined) from = storedFrom(ctx, body.accountId, account.email, body.fromEmail);
   else if (body.accountId === d.account_id) from = d.from_email;
   else {
     // Moved to another account without choosing an address: keep the old one only if that account also has it.

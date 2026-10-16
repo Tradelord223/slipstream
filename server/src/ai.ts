@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { maskCodes } from "./mail/signals.ts";
 
 /**
  * Optional AI, bring-your-own-key. Two jobs: summarize a conversation, draft a reply.
@@ -6,6 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
  * Email is untrusted input written by strangers, so the design assumes prompt injection:
  * - the model gets no tools, so it can't fetch, send or read anything beyond what we pass;
  * - mail is passed as clearly delimited data, never as instructions;
+ * - a one-time code is masked first: a summary or a reply never needs one, and a model's provider shouldn't hold it;
  * - output is shown as plain text (no rendered links or images that could carry data out),
  *   and a drafted reply only ever lands in the compose box for the user to review.
  */
@@ -30,7 +32,8 @@ function formatThread(messages: AiMessage[]): string {
   const parts: string[] = [];
   let used = 0;
   // Newest messages matter most; walk backwards and stop when the budget is spent.
-  for (const m of [...messages].reverse()) {
+  for (const raw of [...messages].reverse()) {
+    const m = { ...raw, ...maskCodes({ subject: raw.subject, text: raw.text }) };
     const block = `<email from="${attr(m.from)}" to="${attr(m.to)}" date="${new Date(m.sentAt).toISOString()}" subject="${attr(m.subject)}">\n${m.text.replaceAll("</email>", "</ email>")}\n</email>`;
     if (used + block.length > MAX_THREAD_CHARS && parts.length > 0) break;
     parts.unshift(block);

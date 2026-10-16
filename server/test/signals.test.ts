@@ -238,7 +238,7 @@ describe("signals in the store", () => {
     assert.deepEqual(JSON.parse(m.signals), [{ kind: "code" }]);
     assert.ok(!m.signals.includes("618204"));
     const t = row<{ signal: string; signal_at: number }>("SELECT signal, signal_at FROM threads WHERE remote_id = 'code1'");
-    assert.deepEqual(JSON.parse(t.signal), { kind: "code" });
+    assert.deepEqual(JSON.parse(t.signal), [{ kind: "code" }], "the thread keeps the latest message's signals as a list");
     assert.ok(!t.signal.includes("618204"));
     assert.equal(row<{ signal: string | null }>("SELECT signal FROM threads WHERE remote_id = 'plain1'").signal, null);
     assert.equal(row<{ signals: string }>("SELECT signals FROM messages WHERE subject = 'Coffee?'").signals, "[]");
@@ -248,7 +248,7 @@ describe("signals in the store", () => {
     ingest(
       msg({ from: shop, remoteThreadId: "ship1", subject: "Your order has shipped", bodyText: "Order SM-1 has shipped. Tracking number: TWP1111222233", sentAt: now - 90_000_000 }),
     );
-    assert.equal(JSON.parse(row<{ signal: string }>("SELECT signal FROM threads WHERE remote_id = 'ship1'").signal).kind, "delivery");
+    assert.equal(JSON.parse(row<{ signal: string }>("SELECT signal FROM threads WHERE remote_id = 'ship1'").signal)[0].kind, "delivery");
     // A later plain reply from the same sender changes the top line to nothing; our own reply doesn't count.
     ingest(
       msg({ from: shop, remoteThreadId: "ship1", subject: "Re: Your order has shipped", bodyText: "Thanks for writing, glad it helped.", sentAt: now - 80_000_000 }),
@@ -266,7 +266,7 @@ describe("signals in the store", () => {
     env.ctx.db.run("INSERT INTO pending_actions (account_id, kind, payload, run_after, created_at) VALUES (?,?,?,?,?)", account.id, "triage", JSON.stringify({ threadId: id }), now + 60_000, now);
     env.ctx.db.run("UPDATE threads SET signal = NULL, signal_at = NULL WHERE id = ?", id);
     env.ctx.store.recomputeThread(id);
-    assert.equal(JSON.parse(row<{ signal: string }>("SELECT signal FROM threads WHERE id = ?", id).signal).kind, "code");
+    assert.equal(JSON.parse(row<{ signal: string }>("SELECT signal FROM threads WHERE id = ?", id).signal)[0].kind, "code");
     env.ctx.db.run("DELETE FROM pending_actions");
   });
 
@@ -427,7 +427,7 @@ describe("the demo mailbox", () => {
     const page = await new DemoProvider({ accountId, email: DEMO_IDENTITY.email, auth: null, saveAuth() {}, initialSyncDays: 30 }).sync(null);
     env.ctx.store.ingest(account, page);
     const found = Object.fromEntries(
-      env.ctx.db.all<{ remote_id: string; signal: string }>("SELECT remote_id, signal FROM threads WHERE signal IS NOT NULL").map((r) => [r.remote_id, JSON.parse(r.signal) as Signal]),
+      env.ctx.db.all<{ remote_id: string; signal: string }>("SELECT remote_id, signal FROM threads WHERE signal IS NOT NULL").map((r) => [r.remote_id, (JSON.parse(r.signal) as Signal[])[0]]),
     );
     assert.deepEqual(found, {
       "bank-code": { kind: "code" },
@@ -438,10 +438,10 @@ describe("the demo mailbox", () => {
     });
     const code = env.ctx.db.get<{ sent_at: number }>("SELECT m.sent_at FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.remote_id = 'bank-code'")!;
     assert.ok(Date.now() - code.sent_at < 5 * 60_000, "the code arrived a couple of minutes ago");
-    // The two updates for one package: the shipped notice steps aside for "out for delivery".
-    assert.equal(bundleDeliveries(env.ctx, Date.now() + 1), 1);
+    // The two updates for one package arrived with the account's first sync, which is history, so both stay.
+    assert.equal(bundleDeliveries(env.ctx, Date.now() + 1), 0);
     const inbox = (remote: string) => env.ctx.db.get<{ in_inbox: number }>("SELECT in_inbox FROM threads WHERE remote_id = ?", remote)!.in_inbox;
-    assert.deepEqual([inbox("saltmarrow-ship"), inbox("saltmarrow-out")], [0, 1]);
+    assert.deepEqual([inbox("saltmarrow-ship"), inbox("saltmarrow-out")], [1, 1]);
   });
 
   test("rows name a logo domain for company senders only", async () => {
@@ -477,6 +477,8 @@ describe("delivery bundling", () => {
   before(() => {
     env = makeEnv();
     account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", addAccount(env.ctx, LOCAL_USER_ID))!;
+    // The account has finished its first sync; everything ingested below arrives after it.
+    env.ctx.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ?", Date.now() - 1000, account.id);
   });
   after(() => env.cleanup());
 
@@ -591,5 +593,99 @@ describe("backfill", () => {
     } finally {
       env.cleanup();
     }
+  });
+});
+
+describe("delivery bundling around the first sync and arrival order", () => {
+  let env: TestEnv;
+  let account: AccountRow;
+  const DAY = 86_400_000;
+  const shop = { name: "Saltmarrow Ceramics", email: "orders@saltmarrow.test" };
+  const row = <T,>(sql: string, ...p: (string | number)[]) => env.ctx.db.get<T>(sql, ...p)!;
+  const inInbox = (remote: string) => Boolean(row<{ in_inbox: number }>("SELECT in_inbox FROM threads WHERE remote_id = ?", remote).in_inbox);
+  const update = (thread: string, text: string, ago: number) =>
+    msg({ from: shop, remoteThreadId: thread, subject: "Package update", bodyText: text, sentAt: Date.now() - ago });
+  const watermark = () => env.ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'bundle:deliveriesAt'")?.value;
+  // A pass looks at mail stored before its clock reading, so each pass sits a millisecond ahead and the next ingest waits it out.
+  let lastPass = 0;
+  const tick = () => {
+    lastPass = Date.now() + 1;
+    return bundleDeliveries(env.ctx, lastPass);
+  };
+  const ingest = (...messages: ReturnType<typeof msg>[]) => {
+    while (Date.now() < lastPass) {
+      /* wait for the clock */
+    }
+    env.ctx.store.ingest(account, { messages, cursor: null, done: true });
+  };
+  const sync = (id: string) => env.ctx.db.get<{ first_synced_at: number | null }>("SELECT first_synced_at FROM accounts WHERE id = ?", id)!.first_synced_at;
+
+  before(() => {
+    env = makeEnv();
+    account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", addAccount(env.ctx, LOCAL_USER_ID))!;
+  });
+  after(() => env.cleanup());
+
+  test("history a new account stores, even two days old, is left alone", () => {
+    assert.equal(sync(account.id), null);
+    ingest(
+      update("n-old", "Your order has shipped. Tracking number: TWP2020202020", 2 * DAY),
+      update("n-new", "Your package is out for delivery. Tracking number: TWP2020202020", 1 * DAY),
+    );
+    assert.equal(tick(), 0);
+    assert.equal(inInbox("n-old"), true);
+    assert.equal(inInbox("n-new"), true);
+    // The first sync finishing doesn't change what was already stored.
+    env.ctx.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ?", Date.now(), account.id);
+    assert.equal(tick(), 0);
+    assert.equal(inInbox("n-old"), true);
+    // Mail that arrives afterwards is news, and it does supersede what came before it.
+    ingest(update("n-latest", "Your package was delivered. Tracking number: TWP2020202020", 1000));
+    assert.equal(tick(), 2);
+    assert.deepEqual([inInbox("n-old"), inInbox("n-new"), inInbox("n-latest")], [false, false, true]);
+  });
+
+  test("a sync that reaches the end of the mailbox records the first sync, once", async () => {
+    const demo = addAccount(env.ctx, LOCAL_USER_ID, DEMO_IDENTITY.email, "demo");
+    assert.equal(sync(demo), null);
+    await env.ctx.sync.syncAccount(demo);
+    const first = sync(demo);
+    assert.ok(first !== null && first <= Date.now());
+    await new Promise((r) => setTimeout(r, 3));
+    await env.ctx.sync.syncAccount(demo);
+    assert.equal(sync(demo), first, "later syncs leave it");
+    assert.equal(tick(), 0, "what the first sync stored is history");
+  });
+
+  test("an older update that arrives after a newer one is the one that steps aside", () => {
+    ingest(update("o-new", "Your package is out for delivery. Tracking number: TWP3030303030", 1000));
+    assert.equal(tick(), 0);
+    ingest(update("o-old", "Your order has shipped. Tracking number: TWP3030303030", 60 * 60_000));
+    assert.equal(tick(), 1);
+    assert.equal(inInbox("o-old"), false);
+    assert.equal(inInbox("o-new"), true);
+    assert.equal(tick(), 0);
+  });
+
+  test("a failure keeps the batch for the next pass", () => {
+    ingest(update("e-old", "Your order has shipped. Tracking number: TWP4040404041", 60 * 60_000), update("e-new", "Your package is out for delivery. Tracking number: TWP4040404041", 1000));
+    const mark = watermark();
+    const apply = env.ctx.triage.apply;
+    env.ctx.triage.apply = () => {
+      throw new Error("the database is busy");
+    };
+    const log = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(tick(), 0);
+    } finally {
+      env.ctx.triage.apply = apply;
+      console.error = log;
+    }
+    assert.equal(watermark(), mark, "the pass didn't count as done");
+    assert.equal(inInbox("e-old"), true);
+    assert.equal(tick(), 1, "the same mail is looked at again");
+    assert.equal(inInbox("e-old"), false);
+    assert.notEqual(watermark(), mark);
   });
 });

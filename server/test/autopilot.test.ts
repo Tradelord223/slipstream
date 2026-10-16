@@ -91,6 +91,7 @@ describe("Autopilot", () => {
 
   before(async () => {
     env = makeEnv();
+    await env.api("/api/settings", { method: "PUT", json: { assistant: "on" } }); // the engines are stand-ins, so the switch is turned on by hand
     account = addAccount(env.ctx, LOCAL_USER_ID, "sam@fernpoint.test");
     env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sensible, draft: drafter }));
     // Earlier mail: Sam has written to Ana before, which drafting uses as an example.
@@ -330,6 +331,7 @@ describe("Autopilot under pressure", () => {
 
   before(async () => {
     env = makeEnv();
+    await env.api("/api/settings", { method: "PUT", json: { assistant: "on" } }); // the engines are stand-ins, so the switch is turned on by hand
     account = addAccount(env.ctx, LOCAL_USER_ID, "sam@fernpoint.test");
     env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sensible, draft: drafter }));
     await env.api("/api/autopilot", { method: "PUT", json: { enabled: true, mode: "auto", draftReplies: true } });

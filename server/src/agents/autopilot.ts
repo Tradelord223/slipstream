@@ -5,6 +5,7 @@ import type { AppContext } from "../context.ts";
 import { newId } from "../lib/crypto.ts";
 import { maskCodes } from "../mail/signals.ts";
 import type { Agent } from "./agents.ts";
+import { assistantEnabled } from "./assistant.ts";
 import { ENGINE_IDS, type EngineId } from "./engines/types.ts";
 
 /**
@@ -319,7 +320,8 @@ export class Autopilot {
 
   private async pass(userId: string) {
     const s = this.settings(userId);
-    if (!s.enabled || this.busy(userId)) return;
+    // The assistant switch is the server's: with it off Autopilot reads no new mail, and without an error to show for it.
+    if (!s.enabled || !assistantEnabled(this.ctx, userId) || this.busy(userId)) return;
     if (Date.now() - (this.lastFailure.get(userId) ?? 0) < RETRY_AFTER_FAILURE_MS) return;
     const found = this.candidates(userId, s);
     if (!found.length) return;
@@ -433,7 +435,7 @@ export class Autopilot {
     return rows.map((r) => {
       const d = JSON.parse(r.decision) as Decision;
       const c = JSON.parse(r.correction) as Correction;
-      return `- ${fence(r.from_email)} "${fence(r.subject).slice(0, 80)}": you chose ${describe(d)}; the user ${describeCorrection(c)}.`;
+      return `- ${fence(r.from_email)} "${fence(maskCodes({ subject: r.subject }).subject).slice(0, 80)}": you chose ${describe(d)}; the user ${describeCorrection(c)}.`;
     });
   }
 
@@ -635,7 +637,7 @@ export class Autopilot {
         )
         .map((p) => `<email>\n${fence(ownText(p.body_text)).slice(0, 700)}\n</email>`);
       return [
-        `Conversation ${it.thread_id}: "${fence(m.subject)}" from ${fence(m.from_name)} ‹${fence(m.from_email)}›`,
+        `Conversation ${it.thread_id}: "${fence(maskCodes({ subject: m.subject }).subject)}" from ${fence(m.from_name)} ‹${fence(m.from_email)}›`,
         past.length ? `How the user last wrote to ${fence(m.from_email)}:\n${past.join("\n")}` : "",
       ]
         .filter(Boolean)

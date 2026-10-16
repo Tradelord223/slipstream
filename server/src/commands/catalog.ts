@@ -9,6 +9,7 @@ import { unsubscribe } from "../mail/unsubscribe.ts";
 import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, sendDraft, updateDraft } from "../mail/drafts.ts";
 import { listIdentities, ownAddresses, replyIdentity, resolveFrom } from "../mail/identities.ts";
 import { isPersonalMailDomain } from "../mail/logos.ts";
+import { maskCodes } from "../mail/signals.ts";
 import { counts, getThread, listThreads } from "../mail/views.ts";
 import { createSnippet, createSplit, deleteSplit, listSnippets, listSplits } from "../prefs.ts";
 import { createLabel, createRule, deleteLabel, deleteRule, listLabels, listRules, ruleMatches, updateLabel, updateRule } from "../mail/labels.ts";
@@ -24,8 +25,9 @@ const when = z
   .describe("When, as an ISO 8601 date-time with offset (e.g. 2026-10-16T09:00:00-04:00) or epoch milliseconds")
   .transform((v) => (typeof v === "number" ? v : Date.parse(v)));
 
+/** A conversation's subject for activity lines, which agents can read, so a code in it is masked. */
 const subjectOf = (ctx: AppContext, id: string) =>
-  ctx.db.get<{ subject: string }>("SELECT subject FROM threads WHERE id = ?", id)?.subject || "(no subject)";
+  maskCodes({ subject: ctx.db.get<{ subject: string }>("SELECT subject FROM threads WHERE id = ?", id)?.subject || "(no subject)" }).subject;
 
 function describeThreads(ctx: AppContext, ids: string[]) {
   return ids.length === 1 ? `"${subjectOf(ctx, ids[0]!)}"` : `${ids.length} conversations`;
@@ -272,7 +274,10 @@ export function buildCatalog(): Command[] {
       scope: "read",
       readOnly: true,
       input: z.object({}),
-      run: (ctx, actor) => ({ result: { ...counts(ctx, actor.user.id), splits: listSplits(ctx, actor.user.id).map((s) => ({ ...s, ...counts(ctx, actor.user.id).splits[s.id] })) } }),
+      run: (ctx, actor) => {
+        const c = counts(ctx, actor.user.id, { hideCodes: actor.kind === "agent" });
+        return { result: { ...c, splits: listSplits(ctx, actor.user.id).map((s) => ({ ...s, ...c.splits[s.id] })) } };
+      },
     }),
     defineCommand({
       name: "contacts.lookup",
@@ -391,7 +396,7 @@ export function buildCatalog(): Command[] {
       input: z.object({ perSplit: z.number().int().min(0).max(25).default(5) }),
       run: (ctx, actor, i) => {
         const userId = actor.user.id;
-        const c = counts(ctx, userId);
+        const c = counts(ctx, userId, { hideCodes: actor.kind === "agent" });
         const endOfDay = new Date().setHours(23, 59, 59, 999);
         return {
           result: {
@@ -485,11 +490,12 @@ export function buildCatalog(): Command[] {
       approval: (_c, actor) => (actor.agent.policy.settings === "approve" ? "Adding an auto-label rule" : null),
       preview: (_c, _a, i) => `Label new mail matching ${i.query} as "${i.label}"${i.applyToExisting ? " (and existing mail)" : ""}`,
       run: (ctx, actor, i) => {
-        const rule = createRule(ctx, actor.user.id, i.label, i.query);
+        const byAgent = actor.kind === "agent";
+        const rule = createRule(ctx, actor.user.id, i.label, i.query, byAgent);
         let labelled: string[] = [];
         let undoToken: string | null = null;
         if (i.applyToExisting) {
-          labelled = ruleMatches(ctx, { user_id: actor.user.id, label: rule.label, query: rule.query }, null);
+          labelled = ruleMatches(ctx, { user_id: actor.user.id, label: rule.label, query: rule.query, by_agent: byAgent ? 1 : 0 }, null);
           if (labelled.length) {
             undoToken = ctx.triage.apply(actor.user.id, { kind: "addLabel", threadIds: labelled, label: rule.label }).undoToken;
             ctx.events.emitToUser(actor.user.id, { type: "threads", accountId: "", threadIds: labelled });
@@ -511,7 +517,7 @@ export function buildCatalog(): Command[] {
       input: z.object({ id: z.string(), label: z.string().trim().min(1).max(200).optional(), query: z.string().trim().min(1).max(500).optional(), enabled: z.boolean().optional() }),
       approval: (_c, actor) => (actor.agent.policy.settings === "approve" ? "Changing an auto-label rule" : null),
       run: (ctx, actor, i) => {
-        const r = updateRule(ctx, actor.user.id, i.id, i);
+        const r = updateRule(ctx, actor.user.id, i.id, i, actor.kind === "agent");
         return { result: r, summary: `Updated the rule ${r.query} → "${r.label}"${r.enabled ? "" : " (off)"}` };
       },
     }),
@@ -546,7 +552,8 @@ export function buildCatalog(): Command[] {
         let subject = i.subject ?? "";
         let fromEmail = i.fromEmail;
         if (i.threadId) {
-          const t = getThread(ctx, actor.user.id, i.threadId);
+          // The draft's subject comes from the conversation, and an agent reads the draft back.
+          const t = getThread(ctx, actor.user.id, i.threadId, { hideCodes: actor.kind === "agent" });
           const last = [...t.messages].reverse().find((m) => !m.outgoing) ?? t.messages.at(-1);
           const own = ownAddresses(ctx.db, accountId);
           const addressed = last ? [...(last.to as { name: string; email: string }[]), ...(last.cc as { name: string; email: string }[])] : [];
