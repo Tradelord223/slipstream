@@ -381,7 +381,8 @@ describe("settings", () => {
   });
 
   test("the assistant defaults to on once a model is set up, and off until then", async () => {
-    const fresh = makeEnv();
+    // Keys in the environment count as set up, so the test pins them off.
+    const fresh = makeEnv({ anthropicApiKey: undefined, openaiApiKey: undefined, geminiApiKey: undefined, openrouterApiKey: undefined });
     try {
       const read = async () => ((await (await fresh.api("/api/bootstrap")).json()) as { settings: { assistant: string } }).settings.assistant;
       assert.equal(await read(), "off");
@@ -521,6 +522,16 @@ describe("delivery bundling", () => {
     env.ctx.db.run("UPDATE activity SET undo_token = NULL WHERE id = ?", act.id);
     await env.ctx.commands.undo({ kind: "human", user: env.ctx.users.get(LOCAL_USER_ID)! }, act.id);
     assert.equal(inInbox("g-old"), true);
+  });
+
+  test("history from a newly connected account isn't tidied", () => {
+    const sixtyDays = 60 * 86_400_000;
+    ingest(
+      update("i-old", "Shipped", "Your order has shipped. Tracking number: TWP6060606060", sixtyDays + 3000),
+      update("i-new", "Delivered", "Your package was delivered. Tracking number: TWP6060606060", sixtyDays + 2000),
+    );
+    assert.equal(tick(), 0);
+    assert.equal(inInbox("i-old"), true);
   });
 
   test("helpers.deliveries = all leaves everything alone", () => {

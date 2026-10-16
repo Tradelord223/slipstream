@@ -50,6 +50,8 @@ export async function backfillSignals(ctx: AppContext, opts: { batch?: number; s
 
 const WATERMARK_KEY = "bundle:deliveriesAt";
 const STARTED_AT = Date.now();
+/** Only updates sent in the last few days count as arriving. A newly connected account or an import stores old mail as "new". */
+const FRESH_MS = 3 * 86_400_000;
 
 /**
  * When a newer update arrives for a package (same tracking number), the older updates in the inbox are
@@ -57,8 +59,9 @@ const STARTED_AT = Date.now();
  * touched are moved: not starred, never replied to. Sign-in alerts and urgent mail are never candidates,
  * because only conversations whose top signal is a delivery are looked at.
  *
- * Works from new mail only (messages stored since the last pass), so an old inbox isn't swept on upgrade
- * and a conversation someone moves back stays where they put it.
+ * Works from new mail only (stored since the last pass and sent in the last few days), so an old inbox isn't
+ * swept on upgrade, a freshly connected account's history isn't archived, and a conversation someone moves
+ * back stays where they put it.
  */
 export function bundleDeliveries(ctx: AppContext, now = Date.now()): number {
   const { db } = ctx;
@@ -79,10 +82,11 @@ export function bundleDeliveries(ctx: AppContext, now = Date.now()): number {
        FROM threads t JOIN accounts a ON a.id = t.account_id
        WHERE a.user_id = ? AND t.in_inbox = 1 AND json_extract(t.signal, '$.kind') = 'delivery'
          AND json_extract(t.signal, '$.tracking') IS NOT NULL
-         AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.outgoing = 0 AND m.created_at >= ? AND m.created_at < ?)`,
+         AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.outgoing = 0 AND m.created_at >= ? AND m.created_at < ? AND m.sent_at > ?)`,
       userId,
       since,
       now,
+      now - FRESH_MS,
     );
     const older = new Set<string>();
     for (const f of fresh) {
