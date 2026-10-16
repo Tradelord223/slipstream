@@ -150,12 +150,18 @@ export class SyncEngine {
       const provider = this.provider(account);
       let cursor = account.sync_cursor;
       let caughtUp = false;
+      let fetched = 0;
       for (let pages = 0; pages < 500; pages++) {
         const page = await provider.sync(cursor);
         const touched = this.store.ingest(account, page);
         cursor = page.cursor;
         this.db.run("UPDATE accounts SET sync_cursor = ? WHERE id = ?", cursor, accountId);
         if (touched.length) this.events.emitToUser(account.user_id, { type: "threads", accountId, threadIds: touched });
+        // Progress for the first-run screen: how many messages this run has stored so far.
+        if (page.messages.length > 0) {
+          fetched += page.messages.length;
+          this.events.emitToUser(account.user_id, { type: "sync", accountId, status: "syncing", fetched });
+        }
         if (page.done) {
           caughtUp = true;
           break;

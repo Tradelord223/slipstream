@@ -6,11 +6,15 @@ Slipstream can work with mail in four ways. Pick whichever fits, and mix them fr
 |---|---|---|
 | Gmail (personal) | IMAP with an app password | 2 minutes, no developer console |
 | Gmail / Google Workspace | Google OAuth | ~10 minutes, once per Slipstream install |
-| Outlook.com / Microsoft 365 | Microsoft OAuth | ~10 minutes, once per install |
+| Outlook.com / Microsoft 365 | Sign in with Microsoft (no app passwords) | ~10 minutes, once per install, unless your copy already includes it |
 | iCloud, Fastmail, Yahoo, Zoho, Proton (Bridge), any other server | IMAP + SMTP | 2 minutes |
 | An export (Google Takeout, Thunderbird, Apple Mail) | Import `.mbox` / `.eml` | none |
 
 Credentials are encrypted on your own disk (AES-256-GCM) and never leave your machine except to talk to your mail provider.
+
+## Outlook and Microsoft 365
+
+Microsoft turned off app passwords for Outlook.com in September 2024, so a password won't get you in over IMAP any more. Outlook.com, Hotmail, Live and Microsoft 365 mail all connect with **Sign in with Microsoft**, which needs a Microsoft app registered once (the steps are below). If your copy of Slipstream already comes with one, the button works straight away. If it doesn't, register your own and start Slipstream with its ID.
 
 ## Gmail with an app password (no OAuth app needed)
 
@@ -38,20 +42,30 @@ Google treats full mailbox access as a *restricted* scope. A public, verified ap
 
 While the app is in *Testing*, Google expires refresh tokens after 7 days and caps it at 100 test users; Slipstream will ask you to reconnect. Internal (Workspace) apps and personal-use apps don't have that limit. For a personal install you can publish the app to *In production* without verification; Google shows an "unverified app" screen you click through once.
 
-## Outlook / Microsoft 365
+## Register Slipstream's Microsoft app
 
-1. Open the Microsoft Entra admin center → **App registrations → New registration**.
-2. Supported account types: **Accounts in any organizational directory and personal Microsoft accounts** (or just your org).
+You only do this if "Sign in with Microsoft" isn't available in your copy of Slipstream. It is free and takes about ten minutes, once. The app holds no password or secret, so there is nothing to keep safe except its ID.
+
+1. Open the Microsoft Entra admin center (or the Azure portal) → **App registrations → New registration**. Name it `Slipstream`.
+2. Supported account types: **Accounts in any organizational directory and personal Microsoft accounts**. (Choose just your organization if only work accounts will use it.)
 3. Redirect URI:
-   - Running locally: platform **Mobile and desktop applications**, URI `http://localhost` (Microsoft ignores the port for localhost, so this covers Slipstream's `http://localhost:4380/api/oauth/microsoft/callback`).
-   - Self-hosted: platform **Web**, URI `https://<your-host>/api/oauth/microsoft/callback`, and create a client secret.
-4. **API permissions** → Microsoft Graph → Delegated: `Mail.ReadWrite`, `Mail.Send`, `User.Read`, `offline_access`.
-5. Start Slipstream with `MICROSOFT_CLIENT_ID=…` (and `MICROSOFT_CLIENT_SECRET=…` for a Web client; `MICROSOFT_TENANT=<tenant-id>` to restrict to one org).
-6. Settings → Accounts → **Connect Outlook**.
+   - Running on your own computer: add the platform **Mobile and desktop applications** and a custom redirect URI of exactly `http://localhost/api/oauth/microsoft/callback`, with no port. Slipstream sends `http://localhost:4380/api/oauth/microsoft/callback`. For `localhost`, Microsoft ignores the port when it compares addresses but does compare the rest, so the path has to be in what you register. A bare `http://localhost` doesn't match and Microsoft stops with "AADSTS50011: The reply URL specified in the request does not match the reply URLs configured for the application".
+   - Self-hosted for a team: add the platform **Web** with `https://<your-host>/api/oauth/microsoft/callback`, and create a client secret.
+4. **API permissions → Add a permission → Microsoft Graph → Delegated permissions**: `User.Read`, `Mail.ReadWrite`, `Mail.Send` and `offline_access`.
+5. **Authentication → Advanced settings → Allow public client flows**: **Yes**. (For a Web client with a secret, leave this alone.)
+6. On the app's **Overview** page, copy the **Application (client) ID**.
 
-Some work tenants require an administrator to approve new apps; if you see "Need admin approval", send your admin the app's client ID.
+Then start Slipstream with it:
 
-Microsoft has turned off password sign-in for Outlook.com and Exchange Online IMAP, so OAuth is the way in for Microsoft accounts.
+```bash
+MICROSOFT_CLIENT_ID=… slipstream
+```
+
+For a Web client add `MICROSOFT_CLIENT_SECRET=…` as well. `MICROSOFT_TENANT=<tenant-id>` limits sign-in to one organization.
+
+Some work tenants need an administrator to approve new apps. If you see "Need admin approval", send your admin the app's client ID.
+
+Finally, Settings → Accounts → **Connect Outlook**.
 
 ## Any IMAP server
 

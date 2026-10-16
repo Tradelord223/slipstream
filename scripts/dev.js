@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const port = process.env.SLIPSTREAM_PORT ?? process.env.PORT ?? "4392";
-const env = { ...process.env, BROWSER: "none", SLIPSTREAM_PORT: port, SLIPSTREAM_API: `http://127.0.0.1:${port}` };
+// Developers get the invented demo mailbox; a plain `slipstream` start does not.
+const env = { ...process.env, SLIPSTREAM_DEMO: "1", BROWSER: "none", SLIPSTREAM_PORT: port, SLIPSTREAM_API: `http://127.0.0.1:${port}` };
 
 const children = [
   spawn(process.execPath, ["--watch", "server/src/main.ts"], { cwd: root, env, stdio: "inherit" }),

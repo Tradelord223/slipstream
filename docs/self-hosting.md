@@ -69,6 +69,7 @@ Cloudflare Workers and Containers aren't a fit. Their disks are ephemeral and in
 | `SLIPSTREAM_SENDER_LOGOS` | on | `off` stops this server from ever fetching sender logos, whatever people choose in Settings. Logos are also off for each person until they turn them on. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | Enables "Connect Gmail". |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT` | none (tenant `common`) | Enables "Connect Outlook". |
+| `SLIPSTREAM_DEMO` | off | `1` adds an invented demo mailbox on first start (local mode, for developers). It goes away on its own when a real account is connected, unless this is set. `slipstream --demo` does the same. |
 | `SLIPSTREAM_SOURCE_URL` | this project's GitHub repo | Where the app's "Source code" link points. If you run a modified Slipstream for other people, point it at your modified source. |
 | `ANTHROPIC_API_KEY` | none | A server-wide AI key. People can also add their own. |
 | `LITESTREAM_REPLICA_URL` + `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | none | Continuous backups of the database to S3-compatible storage. |

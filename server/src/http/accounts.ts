@@ -12,6 +12,7 @@ import { readMailFile } from "../import/mailfile.ts";
 import { addIdentity, removeIdentity, updateIdentity } from "../mail/identities.ts";
 import type { AccountRow } from "../mail/store.ts";
 import type { IncomingMessage } from "../mail/types.ts";
+import { discover, type DiscoverDeps } from "../providers/discover.ts";
 import { IMAP_PRESETS, verifyImap, type ImapSettings } from "../providers/imap.ts";
 import { googleAuthUrl, googleExchange, microsoftAuthUrl, microsoftExchange, type OAuthResult } from "../providers/oauth.ts";
 
@@ -31,8 +32,19 @@ const imapBody = z.object({
   smtpSecure: z.boolean().optional(),
 });
 
-export function accountRoutes(ctx: AppContext) {
+/** Seams for tests: the IMAP sign-in check and the DNS lookups need real servers otherwise. */
+export interface AccountDeps {
+  verifyImap?: (settings: ImapSettings) => Promise<void>;
+  discover?: DiscoverDeps;
+}
+
+/** Address lookups that may hit DNS at once. Past this, ask the caller to wait, so the route can't be used to flood a resolver. */
+const MAX_DISCOVERIES = 8;
+
+export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
   const { db, sync, secrets, config, store, events } = ctx;
+  const verify = deps.verifyImap ?? verifyImap;
+  let discovering = 0;
   const app = new Hono<Env>();
 
   const nextColor = (userId: string) => {
@@ -40,7 +52,31 @@ export function accountRoutes(ctx: AppContext) {
     return ACCOUNT_COLORS[n % ACCOUNT_COLORS.length]!;
   };
 
-  const upsertAccount = (userId: string, provider: string, email: string, name: string, auth: unknown): string => {
+  /** Removes an account and everything synced from it. */
+  const removeAccount = async (accountId: string) => {
+    await sync.forget(accountId);
+    db.tx(() => {
+      // Contentless FTS rows aren't removed by the cascade; clear them first.
+      db.run("DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE account_id = ?)", accountId);
+      db.run("DELETE FROM accounts WHERE id = ?", accountId);
+    });
+  };
+
+  /**
+   * Connecting real mail retires the invented demo mailbox (it only exists in developer demo mode, where it stays).
+   * The client hears about it as a change to those threads, the same event a sync sends.
+   */
+  const dropDemoAccounts = async (userId: string) => {
+    if (config.demo) return;
+    for (const demo of db.all<{ id: string }>("SELECT id FROM accounts WHERE user_id = ? AND provider = 'demo'", userId)) {
+      const threadIds = db.all<{ id: string }>("SELECT id FROM threads WHERE account_id = ?", demo.id).map((t) => t.id);
+      await removeAccount(demo.id);
+      events.emitToUser(userId, { type: "threads", accountId: demo.id, threadIds });
+    }
+  };
+
+  const upsertAccount = async (userId: string, provider: string, email: string, name: string, auth: unknown): Promise<string> => {
+    await dropDemoAccounts(userId);
     const existing = db.get<{ id: string }>(
       "SELECT id FROM accounts WHERE user_id = ? AND provider = ? AND email = ?",
       userId,
@@ -70,6 +106,18 @@ export function accountRoutes(ctx: AppContext) {
     c.json({ presets: Object.entries(IMAP_PRESETS).map(([id, p]) => ({ id, label: p.label, help: p.help })) }),
   );
 
+  /** Where an address's mail lives, from its own domain's DNS. Used by the "add an account" screen before anything is saved. */
+  app.get("/accounts/discover", async (c) => {
+    const email = z.email().parse((c.req.query("email") ?? "").trim());
+    if (discovering >= MAX_DISCOVERIES) throw new HttpError(429, "Too many lookups at once; try again in a moment");
+    discovering++;
+    try {
+      return c.json(await discover(email, config, deps.discover));
+    } finally {
+      discovering--;
+    }
+  });
+
   app.post("/accounts/imap", async (c) => {
     const user = c.get("user");
     const body = imapBody.parse(await c.req.json());
@@ -85,10 +133,10 @@ export function accountRoutes(ctx: AppContext) {
       smtpSecure: body.smtpSecure ?? preset?.smtpSecure ?? true,
     };
     if (!settings.imapHost || !settings.smtpHost) throw new HttpError(400, "Enter the IMAP and SMTP server names");
-    await verifyImap(settings).catch((err: Error) => {
+    await verify(settings).catch((err: Error) => {
       throw new HttpError(400, `Couldn't sign in: ${err.message}`);
     });
-    const id = upsertAccount(user.id, "imap", body.email, body.name, settings);
+    const id = await upsertAccount(user.id, "imap", body.email, body.name, settings);
     return c.json({ id });
   });
 
@@ -142,12 +190,7 @@ export function accountRoutes(ctx: AppContext) {
     const user = c.get("user");
     const acc = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ? AND user_id = ?", c.req.param("id"), user.id);
     if (!acc) throw new HttpError(404, "Account not found");
-    await sync.forget(acc.id);
-    db.tx(() => {
-      // Contentless FTS rows aren't removed by the cascade; clear them first.
-      db.run("DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE account_id = ?)", acc.id);
-      db.run("DELETE FROM accounts WHERE id = ?", acc.id);
-    });
+    await removeAccount(acc.id);
     return c.json({ ok: true });
   });
 
@@ -195,7 +238,7 @@ export function accountRoutes(ctx: AppContext) {
         console.error(`[slipstream] ${provider} sign-in failed:`, err);
         return c.redirect(`/settings/accounts?error=${encodeURIComponent(err instanceof Error ? err.message : "sign-in failed")}`);
       }
-      upsertAccount(user.id, provider === "google" ? "gmail" : "outlook", result.email, result.name, result.auth);
+      await upsertAccount(user.id, provider === "google" ? "gmail" : "outlook", result.email, result.name, result.auth);
       // Local mode: OAuth for Microsoft returns on http://localhost, so hop back to the canonical origin.
       return c.redirect(`${config.publicUrl}/?connected=${provider}`);
     });
@@ -224,7 +267,7 @@ export function accountRoutes(ctx: AppContext) {
 
     const label = files.length === 1 ? files[0]!.name.replace(/\.(mbox|eml|mbx)$/i, "") : `${files.length} files`;
     const accountEmail = ownerEmail || `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "archive"}@import.local`;
-    const accountId = upsertAccount(user.id, "archive", accountEmail, `Imported · ${label}`, null);
+    const accountId = await upsertAccount(user.id, "archive", accountEmail, `Imported · ${label}`, null);
     const jobId = newId("job");
 
     void (async () => {
