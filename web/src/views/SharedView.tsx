@@ -164,6 +164,7 @@ function SharedThread({ id }: { id: string }) {
     outgoing: false,
     canUnsubscribe: false,
     isBulk: false,
+    logoDomain: null,
     signals: [],
     attachments: [],
   }));

@@ -64,6 +64,22 @@ export function mailRoutes(ctx: AppContext) {
     return c.json({ code });
   });
 
+  /** The freshest code in a conversation, so a list row can copy it without opening the thread. */
+  app.get("/threads/:id/code", (c) => {
+    if (c.get("actor").kind !== "human") throw new HttpError(403, "Only a person can read a sign-in code.");
+    const rows = db.all<{ subject: string; body_text: string }>(
+      `SELECT m.subject, m.body_text FROM messages m JOIN accounts a ON a.id = m.account_id
+       WHERE m.thread_id = ? AND a.user_id = ? AND m.outgoing = 0 AND m.signals LIKE '%"kind":"code"%'
+       ORDER BY m.sent_at DESC LIMIT 3`,
+      c.req.param("id"),
+      c.get("user").id,
+    );
+    const code = rows.map((m) => extractCode(m.subject, m.body_text)).find(Boolean) ?? null;
+    if (!code) throw new HttpError(404, "No code in that conversation");
+    c.header("Cache-Control", "no-store");
+    return c.json({ code });
+  });
+
   app.post("/triage", async (c) => {
     const { kind, ...input } = triageBody.parse(await c.req.json());
     const res = await ctx.commands.execute(c.get("actor"), triageCommandName(kind), input);

@@ -332,6 +332,17 @@ describe("signals in the store", () => {
     assert.ok(!(await viaToken.text()).includes("618204"));
   });
 
+  test("GET /api/threads/:id/code copies from a list row; agents are refused", async () => {
+    const threadId = row<{ thread_id: string }>("SELECT thread_id FROM messages WHERE subject = 'Your Quarrystone sign-in code'").thread_id;
+    const ok = await env.api(`/api/threads/${threadId}/code`);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await ok.json(), { code: "618204" });
+    assert.equal((await env.api(`/api/threads/${tid("plain1")}/code`)).status, 404);
+    const { token } = env.ctx.agents.create(LOCAL_USER_ID, "Reader", ["read"]);
+    assert.equal((await env.api(`/api/threads/${threadId}/code`, { headers: { authorization: `Bearer ${token}` } })).status, 403);
+  });
+
   test("agents read mail with codes masked; people still see their own mail", async () => {
     const { agent } = env.ctx.agents.create(LOCAL_USER_ID, "Reader", ["read"]);
     const user = env.ctx.users.get(LOCAL_USER_ID)!;
@@ -431,6 +442,12 @@ describe("the demo mailbox", () => {
     assert.equal(bundleDeliveries(env.ctx, Date.now() + 1), 1);
     const inbox = (remote: string) => env.ctx.db.get<{ in_inbox: number }>("SELECT in_inbox FROM threads WHERE remote_id = ?", remote)!.in_inbox;
     assert.deepEqual([inbox("saltmarrow-ship"), inbox("saltmarrow-out")], [0, 1]);
+  });
+
+  test("rows name a logo domain for company senders only", async () => {
+    const list = (await (await env.api("/api/threads?view=search&q=in:all&limit=500")).json()) as { threads: { category: string; logoDomain: string | null }[] };
+    assert.ok(list.threads.some((t) => t.logoDomain === "quarrystonebank.com"));
+    for (const t of list.threads) if (t.category === "important") assert.equal(t.logoDomain, null);
   });
 });
 

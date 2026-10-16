@@ -135,6 +135,8 @@ export interface Thread {
   signalAt: number | null;
   /** Detail for the row chip (delivery status, urgent reason). */
   signalDetail: Signal | null;
+  /** Registrable domain for /api/logos/:domain, for company senders only. */
+  logoDomain: string | null;
 }
 
 export interface ThreadPage {
@@ -168,6 +170,7 @@ export interface Message {
   canUnsubscribe: boolean;
   /** Sent by a list or automated system. */
   isBulk: boolean;
+  logoDomain: string | null;
   signals: Signal[];
   attachments: Attachment[];
 }

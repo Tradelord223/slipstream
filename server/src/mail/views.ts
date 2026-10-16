@@ -1,3 +1,4 @@
+import { logoDomain } from "./logos.ts";
 import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext } from "../context.ts";
@@ -47,12 +48,13 @@ export const LIST_COLUMNS = `t.id, t.account_id, t.subject, t.snippet, t.partici
 
 export function shapeRow(r: ThreadListRow) {
   const detail = r.signal ? (JSON.parse(r.signal) as Signal) : null;
+  const participants = JSON.parse(r.participants) as { name: string; email: string }[];
   return {
     id: r.id,
     accountId: r.account_id,
     subject: r.subject,
     snippet: r.snippet,
-    participants: JSON.parse(r.participants) as { name: string; email: string }[],
+    participants,
     lastMessageAt: r.last_message_at,
     sortAt: r.sort_at,
     messageCount: r.message_count,
@@ -69,6 +71,8 @@ export function shapeRow(r: ThreadListRow) {
     signal: detail?.kind ?? null,
     signalAt: detail ? r.signal_at : null,
     signalDetail: detail,
+    // Where /api/logos can find a company mark for this row; people never get one.
+    logoDomain: r.category !== "important" && participants[0] ? logoDomain(participants[0].email) : null,
   };
 }
 
@@ -224,6 +228,7 @@ export function getThread(ctx: AppContext, userId: string, id: string, opts: { h
       outgoing: Boolean(m.outgoing),
       canUnsubscribe: Boolean(m.list_unsubscribe),
       isBulk: Boolean(m.is_bulk),
+      logoDomain: m.is_bulk && !m.outgoing ? logoDomain(m.from_email) : null,
       signals: m.signals ? (JSON.parse(m.signals) as Signal[]) : [],
       attachments: db
         .all<{ id: string; filename: string; mime_type: string; size: number; content_id: string | null; inline: number }>(
