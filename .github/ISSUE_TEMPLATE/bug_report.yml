@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work the way it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for reporting. For security problems, please use the Security tab's private report instead."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open …\n2. Press …\n3. See …"
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Mail provider
+      options: [Demo inbox, Gmail, Outlook / Microsoft 365, IMAP (iCloud, Fastmail, Yahoo, other), .mbox / .eml import, Not mail-related]
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How you run Slipstream
+      options: [npx slipstream-mail, Installed with npm -g, From source, Docker / team server]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings → About shows it.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Please remove anything private, like email addresses or message content.

@@ -1,0 +1,21 @@
+name: Feature idea
+description: Suggest something that would make Slipstream better.
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's getting in your way?
+      description: The situation and the friction, in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you imagine it working. Keyboard shortcuts and agent commands welcome.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Inbox and triage, Compose and sending, Search and splits, Accounts and sync, Agents, MCP and API, Teams and self-hosting, Privacy and security, Something else]
