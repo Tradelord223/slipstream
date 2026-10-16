@@ -316,6 +316,8 @@ const INBOX_PAGE = 100;
 const DAY_MS = 86_400_000;
 /** How much of a message's text part a summary reads for its preview. */
 const PREVIEW_BYTES = 2048;
+/** Whole messages asked for in one FETCH. Gmail returns 50 in about the time it takes to preview 20, and a chunk is held in memory until it is parsed. */
+const BODY_BATCH = 50;
 /** The headers a summary needs; the rest of the header block (Received, DKIM) is never downloaded. */
 const HEADER_FIELDS = [
   "From", "To", "Cc", "Bcc", "Reply-To", "Subject", "Date", "Message-ID", "In-Reply-To", "References",
@@ -1233,18 +1235,82 @@ export class ImapProvider implements MailProvider {
       }
       if (exact) return exact;
       if (!hint?.messageIdHeader) throw new Error("The message is no longer in that mailbox");
-      const thread: ThreadRef = { threadRemoteId: "", messages: [{ remoteId: messageRemoteId, messageIdHeader: hint.messageIdHeader }] };
-      for (const t of (await this.layout(c)).targets) {
-        const found = await withMailbox(c, t.path, true, async (mb) => {
-          const uid = (await this.locate(c, mb, thread))[0];
-          return uid === undefined ? undefined : fetchSource(uid);
-        });
-        if (found) return found;
-      }
-      throw new Error("The message is no longer in this mailbox");
+      const found = await this.sourceByMessageId(c, (await this.layout(c)).targets, messageRemoteId, hint.messageIdHeader);
+      if (!found) throw new Error("The message is no longer in this mailbox");
+      return found;
     });
     const { message } = await parseRaw(source, { remoteId: messageRemoteId });
     return { text: message.bodyText, html: message.bodyHtml, attachments: message.attachments };
+  }
+
+  /** A message that moved or whose mailbox was renumbered, found again by its Message-ID in each mailbox in turn. */
+  private async sourceByMessageId(c: ImapClient, targets: SyncTarget[], remoteId: string, messageIdHeader: string): Promise<Buffer | undefined> {
+    const thread: ThreadRef = { threadRemoteId: "", messages: [{ remoteId, messageIdHeader }] };
+    for (const t of targets) {
+      const found = await withMailbox(c, t.path, true, async (mb) => {
+        const uid = (await this.locate(c, mb, thread))[0];
+        return uid === undefined ? undefined : ((await c.fetchOne(String(uid), { source: true }, { uid: true })) || undefined)?.source;
+      });
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  /**
+   * `fetchBody` for many messages: one FETCH of the sources per mailbox for every 50 of them, since a round trip costs far
+   * more than the bytes. A message whose mailbox was renumbered or that moved is found again by Message-ID, one at a time;
+   * one that is gone, or can't be read, is left out of the answer.
+   */
+  async fetchBodies(refs: { remoteId: string; messageIdHeader?: string | null }[]): Promise<Map<string, FullBody>> {
+    const out = new Map<string, FullBody>();
+    const byPath = new Map<string, { remoteId: string; uid: number; validity: string; messageIdHeader?: string | null }[]>();
+    const unmatched: typeof refs = [];
+    for (const r of refs) {
+      const ref = parseRemoteId(r.remoteId);
+      if (!ref) continue;
+      byPath.set(ref.path, [...(byPath.get(ref.path) ?? []), { remoteId: r.remoteId, uid: ref.uid, validity: ref.validity, messageIdHeader: r.messageIdHeader }]);
+    }
+    const parse = async (remoteId: string, source: Buffer) => {
+      try {
+        const { message } = await parseRaw(source, { remoteId });
+        out.set(remoteId, { text: message.bodyText, html: message.bodyHtml, attachments: message.attachments });
+      } catch (err) {
+        console.warn(`[slipstream] imap ${remoteId}: couldn't read the message, ${err instanceof Error ? err.message : err}`);
+      }
+    };
+    for (const [path, entries] of byPath) {
+      for (let i = 0; i < entries.length; i += BODY_BATCH) {
+        const chunk = entries.slice(i, i + BODY_BATCH);
+        const sources = await this.run(async (c) => {
+          try {
+            return await withMailbox(c, path, true, async (mb) => {
+              const live = chunk.filter((e) => e.validity === String(mb.uidValidity));
+              const got = live.length ? await c.fetchAll(live.map((e) => e.uid), { uid: true, source: true }, { uid: true }) : [];
+              return new Map(got.flatMap((fm) => (fm.source ? [[fm.uid, fm.source] as const] : [])));
+            });
+          } catch (err) {
+            // A mailbox that is gone is the same as messages that moved out of it; anything else is a real failure.
+            if ((err as { mailboxMissing?: boolean }).mailboxMissing) return new Map<number, Buffer>();
+            throw err;
+          }
+        });
+        for (const e of chunk) {
+          const source = sources.get(e.uid);
+          if (source) await parse(e.remoteId, source);
+          else if (e.messageIdHeader) unmatched.push({ remoteId: e.remoteId, messageIdHeader: e.messageIdHeader });
+        }
+      }
+    }
+    if (unmatched.length) {
+      await this.run(async (c) => {
+        const targets = (await this.layout(c)).targets;
+        for (const u of unmatched) {
+          const source = await this.sourceByMessageId(c, targets, u.remoteId, u.messageIdHeader!);
+          if (source) await parse(u.remoteId, source);
+        }
+      });
+    }
+    return out;
   }
 
   async fetchAttachment(messageRemoteId: string, attachmentRemoteId: string): Promise<Buffer> {

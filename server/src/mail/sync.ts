@@ -4,6 +4,7 @@ import type { Events, ServerEvent } from "../events.ts";
 import type { SecretBox } from "../lib/crypto.ts";
 import { createProvider } from "../providers/index.ts";
 import { BodyLoader } from "./bodies.ts";
+import { CacheKeeper, KEEP_INBOX, newestInbox } from "./cache.ts";
 import { buildOutgoing } from "./compose.ts";
 import { resolveFrom, syncProviderIdentities } from "./identities.ts";
 import type { AccountRow, MailStore } from "./store.ts";
@@ -12,10 +13,14 @@ import { PermanentProviderError, ProviderAuthError, type Address, type MailProvi
 const MAX_ATTEMPTS = 6;
 /** The first sync reaches back this far; older mail stays at the provider until someone asks for it. */
 const INITIAL_SYNC_DAYS = 30;
-/** Newest inbox messages whose full text is kept on hand, so recent mail opens instantly and codes are found in the whole message. */
-const RECENT_BODIES = 50;
-/** Bodies fetched at once for that cache: low, so it never crowds out what the person is doing. */
+/** Bodies fetched at once for the recent cache by a provider that can only return them one by one: low, so it never crowds out what the person is doing. */
 const RECENT_CONCURRENCY = 3;
+/**
+ * Messages of the first sync's history that get a preview: the newest ones, in one pass. Older history keeps empty snippets
+ * until someone opens it, because on Gmail the first lines of 100 messages cost about 7.7 s and mail that old is rarely read
+ * before it is searched for.
+ */
+const HISTORY_PREVIEWS = 300;
 /** How often an account's send-as list is read from its provider. */
 const IDENTITY_REFRESH_MS = 6 * 3_600_000;
 
@@ -53,6 +58,8 @@ export class SyncEngine {
   private progress = new Map<string, SyncProgress>();
   /** Full text for messages that were synced as summaries; shared by every reader of a body. */
   readonly bodies: BodyLoader;
+  /** Keeps the cache of full text under its size limit. */
+  readonly cache: CacheKeeper;
 
   private config: Config;
   private db: Db;
@@ -66,7 +73,8 @@ export class SyncEngine {
     this.store = store;
     this.events = events;
     this.secrets = secrets;
-    this.bodies = new BodyLoader(db, store, events, (account) => this.provider(account));
+    this.cache = new CacheKeeper(db, store);
+    this.bodies = new BodyLoader(db, store, events, (account) => this.provider(account), (ids) => this.cache.stored(ids));
   }
 
   /** The latest first-sync progress for an account, or null if this server hasn't run one. */
@@ -87,6 +95,7 @@ export class SyncEngine {
 
   async stop(): Promise<void> {
     for (const t of this.timers) clearInterval(t);
+    this.cache.stop();
     for (const p of this.providers.values()) await p.close?.().catch(() => {});
     this.providers.clear();
   }
@@ -191,6 +200,9 @@ export class SyncEngine {
       let caughtUp = false;
       let fetched = 0;
       let recentDone = false;
+      // History previews wait here until the budget is spent or the history ends, then go in one pass.
+      let historyBudget = HISTORY_PREVIEWS;
+      let held: string[] = [];
       if (account.first_synced_at === null && account.provider !== "archive") report("signin", 0, null);
       for (let pages = 0; pages < 500; pages++) {
         const page = await provider.sync(cursor);
@@ -233,8 +245,21 @@ export class SyncEngine {
             previewed = true;
           }
         }
-        // Later pages (history, new mail) have their previews fetched right after they are stored, without a stage of their own.
-        if (!previewed && page.previewIds?.length) await this.fillPreviews(account, provider, page.previewIds);
+        if (sp?.stage === "history" && page.previewIds?.length) {
+          // History is newest first. The newest few hundred get previews, all in one pass: a pass costs a round trip per kind
+          // of message however few it names. The rest keep empty snippets until opened.
+          const take = page.previewIds.slice(0, Math.max(0, historyBudget));
+          historyBudget -= take.length;
+          held.push(...take);
+        } else if (!previewed && page.previewIds?.length) {
+          // New mail has its previews fetched right after it is stored, without a stage of its own.
+          await this.fillPreviews(account, provider, page.previewIds);
+        }
+        if (held.length && (historyBudget <= 0 || page.done || (sp?.stage === "history" && sp.last))) {
+          const ids = held;
+          held = [];
+          await this.fillPreviews(account, provider, ids);
+        }
         if (page.done) {
           caughtUp = true;
           break;
@@ -247,6 +272,7 @@ export class SyncEngine {
       if (fetched > 0 && !recentDone) await this.cacheRecent(account);
       if (run.stage !== null) report("done", run.done, run.done, { rate: false });
       await this.refreshIdentities(account, provider);
+      this.cache.enforce();
       setStatus("idle");
     } catch (err) {
       if (err instanceof ProviderAuthError) setStatus("reauth", err.message);
@@ -296,27 +322,17 @@ export class SyncEngine {
   }
 
   /**
-   * Fetch the full text of the newest inbox messages that only have a preview, a few at a time. A message that can't be
-   * fetched now is simply opened later; nothing here fails a sync.
+   * Fetch the full text of the newest inbox messages that only have a preview: in one request when the provider can, else a
+   * few at a time. Progress counts every message as it is settled, so the numbers are exact and only go up. A message that
+   * can't be fetched now is simply opened later; nothing here fails a sync.
    */
   private async cacheRecent(account: AccountRow, report?: Report): Promise<void> {
-    const rows = this.db.all<{ id: string; body_state: string }>(
-      `SELECT id, body_state FROM messages
-       WHERE account_id = ? AND in_inbox = 1 AND in_trash = 0 AND in_spam = 0 AND orphaned_at IS NULL
-       ORDER BY sent_at DESC LIMIT ?`,
-      account.id,
-      RECENT_BODIES,
-    );
+    const rows = newestInbox((sql, ...p) => this.db.all(sql, ...p), account.id, KEEP_INBOX);
     const missing = rows.filter((r) => r.body_state === "none").map((r) => r.id);
     let done = rows.length - missing.length;
     const base = done;
     report?.("recent", done, rows.length, { base });
-    for (let i = 0; i < missing.length; i += RECENT_CONCURRENCY) {
-      const chunk = missing.slice(i, i + RECENT_CONCURRENCY);
-      await this.bodies.load(chunk, { concurrency: RECENT_CONCURRENCY });
-      done += chunk.length;
-      report?.("recent", done, rows.length, { base });
-    }
+    await this.bodies.load(missing, { concurrency: RECENT_CONCURRENCY, onSettled: () => report?.("recent", ++done, rows.length, { base }) });
   }
 
   /** Push local triage to providers, oldest first, with exponential backoff. */

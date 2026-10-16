@@ -4,7 +4,8 @@
 // Usage: node scripts/time-first-sync.ts [gmail|outlook|imap|N] [--history] [--recent]
 //   gmail|outlook|imap|N  which account (the first of that kind, or the Nth); default the first
 //   --history             keep going through the rest of the 30-day window
-//   --recent              also fetch the full text of the newest 50 inbox messages, like the recent cache does
+//   --recent              also fetch the full text of the newest 50 inbox messages the way the recent cache does (in one batch
+//                         where the provider has one; otherwise 3 at a time), nothing stored
 //
 // For IMAP it prints each step as it finishes (connect, list, open, search, headers fetch, previews fetch, recent) with the
 // time since the start, how long the step took and a count. Steps after the previews are totalled by kind at the end.
@@ -102,7 +103,11 @@ function timedClient(c: ReturnType<typeof createImapFlow>): ReturnType<typeof cr
           return (...a: unknown[]) => timed("search", () => fn(...a) as Promise<unknown[] | false>, sized);
         case "fetchAll":
           return (range: unknown, query: { bodyParts?: unknown[]; headers?: unknown }, ...a: unknown[]) =>
-            timed(query.bodyParts?.length ? "previews fetch" : query.headers ? "headers fetch" : "flags fetch", () => fn(range, query, ...a) as Promise<unknown[]>, sized);
+            timed(
+              (query as { source?: boolean }).source ? "bodies fetch" : query.bodyParts?.length ? "previews fetch" : query.headers ? "headers fetch" : "flags fetch",
+              () => fn(range, query, ...a) as Promise<unknown[]>,
+              sized,
+            );
         default:
           return value.bind(target);
       }
@@ -167,10 +172,17 @@ if (flags.has("--recent") && provider.fetchBody) {
   const t = performance.now();
   const ids = inboxMail.sort((a, b) => b.at - a.at).slice(0, 50).map((m) => m.id);
   let ok = 0;
-  for (let i = 0; i < ids.length; i += 3) {
-    ok += (await Promise.allSettled(ids.slice(i, i + 3).map((id) => provider.fetchBody!(id)))).filter((r) => r.status === "fulfilled").length;
+  if (provider.fetchBodies) {
+    // What the recent cache does: every body in one request (IMAP: one FETCH per mailbox for every 50 messages).
+    ok = (await provider.fetchBodies(ids.map((remoteId) => ({ remoteId })))).size;
+  } else {
+    for (let i = 0; i < ids.length; i += 3) {
+      ok += (await Promise.allSettled(ids.slice(i, i + 3).map((id) => provider.fetchBody!(id)))).filter((r) => r.status === "fulfilled").length;
+    }
   }
-  console.log(`recent cache: ${ok} of ${ids.length} full messages in ${seconds(performance.now() - t)}, ${mb((await received()) - before)} received`);
+  console.log(
+    `recent cache: ${ok} of ${ids.length} full messages in ${seconds(performance.now() - t)} (${provider.fetchBodies ? "one batch" : "3 at a time"}), ${mb((await received()) - before)} received`,
+  );
 }
 if (totals.size) {
   console.log("after the inbox page, by kind:");

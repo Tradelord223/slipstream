@@ -23,6 +23,8 @@ const settingsSchema = z
     assistant: z.enum(["on", "off"]),
     senderLogos: z.boolean(),
     onboarded: z.boolean(),
+    /** How much disk the cache of full message text may use, in megabytes; older read mail goes back to previews past it. */
+    cacheLimitMb: z.number().int().min(10).max(1_000_000),
     helpers: z.strictObject({
       codes: z.boolean(),
       deliveries: z.enum(["latest", "all"]),

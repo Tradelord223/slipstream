@@ -1169,3 +1169,69 @@ describe("ImapProvider summaries", () => {
     noLocksLeft(r);
   });
 });
+
+describe("ImapProvider whole messages in batches", () => {
+  const refs = (ids: string[]) => ids.map((remoteId) => ({ remoteId }));
+
+  it("fetches the sources of a mailbox in one FETCH for every 50 messages", async () => {
+    const s = genericServer();
+    for (let i = 0; i < 120; i++) s.deliver("INBOX", mail({ id: `in${i}`, body: `Text of in${i}` }));
+    for (let i = 0; i < 3; i++) s.deliver("Sent", mail({ id: `out${i}`, from: "Me <me@example.com>", body: `Text of out${i}` }));
+    const r = rig(s);
+    const ids = [...Array.from({ length: 120 }, (_, i) => `INBOX:1:${i + 1}`), "Sent:1:1", "Sent:1:2", "Sent:1:3"];
+
+    const got = await r.provider.fetchBodies(refs(ids));
+    assert.equal(got.size, 123);
+    assert.equal(got.get("INBOX:1:7")!.text.trim(), "Text of in6");
+    assert.equal(got.get("Sent:1:3")!.text.trim(), "Text of out2");
+    assert.deepEqual(s.sourceCommands, [50, 50, 20, 3], "three FETCHes for the inbox's 120, one for Sent's 3");
+    assert.deepEqual(
+      s.log.filter((l) => l.startsWith("fetch")),
+      ["fetch INBOX 50 uids", "fetch INBOX 50 uids", "fetch INBOX 20 uids", "fetch Sent 3 uids"],
+    );
+    noLocksLeft(r);
+  });
+
+  it("finds a message that moved or whose mailbox was renumbered by its Message-ID, and leaves out one that is gone", async () => {
+    const s = genericServer();
+    s.add("Archive", "\\Archive");
+    const stay = s.deliver("INBOX", mail({ id: "stay", body: "Stayed" }));
+    const moved = s.deliver("INBOX", mail({ id: "moved", body: "Moved" }));
+    const gone = s.deliver("INBOX", mail({ id: "gone", body: "Gone" }));
+    const unhinted = s.deliver("INBOX", mail({ id: "unhinted", body: "No hint" }));
+    s.deliver("Sent", mail({ id: "renumbered", from: "Me <me@example.com>", body: "Renumbered" }));
+    const r = rig(s);
+
+    s.deliver("Archive", s.find("INBOX", moved)!.source);
+    for (const uid of [moved, gone, unhinted]) s.expunge("INBOX", uid);
+    s.boxes.get("Sent")!.uidValidity = 9n;
+    s.log.length = 0;
+
+    const got = await r.provider.fetchBodies([
+      { remoteId: `INBOX:1:${stay}`, messageIdHeader: "<stay@example.com>" },
+      { remoteId: `INBOX:1:${moved}`, messageIdHeader: "<moved@example.com>" },
+      { remoteId: `INBOX:1:${gone}`, messageIdHeader: "<gone@example.com>" },
+      { remoteId: `INBOX:1:${unhinted}` },
+      { remoteId: "Sent:1:1", messageIdHeader: "<renumbered@example.com>" },
+      { remoteId: "not an id" },
+    ]);
+    assert.deepEqual([...got.keys()].sort(), [`INBOX:1:${moved}`, `INBOX:1:${stay}`, "Sent:1:1"].sort());
+    assert.equal(got.get(`INBOX:1:${moved}`)!.text.trim(), "Moved");
+    assert.equal(got.get("Sent:1:1")!.text.trim(), "Renumbered");
+    assert.deepEqual(s.sourceCommands.slice(0, 1), [1], "the one still in INBOX with the others missing came in the first FETCH");
+    noLocksLeft(r);
+  });
+
+  it("treats a mailbox that no longer exists like messages that moved", async () => {
+    const s = genericServer();
+    s.add("Old");
+    s.deliver("Old", mail({ id: "o1", body: "Was in Old" }));
+    const r = rig(s);
+    s.deliver("INBOX", s.find("Old", 1)!.source);
+    s.boxes.delete("Old");
+    const got = await r.provider.fetchBodies([{ remoteId: "Old:1:1", messageIdHeader: "<o1@example.com>" }, { remoteId: "Old:1:2" }]);
+    assert.deepEqual([...got.keys()], ["Old:1:1"]);
+    assert.equal(got.get("Old:1:1")!.text.trim(), "Was in Old");
+    noLocksLeft(r);
+  });
+});

@@ -47,6 +47,8 @@ export class FakeServer {
   partFetches: { key: string; maxLength: number | undefined }[] = [];
   /** The part keys of each FETCH command that asked for text parts, in order: one entry per round trip. */
   partCommands: string[][] = [];
+  /** How many messages each FETCH of whole sources asked for, in order: one entry per round trip. */
+  sourceCommands: number[] = [];
 
   constructor(opts: FakeOptions = {}) {
     this.capabilities = new Set(opts.capabilities ?? ["IMAP4rev1", "UIDPLUS", "MOVE", "ESEARCH"]);
@@ -267,6 +269,7 @@ export class FakeConn {
       if (!this.server.condstore) throw new Error("CHANGEDSINCE without CONDSTORE");
       picked = picked.filter(([m]) => m.modseq > BigInt(opts.changedSince!));
     }
+    if (query.source) this.server.sourceCommands.push(picked.length);
     if (query.bodyParts?.length) this.server.partCommands.push(query.bodyParts.map((p) => (typeof p === "string" ? p : p.key)));
     this.server.log.push(`fetch ${box.path} ${Array.isArray(range) ? range.length + " uids" : range}${opts.changedSince !== undefined ? " changedSince" : ""}`);
     return picked.map(([m, seq]) => this.toFetch(m, seq, query));

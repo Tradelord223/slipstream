@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "../db/index.ts";
 import { newId, sha256 } from "../lib/crypto.ts";
@@ -55,7 +55,7 @@ const json = (v: unknown) => JSON.stringify(v);
  * indexes them for search and keeps per-thread aggregates the UI reads directly.
  */
 export class MailStore {
-  private blobDir: string;
+  readonly blobDir: string;
 
   readonly db: Db;
 
@@ -745,6 +745,20 @@ export class MailStore {
       writeFileSync(path, content, { mode: 0o600 });
     }
     return hash;
+  }
+
+  /** Where a blob lives, or null for something that isn't a blob hash. */
+  blobPath(hash: string): string | null {
+    return /^[0-9a-f]{64}$/.test(hash) ? join(this.blobDir, hash.slice(0, 2), hash) : null;
+  }
+
+  /** Remove a blob's file; returns the bytes freed (0 when it was already gone). The caller has checked nothing refers to it. */
+  deleteBlob(hash: string): number {
+    const path = this.blobPath(hash);
+    if (!path || !existsSync(path)) return 0;
+    const bytes = statSync(path).size;
+    unlinkSync(path);
+    return bytes;
   }
 
   readBlob(hash: string): Buffer | null {

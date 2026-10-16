@@ -12,6 +12,7 @@ import { createApp } from "./http/app.ts";
 import { createPublicApp, remotePort, watchRemoteOrigin } from "./http/remote.ts";
 import { newId, SecretBox } from "./lib/crypto.ts";
 import { Triage } from "./mail/actions.ts";
+import { COMPACT_MIN_BYTES, vacuumInBackground } from "./mail/cache.ts";
 import { SenderLogos } from "./mail/logos.ts";
 import { MailStore } from "./mail/store.ts";
 import { SyncEngine } from "./mail/sync.ts";
@@ -96,6 +97,19 @@ export async function start(config = loadConfig()) {
   const backfill = new AbortController();
   backfillSignals(ctx, { signal: backfill.signal }).catch((err) => console.error("[slipstream] signals backfill:", err));
   backfillSenderDomains(ctx, { signal: backfill.signal }).catch((err) => console.error("[slipstream] sender domain backfill:", err));
+  // A database that grew while every message was downloaded in full goes back to the cache's rules, once. When that frees
+  // a lot of the file, a VACUUM in a worker thread gives the space back to the disk without holding up the server.
+  ctx.sync.cache
+    .trimOnce({ signal: backfill.signal })
+    .then(async (r) => {
+      if (!r.ran) return;
+      console.log(`[slipstream] mail cache: ${r.trimmed} older messages went back to previews, ${r.files} attachment files removed`);
+      if (ctx.sync.cache.reclaimableBytes() >= COMPACT_MIN_BYTES) {
+        await vacuumInBackground(config.dbPath);
+        console.log("[slipstream] mail cache: database file compacted");
+      }
+    })
+    .catch((err) => console.error("[slipstream] mail cache trim:", err));
   const bundleTimer = setInterval(() => {
     try {
       bundleDeliveries(ctx);
