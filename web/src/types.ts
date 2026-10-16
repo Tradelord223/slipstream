@@ -61,7 +61,7 @@ export interface Settings {
   unifiedInbox: boolean;
   /** Built-in assistant (sidebar, ⌘.). Off until someone chooses a model or turns it on. */
   assistant: "on" | "off";
-  /** Company logos for automated senders, fetched by the server from the sender's own domain. */
+  /** Company logos for automated senders, fetched by the server from the sender's own site. Off unless turned on. */
   senderLogos: boolean;
   helpers: Helpers;
 }

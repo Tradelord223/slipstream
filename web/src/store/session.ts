@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showTips: true,
   unifiedInbox: true,
   assistant: "off",
-  senderLogos: true,
+  senderLogos: false,
   helpers: { codes: true, deliveries: "latest", securityAlerts: true, urgent: true },
 };
 
