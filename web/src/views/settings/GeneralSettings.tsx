@@ -15,7 +15,7 @@ export function Setting({ title, hint, children }: { title: string; hint?: strin
   );
 }
 
-function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: { id: T; label: string }[]; onChange: (v: T) => void; label: string }) {
+export function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: { id: T; label: string }[]; onChange: (v: T) => void; label: string }) {
   return (
     <div className="seg" role="radiogroup" aria-label={label}>
       {options.map((o) => (
@@ -32,6 +32,7 @@ const hourLabel = (h: number) => `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "A
 export function GeneralSettings() {
   const s = useSession((x) => x.settings);
   const [intro, setIntro] = useState(s.instantIntro);
+  const logosOn = s.senderLogos;
   const set = (patch: Partial<Settings>) => void updateSettings(patch);
 
   return (
@@ -58,6 +59,15 @@ export function GeneralSettings() {
             { id: "compact", label: "Compact" },
           ]}
         />
+      </Setting>
+      <Setting
+        title="Company logos"
+        hint="Shows logos next to mail from companies. When on, Slipstream fetches each logo from the company's own website about once a month, at a random time, so the site sees this computer's internet address but never which email or when you read it."
+      >
+        <label className="switch">
+          <input type="checkbox" checked={logosOn} onChange={(e) => set({ senderLogos: e.target.checked })} />
+          <span>{logosOn ? "On" : "Off"}</span>
+        </label>
       </Setting>
       <Setting title="Remote images" hint="Images can tell a sender you opened their message. They stay hidden until you say so.">
         <Segmented

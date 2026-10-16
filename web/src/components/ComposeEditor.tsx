@@ -83,6 +83,28 @@ export const ComposeEditor = forwardRef<EditorApi, { initialHtml: string; focusA
         node.insertAdjacentHTML("afterbegin", html);
         push();
       },
+      swapSignature(before, after) {
+        // Compare as the browser holds it: both sides go through the same sanitizing and serializing.
+        const asHeld = (html: string) => {
+          const t = document.createElement("div");
+          t.innerHTML = sanitizeDraftHtml(html);
+          return t.innerHTML;
+        };
+        const block = node.querySelector<HTMLElement>(".ss-signature");
+        if (block) {
+          if (block.innerHTML !== asHeld(before)) return; // the person edited it; leave it alone
+          if (after) block.innerHTML = asHeld(after);
+          else block.remove();
+        } else if (!before && after) {
+          const fresh = document.createElement("div");
+          fresh.className = "ss-signature";
+          fresh.innerHTML = asHeld(after);
+          const anchor = node.querySelector(".ss-attr");
+          if (anchor?.parentNode) anchor.parentNode.insertBefore(fresh, anchor);
+          else node.append(fresh);
+        } else return;
+        push();
+      },
     });
     return () => registerEditor(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -4,7 +4,7 @@ import { act } from "../store/actions.ts";
 import { focusId, list, loadMore, toggleSelected, useList } from "../store/list.ts";
 import { openThread } from "../store/nav.ts";
 import { prefetch } from "../store/threads.ts";
-import { useSession } from "../store/session.ts";
+import { logosFor, useLogoPolicy, useSession } from "../store/session.ts";
 import { ThreadRow } from "./ThreadRow.tsx";
 
 const OVERSCAN = 8;
@@ -22,6 +22,7 @@ export function ThreadList({ activeId, compact = false }: { activeId?: string | 
   const accounts = useSession((s) => s.accounts);
   const accountFilter = useSession((s) => s.accountFilter);
   const density = useSession((s) => s.settings.density);
+  const logoPolicy = useLogoPolicy();
   const viewport = useViewport();
 
   const twoLine = viewport === "mobile" || compact;
@@ -140,6 +141,7 @@ export function ThreadList({ activeId, compact = false }: { activeId?: string | 
             selecting={selecting}
             accounts={accounts}
             showAccount={showAccount}
+            logos={logosFor(logoPolicy, accounts.find((a) => a.id === t.accountId))}
             onOpen={onOpen}
             onToggle={toggleSelected}
             onDone={onDone}

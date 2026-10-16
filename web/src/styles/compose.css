@@ -137,8 +137,18 @@
   color: var(--text);
   font-size: 13.5px;
 }
-.from-select option {
+.from-select option,
+.from-select optgroup {
   background: var(--raised);
+  color: var(--text);
+}
+.from-select optgroup {
+  color: var(--text-3);
+  font-style: normal;
+}
+.from-select {
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 .cc-toggles {
   display: inline-flex;
@@ -255,6 +265,22 @@
 }
 .composer-attachments {
   padding: 0 14px 10px;
+}
+.composer-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 14px 10px;
+  padding: 8px 10px;
+  border-radius: var(--r-control);
+  background: var(--rose-soft);
+  color: var(--rose);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.composer-error svg {
+  flex: none;
+  margin-top: 2px;
 }
 .link-bar {
   display: flex;

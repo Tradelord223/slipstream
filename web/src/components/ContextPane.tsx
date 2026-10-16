@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.ts";
-import { displayName, longTime, listTime, plural } from "../lib/format.ts";
+import { displayName, longTime, listTime, ownAddresses, plural } from "../lib/format.ts";
 import type { ContactInfo, SharedDetail, ThreadDetail } from "../types.ts";
 import { teamTick } from "../store/events.ts";
 import { openThread } from "../store/nav.ts";
@@ -39,7 +39,7 @@ export function ContextPane({ detail }: { detail: ThreadDetail }) {
   const accounts = useSession((s) => s.accounts);
   const ai = useSession((s) => s.features.ai);
   const workspace = useSession((s) => s.workspace);
-  const mine = new Set(accounts.map((a) => a.email.toLowerCase()));
+  const mine = ownAddresses(accounts);
   const other = [...detail.messages].reverse().find((m) => !mine.has(m.from.email.toLowerCase()))?.from ?? detail.messages[0]?.from;
   const { info, setInfo, error } = useContact(other?.email.toLowerCase() ?? null);
 

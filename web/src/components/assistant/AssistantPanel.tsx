@@ -10,6 +10,7 @@ import { refreshEngines, useAssistantName, useCanRun, useEffectiveEngine, useEng
 import { assistantName, engineLine, shortModel } from "../../lib/engines.ts";
 import { useReview } from "../../store/agents.ts";
 import { navigate } from "../../store/route.ts";
+import { useAssistantOn } from "../../store/session.ts";
 import type { CloudRun, CloudStatus } from "../../types.ts";
 import { Icon } from "../Icon.tsx";
 import { Keys } from "../Keycap.tsx";
@@ -23,6 +24,8 @@ export function AssistantHost() {
   const viewport = useViewport();
   const windowWidth = useWindowWidth();
   const name = useAssistantName();
+  const on = useAssistantOn();
+  if (!on) return null;
   if (viewport === "desktop" && windowWidth >= ASSISTANT_INLINE_MIN) {
     return (
       <aside className="assistant" aria-label={name} aria-hidden={!open} inert={!open}>

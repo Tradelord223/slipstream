@@ -4,6 +4,8 @@ import { listTime, senderLine } from "../lib/format.ts";
 import { formatDue } from "../lib/when.ts";
 import type { Account, Thread } from "../types.ts";
 import { Icon } from "./Icon.tsx";
+import { RowMark } from "./SenderMark.tsx";
+import { RowSignal } from "./Signals.tsx";
 
 interface Props {
   thread: Thread;
@@ -14,6 +16,8 @@ interface Props {
   selecting: boolean;
   accounts: Account[];
   showAccount: boolean;
+  /** Company logos are on for this row's account. */
+  logos: boolean;
   onOpen: (id: string, e: MouseEvent) => void;
   onToggle: (id: string) => void;
   onDone: (id: string) => void;
@@ -55,8 +59,10 @@ export const ThreadRow = memo(function ThreadRow(p: Props) {
         </button>
       </span>
       <span className="row-sender">
+        {p.logos && <RowMark domain={t.logoDomain} />}
         {account && <span className="dot" style={{ background: account.color }} title={account.email} />}
         <span className="ellipsis">{sender}</span>
+        <RowSignal thread={t} where="narrow" />
       </span>
       <span className="row-body">
         <span className="row-subject">{t.subject || "(no subject)"}</span>
@@ -72,6 +78,7 @@ export const ThreadRow = memo(function ThreadRow(p: Props) {
         </span>
       </span>
       <span className="row-meta">
+        <RowSignal thread={t} where="wide" />
         {t.labels.slice(0, 2).map((l) => (
           <LabelChip key={l} name={l} />
         ))}

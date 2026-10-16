@@ -1,5 +1,5 @@
 import { api, type DraftInput } from "../api.ts";
-import { buildSeed, dedupe, fillSnippet, newBody, type ComposeKind } from "../lib/compose.ts";
+import { buildSeed, dedupe, defaultFrom, fillSnippet, newBody, replyTarget, signatureFor, type ComposeKind } from "../lib/compose.ts";
 import { firstName } from "../lib/format.ts";
 import { formatWhen } from "../lib/when.ts";
 import type { Address, Draft, DraftAttachment, Snippet, ThreadDetail } from "../types.ts";
@@ -7,7 +7,7 @@ import { createStore, useStore } from "./createStore.ts";
 import { removeLocally, undo as undoTriage } from "./actions.ts";
 import { reload } from "./list.ts";
 import { getRoute, navigate } from "./route.ts";
-import { myEmails, session } from "./session.ts";
+import { accountById, myEmails, session } from "./session.ts";
 import { cachedThread, loadThread } from "./threads.ts";
 import { settleSending, toast } from "./toasts.ts";
 import { openRemind } from "./ui.ts";
@@ -21,6 +21,8 @@ export interface ComposeState {
   kind: ComposeKind;
   draftId: string | null;
   accountId: string;
+  /** The address it goes out from: the account's own or one of its other addresses. */
+  fromEmail: string;
   threadId: string | null;
   replyToMessageId: string | null;
   to: Address[];
@@ -35,6 +37,8 @@ export interface ComposeState {
   attachments: DraftAttachment[];
   dirty: boolean;
   save: "idle" | "saving" | "saved" | "error";
+  /** Why the draft couldn't be saved or sent, in words for the person (for example, an address it can't send from). */
+  error: string | null;
   followUpDays: number | null;
   sending: boolean;
   /** Bumped to force the editor to start over with `initialBody`. */
@@ -48,6 +52,7 @@ const empty: ComposeState = {
   kind: "new",
   draftId: null,
   accountId: "",
+  fromEmail: "",
   threadId: null,
   replyToMessageId: null,
   to: [],
@@ -61,6 +66,7 @@ const empty: ComposeState = {
   attachments: [],
   dirty: false,
   save: "idle",
+  error: null,
   followUpDays: null,
   sending: false,
   editorKey: 0,
@@ -74,6 +80,8 @@ export interface EditorHandle {
   insertHtml(html: string, replaceRange?: Range): void;
   focus(): void;
   prependHtml(html: string): void;
+  /** Replace the signature block's contents when the person hasn't edited it. */
+  swapSignature(before: string, after: string): void;
 }
 let editor: EditorHandle | null = null;
 export const registerEditor = (e: EditorHandle | null) => {
@@ -103,7 +111,8 @@ export function startNew(seed: { to?: Address[]; subject?: string } = {}) {
   }
   const signature = session.get().settings.signature;
   const body = newBody(signature);
-  start({ kind: "new", accountId: defaultAccount(), to: seed.to ?? [], subject: seed.subject ?? "", initialBody: body });
+  const accountId = defaultAccount();
+  start({ kind: "new", accountId, fromEmail: accountById(accountId)?.email ?? "", to: seed.to ?? [], subject: seed.subject ?? "", initialBody: body });
 }
 
 export function startReply(detail: ThreadDetail, kind: Exclude<ComposeKind, "new">, inline: boolean) {
@@ -113,11 +122,15 @@ export function startReply(detail: ThreadDetail, kind: Exclude<ComposeKind, "new
     return;
   }
   if (st.open) void closeCompose();
-  const seed = buildSeed(detail, kind, myEmails(), session.get().settings.signature);
+  const mine = myEmails();
+  const account = accountById(detail.thread.accountId);
+  const fromEmail = defaultFrom(account, replyTarget(detail.messages, mine));
+  const seed = buildSeed(detail, kind, mine, signatureFor(account, fromEmail, session.get().settings.signature));
   start({
     kind,
     inline,
     accountId: detail.thread.accountId,
+    fromEmail,
     threadId: detail.thread.id,
     replyToMessageId: seed.replyToMessageId,
     to: seed.to,
@@ -144,6 +157,7 @@ export function openDraftObject(d: Draft) {
     inline: Boolean(d.threadId) && route.name === "thread" && route.id === d.threadId,
     draftId: d.id,
     accountId: d.accountId,
+    fromEmail: d.fromEmail || accountById(d.accountId)?.email || "",
     threadId: d.threadId,
     replyToMessageId: d.replyToMessageId,
     to: d.to,
@@ -172,6 +186,7 @@ function snapshot(): DraftInput {
   const s = compose.get();
   return {
     accountId: s.accountId,
+    fromEmail: s.fromEmail || undefined,
     threadId: s.threadId,
     replyToMessageId: s.replyToMessageId,
     to: s.to,
@@ -189,7 +204,7 @@ async function ensureDraft(): Promise<string> {
   creating ??= api
     .createDraft(snapshot())
     .then((d) => {
-      compose.set({ draftId: d.id, save: "saved" });
+      compose.set({ draftId: d.id, save: "saved", error: null });
       return d.id;
     })
     .finally(() => {
@@ -210,11 +225,12 @@ function runSave(): Promise<void> {
         else await api.saveDraft(s.draftId, snapshot());
         // Edits that landed while this request was in flight keep the draft dirty.
         const now = compose.get();
-        const same = now.bodyHtml === s.bodyHtml && now.subject === s.subject && now.to === s.to && now.cc === s.cc && now.bcc === s.bcc;
-        compose.set({ save: "saved", dirty: !same });
+        const same =
+          now.bodyHtml === s.bodyHtml && now.subject === s.subject && now.to === s.to && now.cc === s.cc && now.bcc === s.bcc && now.accountId === s.accountId && now.fromEmail === s.fromEmail;
+        compose.set({ save: "saved", error: null, dirty: !same });
         if (!same) scheduleSave();
       } catch (err) {
-        compose.set({ save: "error" });
+        compose.set({ save: "error", error: err instanceof Error ? err.message : "Couldn't save your draft" });
         throw err;
       }
     });
@@ -232,10 +248,21 @@ function scheduleSave() {
   timer = setTimeout(() => void runSave().catch(() => undefined), 700);
 }
 
-export function edit(patch: Partial<Pick<ComposeState, "to" | "cc" | "bcc" | "subject" | "bodyHtml" | "accountId" | "showCc" | "showBcc" | "followUpDays">>) {
+export function edit(patch: Partial<Pick<ComposeState, "to" | "cc" | "bcc" | "subject" | "bodyHtml" | "accountId" | "fromEmail" | "showCc" | "showBcc" | "followUpDays">>) {
   const persists = Object.keys(patch).some((k) => !["showCc", "showBcc", "followUpDays"].includes(k));
   compose.set({ ...patch, ...(persists ? { dirty: true } : {}) });
   if (persists) scheduleSave();
+}
+
+/** Pick what the message is sent from. The signature follows the address unless the person has edited it. */
+export function setFrom(accountId: string, fromEmail: string) {
+  const s = compose.get();
+  const general = session.get().settings.signature;
+  const before = signatureFor(accountById(s.accountId), s.fromEmail, general);
+  const after = signatureFor(accountById(accountId), fromEmail, general);
+  compose.set({ error: null });
+  edit({ accountId, fromEmail });
+  if (before !== after) editor?.swapSignature(before, after);
 }
 
 export async function flushDraft(): Promise<void> {
@@ -338,8 +365,7 @@ export async function sendCompose(opts: SendOptions = {}) {
     else if (opts.instant) toast.info("Sending…");
     else toast.sending("Sending…", res.sendAt, cancel);
   } catch (err) {
-    compose.set({ sending: false });
-    toast.error(err instanceof Error ? err.message : "That message didn't send");
+    compose.set({ sending: false, error: err instanceof Error ? err.message : "That message didn't send" });
   }
 }
 

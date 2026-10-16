@@ -17,19 +17,23 @@ import { SnippetsSettings } from "./settings/SnippetsSettings.tsx";
 import { SplitsSettings } from "./settings/SplitsSettings.tsx";
 import { TeamSettings } from "./settings/TeamSettings.tsx";
 import { AboutSettings } from "./settings/AboutSettings.tsx";
+import { HelpersSettings } from "./settings/HelpersSettings.tsx";
+import { PrivacySettings } from "./settings/PrivacySettings.tsx";
 
 const SECTIONS = [
   { id: "general", label: "General" },
   { id: "accounts", label: "Accounts" },
   { id: "splits", label: "Splits" },
   { id: "labels", label: "Labels" },
+  { id: "helpers", label: "Helpers" },
   { id: "snippets", label: "Snippets" },
   { id: "shortcuts", label: "Shortcuts" },
   { id: "team", label: "Team" },
-  { id: "ai", label: "AI" },
+  { id: "ai", label: "AI & agents" },
   { id: "models", label: "Models & accounts" },
   { id: "agents", label: "Agents" },
   { id: "connect", label: "Connect" },
+  { id: "privacy", label: "Privacy & safety" },
   { id: "about", label: "About" },
 ] as const;
 
@@ -72,6 +76,7 @@ export function SettingsView({ section }: { section: string }) {
           {current.id === "accounts" && <AccountsSettings />}
           {current.id === "splits" && <SplitsSettings />}
           {current.id === "labels" && <LabelsSettings />}
+          {current.id === "helpers" && <HelpersSettings />}
           {current.id === "snippets" && <SnippetsSettings />}
           {current.id === "shortcuts" && <ShortcutsSettings />}
           {current.id === "team" && <TeamSettings />}
@@ -79,6 +84,7 @@ export function SettingsView({ section }: { section: string }) {
           {current.id === "models" && <ModelsSettings />}
           {current.id === "agents" && <AgentsSettings />}
           {current.id === "connect" && <ConnectSettings />}
+          {current.id === "privacy" && <PrivacySettings />}
         </div>
       </div>
     </section>

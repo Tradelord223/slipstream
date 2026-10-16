@@ -6,6 +6,7 @@ import { Icon } from "../../components/Icon.tsx";
 import { ENGINE_GROUPS, KEY_LINKS, KEY_PROVIDER, shortModel } from "../../lib/engines.ts";
 import { dollars, refreshCloud, useCloud } from "../../store/cloud.ts";
 import { chooseEngine, chooseModel, refreshEngines, saveBudgets, setOverview, useEngines } from "../../store/engines.ts";
+import { session, updateSettings, useSession } from "../../store/session.ts";
 import { toast } from "../../store/toasts.ts";
 import type { EngineStatus, EnginesOverview, KeyProvider } from "../../types.ts";
 import { ManagedActions, ManagedDetails } from "./CloudCard.tsx";
@@ -49,6 +50,7 @@ export function ModelsSettings() {
       <p className="block-lead eng-lead">
         Choose what your agents think with. Whichever you pick, they only do what your permissions allow, and sending waits for you in Review.
       </p>
+      <AssistantOffNotice overview={overview} />
       {ENGINE_GROUPS.map((g) => {
         const list = g.ids.map((id) => overview.engines.find((e) => e.id === id)).filter((e): e is EngineStatus => Boolean(e));
         if (list.length === 0) return null;
@@ -71,6 +73,28 @@ export function ModelsSettings() {
         );
       })}
       <Budgets overview={overview} />
+    </div>
+  );
+}
+
+/** With a model ready and the built-in assistant off, the one step that's left is right here. */
+function AssistantOffNotice({ overview }: { overview: EnginesOverview }) {
+  const off = useSession((s) => s.settings.assistant === "off");
+  const [busy, setBusy] = useState(false);
+  if (!off || !overview.engines.some((e) => e.ready)) return null;
+  const turnOn = async () => {
+    setBusy(true);
+    await updateSettings({ assistant: "on" });
+    setBusy(false);
+    if (session.get().settings.assistant === "on") toast.info("The assistant is on");
+  };
+  return (
+    <div className="notice-row" role="status">
+      <Icon name="sparkle" />
+      <span className="notice-text">A model is ready, but the built-in assistant is off.</span>
+      <button className="btn btn-sm btn-primary" onClick={() => void turnOn()} disabled={busy}>
+        Turn on the assistant
+      </button>
     </div>
   );
 }

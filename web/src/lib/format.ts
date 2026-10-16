@@ -82,9 +82,19 @@ export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 }
 
-/** "Priya, Sam, me (3)". Names that belong to one of the user's accounts show as "me". */
+/** Every address that is the person: each account's own and the other addresses it can send as. */
+export function ownAddresses(accounts: Account[]): Set<string> {
+  const mine = new Set<string>();
+  for (const a of accounts) {
+    mine.add(a.email.toLowerCase());
+    for (const i of a.identities ?? []) mine.add(i.email.toLowerCase());
+  }
+  return mine;
+}
+
+/** "Priya, Sam, me (3)". Names that belong to one of the user's addresses show as "me". */
 export function senderLine(participants: Address[], accounts: Account[], count: number): string {
-  const mine = new Set(accounts.map((a) => a.email.toLowerCase()));
+  const mine = ownAddresses(accounts);
   const names = participants.map((p) => (mine.has(p.email.toLowerCase()) ? "me" : firstName(p)));
   const unique = [...new Set(names)];
   const line = unique.slice(0, 3).join(", ") + (unique.length > 3 ? ` +${unique.length - 3}` : "");

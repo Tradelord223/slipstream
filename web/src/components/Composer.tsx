@@ -9,9 +9,11 @@ import { Dialog } from "./Dialog.tsx";
 import { Icon } from "./Icon.tsx";
 import { RecipientField } from "./RecipientField.tsx";
 import {
-  attachFiles, closeCompose, compose, composeBus, discardDraft, edit, getEditor, insertSnippet, removeAttachment, sendCompose, sendLater, useCompose,
+  attachFiles, closeCompose, compose, composeBus, discardDraft, edit, getEditor, insertSnippet, removeAttachment, sendCompose, sendLater, setFrom, useCompose,
 } from "../store/compose.ts";
+import { showFromPicker } from "../lib/compose.ts";
 import { useSession } from "../store/session.ts";
+import type { Account } from "../types.ts";
 import { toast } from "../store/toasts.ts";
 
 export type Placement = "dock" | "modal" | "inline" | "full";
@@ -109,16 +111,31 @@ function ComposerBody({ placement }: { placement: Placement }) {
       )}
 
       <div className="composer-fields">
-        {accounts.length > 1 && (
+        {showFromPicker(accounts) && (
           <div className="recipient-row">
             <label className="recipient-label" htmlFor="compose-from">
               From
             </label>
-            <select id="compose-from" ref={fromSelect} className="from-select" value={s.accountId} onChange={(e) => edit({ accountId: e.target.value })} data-from>
+            <select
+              id="compose-from"
+              ref={fromSelect}
+              className="from-select"
+              value={fromValue(accounts, s.accountId, s.fromEmail)}
+              onChange={(e) => {
+                const [accountId = "", ...rest] = e.target.value.split("::");
+                setFrom(accountId, rest.join("::"));
+              }}
+              data-from
+            >
               {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name ? `${a.name} <${a.email}>` : a.email}
-                </option>
+                <optgroup key={a.id} label={a.email}>
+                  <option value={`${a.id}::${a.email}`}>{a.name ? `${a.name} <${a.email}>` : a.email}</option>
+                  {(a.identities ?? []).map((i) => (
+                    <option key={i.id} value={`${a.id}::${i.email}`}>
+                      {i.name ? `${i.name} <${i.email}>` : i.email}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
@@ -177,6 +194,13 @@ function ComposerBody({ placement }: { placement: Placement }) {
         </ul>
       )}
 
+      {s.error && (
+        <div className="composer-error" role="alert">
+          <Icon name="alert" size={14} />
+          <span>{s.error}</span>
+        </div>
+      )}
+
       {aiOpen && <AiBar editor={editor} onClose={() => setAiOpen(false)} />}
       {linkOpen && <LinkBar editor={editor} onClose={() => setLinkOpen(false)} />}
 
@@ -233,6 +257,15 @@ function ComposerBody({ placement }: { placement: Placement }) {
       {s.sending && <div className="composer-busy" aria-hidden="true" />}
     </section>
   );
+}
+
+/** The select's value for the current From: the option whose address matches, ignoring case. */
+function fromValue(accounts: Account[], accountId: string, fromEmail: string): string {
+  const account = accounts.find((a) => a.id === accountId);
+  if (!account) return "";
+  const want = fromEmail.toLowerCase();
+  const hit = want ? [account.email, ...(account.identities ?? []).map((i) => i.email)].find((e) => e.toLowerCase() === want) : undefined;
+  return `${account.id}::${hit ?? account.email}`;
 }
 
 function SendButton() {

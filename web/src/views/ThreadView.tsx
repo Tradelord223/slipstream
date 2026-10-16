@@ -14,7 +14,8 @@ import { openDraft, startReply, useCompose } from "../store/compose.ts";
 import { list, useList } from "../store/list.ts";
 import { closeThread, unsubscribeFrom } from "../store/nav.ts";
 import { navigate, routeFrom } from "../store/route.ts";
-import { useSession } from "../store/session.ts";
+import { codeMessage } from "../lib/code.ts";
+import { logosFor, useLogoPolicy, useSession } from "../store/session.ts";
 import { useThread } from "../store/threads.ts";
 import { enterThread, toggleMessage, useThreadView } from "../store/threadView.ts";
 import { openPalette, toggleContext, useUi } from "../store/ui.ts";
@@ -24,6 +25,7 @@ import type { ComposeKind } from "../lib/compose.ts";
 export function ThreadView({ id, showContext }: { id: string; showContext: boolean }) {
   const { detail, error, loading, retry } = useThread(id);
   const accounts = useSession((s) => s.accounts);
+  const logoPolicy = useLogoPolicy();
   const viewport = useViewport();
   const contextOpen = useUi((s) => s.contextOpen);
   const expanded = useThreadView((s) => s.expanded);
@@ -33,6 +35,8 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
   const markedRead = useRef<string | null>(null);
 
   const messages = detail?.messages ?? [];
+  const logos = logosFor(logoPolicy, accounts.find((a) => a.id === detail?.thread.accountId));
+  const codeId = codeMessage(messages)?.id;
   const ids = messages.map((m) => m.id).join();
 
   useEffect(() => {
@@ -112,6 +116,8 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
                   expanded={expanded.has(m.id)}
                   focused={i === focus}
                   accounts={accounts}
+                  logos={logos}
+                  codeShortcut={m.id === codeId}
                   onToggle={() => toggleMessage(m.id)}
                   onReply={startReplying}
                 />

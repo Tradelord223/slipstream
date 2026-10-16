@@ -5,13 +5,14 @@ import { clearFilter, clearSelection, focusEdge, list, loadMore, moveFocus, sele
 import { closeThread, goView, openThread, unsubscribeFrom } from "../store/nav.ts";
 import { acceptAll, acceptItem, autopilot, dismissItem, focusedItem, isProposal, moveFocus as moveAutopilotFocus, openItem, patchAutopilot, proposalCount, undoItem } from "../store/autopilot.ts";
 import { getRoute, navigate } from "../store/route.ts";
-import { session, setAccountFilter } from "../store/session.ts";
+import { assistantOn, session, setAccountFilter } from "../store/session.ts";
 import { cachedThread, loadThread } from "../store/threads.ts";
 import { moveMessage, toggleExpandAll, toggleFocusedMessage } from "../store/threadView.ts";
 import { toast, undoLast } from "../store/toasts.ts";
 import { toggleAssistant } from "../store/assistant.ts";
 import { closePalette, openPalette, toggleContext, toggleRail, ui } from "../store/ui.ts";
-import type { ComposeKind } from "../lib/compose.ts";
+import { copyFocusedCode, codeTarget } from "../lib/code.ts";
+import { showFromPicker, type ComposeKind } from "../lib/compose.ts";
 
 export type Scope = "global" | "list" | "thread" | "compose" | "page" | "review" | "autopilot";
 
@@ -95,6 +96,12 @@ function switchAccount(n: number) {
   }
 }
 
+/** ⌘. with the assistant off says so and offers the switch, rather than doing nothing. */
+function assistantKey() {
+  if (assistantOn()) toggleAssistant();
+  else toast.action("The assistant is off", "Turn on", () => navigate("/settings/ai"));
+}
+
 const goto = (id: string, title: string, key: string, run: () => void): CommandDef => ({
   id: `go.${id}`,
   title,
@@ -152,6 +159,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "triage.spam", title: "Report spam", group: "Triage", keys: ["!"], scopes: ["list", "thread"], run: () => void act.spam() },
   { id: "triage.mute", title: "Mute conversation", group: "Triage", keys: ["shift+m"], scopes: ["list", "thread"], run: () => void act.mute() },
   { id: "triage.unsubscribe", title: "Unsubscribe", group: "Triage", keys: ["mod+u"], scopes: ["list", "thread"], run: () => void unsubscribeFrom(targetIds(focusedThreadId())) },
+  { id: "code.copy", title: "Copy code", group: "Triage", keys: ["shift+c"], scopes: ["list", "thread"], run: () => void copyFocusedCode(), when: () => codeTarget() !== null },
   { id: "triage.clearReminder", title: "Clear reminder", group: "Triage", keys: [], scopes: ["list", "thread"], run: () => void act.clearReminder() },
   { id: "triage.label", title: "Label…", group: "Triage", keys: ["l"], scopes: ["list", "thread"], run: () => openPalette("label", targetIds(focusedThreadId())) },
   { id: "triage.removeLabel", title: "Remove label", group: "Triage", keys: ["y"], scopes: ["list", "thread"], run: removeLabel },
@@ -179,7 +187,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "compose.close", title: "Close and keep draft", group: "Compose", keys: ["escape"], scopes: ["compose"], run: () => void closeCompose(), noPalette: true },
   { id: "compose.cc", title: "Add Cc", group: "Compose", keys: ["mod+shift+c"], scopes: ["compose"], run: () => edit({ showCc: true }), when: () => compose.get().open },
   { id: "compose.bcc", title: "Add Bcc", group: "Compose", keys: ["mod+shift+b"], scopes: ["compose"], run: () => edit({ showBcc: true }), when: () => compose.get().open },
-  { id: "compose.from", title: "Change From account", group: "Compose", keys: ["mod+shift+f"], scopes: ["compose"], run: () => emitCompose("from"), when: () => compose.get().open && session.get().accounts.length > 1 },
+  { id: "compose.from", title: "Change From account", group: "Compose", keys: ["mod+shift+f"], scopes: ["compose"], run: () => emitCompose("from"), when: () => compose.get().open && showFromPicker(session.get().accounts) },
   { id: "compose.attach", title: "Attach files", group: "Compose", keys: ["mod+shift+u"], scopes: ["compose"], run: () => emitCompose("attach"), when: () => compose.get().open },
   { id: "compose.pop", title: "Pop out or dock", group: "Compose", keys: ["mod+shift+p"], scopes: ["compose"], run: () => compose.set((s) => ({ mode: s.mode === "modal" ? "dock" : "modal", inline: false })), when: () => compose.get().open },
   { id: "compose.intro", title: "Instant Intro", group: "Compose", keys: ["mod+shift+i"], scopes: ["compose"], run: () => void instantIntro(), when: () => compose.get().open && Boolean(compose.get().threadId) },
@@ -198,7 +206,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "shortcuts", title: "Keyboard shortcuts", group: "General", keys: ["?"], scopes: ["list", "thread", "page"], run: () => ui.set({ shortcuts: true }) },
   { id: "rail.toggle", title: "Toggle sidebar", group: "General", keys: ["\\"], scopes: ["list", "thread", "page"], run: toggleRail },
   { id: "context.toggle", title: "Toggle contact pane", group: "General", keys: [], scopes: ["thread"], run: toggleContext },
-  { id: "assistant.toggle", title: "Show or hide the assistant", group: "General", keys: ["mod+."], scopes: ["global"], run: toggleAssistant },
+  { id: "assistant.toggle", title: "Show or hide the assistant", group: "General", keys: ["mod+."], scopes: ["global"], run: assistantKey },
   { id: "settings", title: "Settings", group: "General", keys: ["mod+,"], scopes: ["global"], run: () => navigate("/settings/general") },
   { id: "split.next", title: "Next split", group: "Move", keys: ["tab"], scopes: ["list"], needsListFocus: true, run: () => cycleSplit(1) },
   { id: "split.prev", title: "Previous split", group: "Move", keys: ["shift+tab"], scopes: ["list"], needsListFocus: true, run: () => cycleSplit(-1) },
@@ -214,11 +222,11 @@ export const COMMANDS: CommandDef[] = [
   goto("all", "Go to All mail", "a", () => goView({ kind: "search", q: "in:all" })),
   goto("review", "Go to Review", "r", () => navigate("/review")),
   { id: "go.activity", title: "Go to Activity", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/activity") },
-  goto("agent", "Go to Agent", "c", () => navigate("/agent")),
-  goto("autopilot", "Go to Autopilot", "p", () => navigate("/autopilot")),
+  { ...goto("agent", "Go to Agent", "c", () => navigate("/agent")), when: assistantOn },
+  { ...goto("autopilot", "Go to Autopilot", "p", () => navigate("/autopilot")), when: assistantOn },
   { id: "go.models", title: "Go to Models & accounts", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/settings/models") },
-  { id: "autopilot.toggle", title: "Turn Autopilot on or off", group: "Autopilot", keys: [], scopes: ["global"], run: () => void patchAutopilot({ enabled: !autopilot.get().overview?.settings.enabled }) },
-  { id: "autopilot.acceptAllPalette", title: "Accept all Autopilot suggestions", group: "Autopilot", keys: [], scopes: ["global"], when: () => proposalCount(autopilot.get().overview) > 0, run: () => void acceptAll() },
+  { id: "autopilot.toggle", title: "Turn Autopilot on or off", group: "Autopilot", keys: [], scopes: ["global"], when: assistantOn, run: () => void patchAutopilot({ enabled: !autopilot.get().overview?.settings.enabled }) },
+  { id: "autopilot.acceptAllPalette", title: "Accept all Autopilot suggestions", group: "Autopilot", keys: [], scopes: ["global"], when: () => assistantOn() && proposalCount(autopilot.get().overview) > 0, run: () => void acceptAll() },
   { id: "go.agents", title: "Go to agent settings", group: "Go to", keys: [], scopes: ["list", "thread", "page"], run: () => navigate("/settings/agents") },
   { id: "agents.create", title: "Create agent token", group: "General", keys: [], scopes: ["global"], run: openCreateAgent },
 

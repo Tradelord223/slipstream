@@ -24,7 +24,7 @@ import { refreshCounts, useCounts } from "./store/counts.ts";
 import { connectEvents, disconnectEvents } from "./store/events.ts";
 import { focusId, openView, useList } from "./store/list.ts";
 import { currentUrl, navigate, useRoute, type MailView as MailViewType } from "./store/route.ts";
-import { loadSession, rememberView, session, useSession } from "./store/session.ts";
+import { loadSession, rememberView, session, useAssistantOn, useSession } from "./store/session.ts";
 import { toast } from "./store/toasts.ts";
 import { ui, useUi } from "./store/ui.ts";
 import { AuthView, JoinSignedIn } from "./views/AuthView.tsx";
@@ -85,7 +85,8 @@ function Shell() {
   const density = useSession((s) => s.settings.density);
   const listView = useList((s) => s.view);
   const counts = useCounts();
-  const assistantOpen = useAssistant((s) => s.open);
+  const assistantOn = useAssistantOn();
+  const assistantOpen = useAssistant((s) => s.open) && assistantOn;
   const assistantWidth = useAssistant((s) => s.width);
   const accessOpen = useAssistant((s) => s.accessOpen);
   const cloudStatus = useCloud((s) => s.status);

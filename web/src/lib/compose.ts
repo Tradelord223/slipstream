@@ -1,4 +1,4 @@
-import type { Address, Message, ThreadDetail } from "../types.ts";
+import type { Account, Address, Message, ThreadDetail } from "../types.ts";
 import { quotableHtml } from "./emailHtml.ts";
 import { displayName, escapeHtml, firstName } from "./format.ts";
 
@@ -37,6 +37,25 @@ export function dedupe(list: Address[], exclude: Set<string> = new Set()): Addre
 export function replyTarget(messages: Message[], mine: Set<string>): Message {
   for (let i = messages.length - 1; i >= 0; i--) if (!mine.has(messages[i]!.from.email.toLowerCase())) return messages[i]!;
   return messages[messages.length - 1]!;
+}
+
+/** The From picker shows once there is a choice: several accounts, or an account with other addresses. */
+export function showFromPicker(accounts: Account[]): boolean {
+  return accounts.length > 1 || accounts.some((a) => (a.identities?.length ?? 0) > 0);
+}
+
+/** The address a reply goes out from: the identity the original was sent to (To first, then Cc), else the account's own. */
+export function defaultFrom(account: Account | undefined, original: Message): string {
+  if (!account) return "";
+  const sentTo = [...original.to, ...original.cc].map((a) => a.email.toLowerCase());
+  const hit = sentTo.map((e) => account.identities?.find((i) => i.email.toLowerCase() === e)).find(Boolean);
+  return hit?.email ?? account.email;
+}
+
+/** The signature for an address: its own when it has one, otherwise the general signature. */
+export function signatureFor(account: Account | undefined, fromEmail: string, general: string): string {
+  const id = account?.identities?.find((i) => i.email.toLowerCase() === fromEmail.toLowerCase());
+  return id?.signatureHtml ?? general;
 }
 
 const prefix = (subject: string, re: RegExp, p: string) => (re.test(subject) ? subject : `${p} ${subject}`.trim());

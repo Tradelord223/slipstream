@@ -20,3 +20,21 @@ export async function copyText(text: string): Promise<boolean> {
     return ok;
   }
 }
+
+/**
+ * Copy text that still has to be fetched. Browsers only allow a copy right after a click, and a fetch can outlast
+ * that, so where supported the clipboard is handed the pending text instead of waiting for it. A failed fetch
+ * rejects with its own error.
+ */
+export async function copyPending(pending: Promise<string>): Promise<boolean> {
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    pending.catch(() => undefined);
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": pending.then((t) => new Blob([t], { type: "text/plain" })) })]);
+      return true;
+    } catch {
+      /* the fetch failed (thrown again below) or the clipboard refused; try the plain route */
+    }
+  }
+  return copyText(await pending);
+}

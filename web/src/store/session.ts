@@ -1,4 +1,5 @@
 import { api, ApiError } from "../api.ts";
+import { ownAddresses } from "../lib/format.ts";
 import type { Account, Features, Settings, Snippet, Split, User, Workspace } from "../types.ts";
 import { createStore, useStore } from "./createStore.ts";
 import { getRoute, navigate } from "./route.ts";
@@ -34,6 +35,8 @@ export interface Session {
   snippets: Snippet[];
   /** Account id to limit the mailbox to, or null for everything. */
   accountFilter: string | null;
+  /** What the person chose for company logos; null until they choose. Demo mail shows its built-in marks until they say no. */
+  logosChoice: boolean | null;
 }
 
 const savedFilter = (() => {
@@ -57,6 +60,7 @@ export const session = createStore<Session>({
   features: { ai: false, google: false, microsoft: false, undoSendSeconds: 10 },
   snippets: [],
   accountFilter: savedFilter || null,
+  logosChoice: null,
 });
 
 export const useSession = <S,>(selector: (s: Session) => S) => useStore(session, selector);
@@ -80,6 +84,7 @@ export async function loadSession(): Promise<void> {
     session.set({
       status: "ready",
       error: null,
+      logosChoice: typeof b.settings.senderLogos === "boolean" ? b.settings.senderLogos : null,
       mode: b.mode,
       user: b.user,
       workspace: b.workspace,
@@ -118,6 +123,7 @@ export async function refreshSession(): Promise<void> {
       labels: b.labels,
       features: b.features,
       settings: { ...DEFAULT_SETTINGS, ...b.settings },
+      logosChoice: typeof b.settings.senderLogos === "boolean" ? b.settings.senderLogos : null,
       accountFilter: filter && b.accounts.some((a) => a.id === filter) ? filter : null,
     });
   } catch {
@@ -135,13 +141,14 @@ export async function loadSnippets(): Promise<void> {
 
 export async function updateSettings(patch: Partial<Settings>): Promise<void> {
   const before = session.get().settings;
+  const choiceBefore = session.get().logosChoice;
   const next = { ...before, ...patch };
-  session.set({ settings: next });
+  session.set({ settings: next, ...(patch.senderLogos !== undefined ? { logosChoice: patch.senderLogos } : {}) });
   if (patch.theme) applyTheme(patch.theme);
   try {
     await api.saveSettings(patch);
   } catch (err) {
-    session.set({ settings: before });
+    session.set({ settings: before, logosChoice: choiceBefore });
     if (patch.theme) applyTheme(before.theme);
     toast.error(err instanceof Error ? err.message : "Couldn't save that setting");
   }
@@ -183,9 +190,26 @@ export function accountById(id: string): Account | undefined {
   return session.get().accounts.find((a) => a.id === id);
 }
 
+/** Every address that is the person, including the other addresses their accounts send as. */
 export function myEmails(): Set<string> {
-  return new Set(session.get().accounts.map((a) => a.email.toLowerCase()));
+  return ownAddresses(session.get().accounts);
 }
+
+/** The built-in assistant is on. Everything that talks to a model on the person's behalf follows this one switch. */
+export const assistantOn = () => session.get().settings.assistant === "on";
+export const useAssistantOn = () => useSession((s) => s.settings.assistant === "on");
+
+/** Company logos: "all" once turned on, "demo" until the person decides (demo mail ships with its own marks), "none" when turned off. */
+export type LogoPolicy = "all" | "demo" | "none";
+
+export function logoPolicy(settings: Settings, choice: boolean | null): LogoPolicy {
+  if (settings.senderLogos) return "all";
+  return choice === false ? "none" : "demo";
+}
+
+export const logosFor = (policy: LogoPolicy, account: Account | undefined) => policy === "all" || (policy === "demo" && account?.provider === "demo");
+
+export const useLogoPolicy = (): LogoPolicy => useSession((s) => logoPolicy(s.settings, s.logosChoice));
 
 export async function signOut(): Promise<void> {
   try {

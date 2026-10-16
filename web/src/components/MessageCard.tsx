@@ -1,9 +1,12 @@
 import { useState } from "react";
-import { bytes, displayName, firstName, listTime, longTime } from "../lib/format.ts";
+import { bytes, displayName, firstName, listTime, longTime, ownAddresses } from "../lib/format.ts";
+import { cardSignal } from "../lib/signals.ts";
+import { useSession } from "../store/session.ts";
 import type { Account, Address, Message } from "../types.ts";
-import { Avatar } from "./Avatar.tsx";
 import { EmailBody } from "./EmailBody.tsx";
 import { Icon } from "./Icon.tsx";
+import { SenderAvatar } from "./SenderMark.tsx";
+import { SignalCard } from "./Signals.tsx";
 
 function recipientsLine(m: Message, mine: Set<string>): string {
   const names = (list: Address[]) => list.map((a) => (mine.has(a.email.toLowerCase()) ? "me" : firstName(a)));
@@ -18,6 +21,8 @@ export function MessageCard({
   expanded,
   focused,
   accounts,
+  logos = false,
+  codeShortcut = false,
   onToggle,
   onReply,
 }: {
@@ -25,11 +30,18 @@ export function MessageCard({
   expanded: boolean;
   focused: boolean;
   accounts: Account[];
+  /** Company logos are on for this conversation's account. */
+  logos?: boolean;
+  /** This is the message Shift+C copies from. */
+  codeShortcut?: boolean;
   onToggle: () => void;
   onReply: (kind: "reply" | "replyAll" | "forward") => void;
 }) {
   const [details, setDetails] = useState(false);
-  const mine = new Set(accounts.map((a) => a.email.toLowerCase()));
+  const mine = ownAddresses(accounts);
+  const helpers = useSession((x) => x.settings.helpers);
+  const signal = cardSignal(message.signals ?? [], helpers);
+  const logoDomain = logos ? message.logoDomain : null;
   const sender = mine.has(message.from.email.toLowerCase()) ? "me" : displayName(message.from);
   const files = message.attachments.filter((a) => !a.inline || !a.contentId);
 
@@ -37,7 +49,7 @@ export function MessageCard({
     return (
       <article className={`msg msg-collapsed ${focused ? "msg-focus" : ""}`} data-message-id={message.id} aria-label={`Message from ${sender}`}>
         <button className="msg-line" onClick={onToggle} aria-expanded="false">
-          <Avatar name={message.from.name} email={message.from.email} size={22} />
+          <SenderAvatar name={message.from.name} email={message.from.email} size={22} domain={logoDomain} />
           <span className="msg-line-name">{sender}</span>
           <span className="msg-line-snippet">{message.snippet}</span>
           {files.length > 0 && <Icon name="paperclip" size={14} />}
@@ -51,7 +63,7 @@ export function MessageCard({
     <article className={`msg ${focused ? "msg-focus" : ""}`} data-message-id={message.id} aria-label={`Message from ${sender}`}>
       <header className="msg-head">
         <button className="msg-head-main" onClick={onToggle} aria-expanded="true" aria-label={`Collapse message from ${sender}`}>
-          <Avatar name={message.from.name} email={message.from.email} size={32} />
+          <SenderAvatar name={message.from.name} email={message.from.email} size={32} domain={logoDomain} />
           <span className="msg-who">
             <span className="msg-name">{displayName(message.from)}</span>
             <span className="msg-to">{recipientsLine(message, mine)}</span>
@@ -95,6 +107,7 @@ export function MessageCard({
           <dd>{longTime(message.sentAt)}</dd>
         </dl>
       )}
+      {signal && <SignalCard message={message} signal={signal} shortcut={codeShortcut} />}
       <EmailBody message={message} />
       {files.length > 0 && (
         <ul className="attachments" aria-label="Attachments">

@@ -10,7 +10,7 @@ import { proposalCount, useAutopilot } from "../store/autopilot.ts";
 import { useCounts } from "../store/counts.ts";
 import { useList } from "../store/list.ts";
 import { navigate, useRoute, viewPath, type MailView } from "../store/route.ts";
-import { setAccountFilter, signOut, useSession } from "../store/session.ts";
+import { setAccountFilter, signOut, useAssistantOn, useSession } from "../store/session.ts";
 import { ui } from "../store/ui.ts";
 
 interface NavItem {
@@ -31,6 +31,7 @@ export function Rail() {
   const waiting = useReview((s) => s.pending?.length ?? 0);
   const unseen = useReview((s) => s.unseen);
   const suggestions = useAutopilot((s) => proposalCount(s.overview));
+  const assistantOn = useAssistantOn();
 
   const activeView: MailView | null = route.name === "mail" ? route.view : route.name === "thread" ? listView : null;
   const items: NavItem[] = [
@@ -42,9 +43,14 @@ export function Rail() {
     { key: "starred", label: "Starred", icon: "star", to: "/starred" },
     ...(workspace ? [{ key: "shared" as const, label: "Shared", icon: "users" as IconName, to: "/shared" }] : []),
   ];
+  // The built-in assistant's pages go away with it; Review and Activity stay for the person's own agents.
   const agentItems: NavItem[] = [
-    { key: "agent", label: "Agent", icon: "sparkle", to: "/agent" },
-    { key: "autopilot", label: "Autopilot", icon: "zap", to: "/autopilot", count: suggestions },
+    ...(assistantOn
+      ? [
+          { key: "agent" as const, label: "Agent", icon: "sparkle" as IconName, to: "/agent" },
+          { key: "autopilot" as const, label: "Autopilot", icon: "zap" as IconName, to: "/autopilot", count: suggestions },
+        ]
+      : []),
     { key: "review", label: "Review", icon: "shield", to: "/review", count: waiting, notice: unseen },
     { key: "activity", label: "Activity", icon: "pulse", to: "/activity" },
   ];
