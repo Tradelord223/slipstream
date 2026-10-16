@@ -155,6 +155,23 @@ describe("Autopilot", () => {
     env.ctx.db.run("DELETE FROM autopilot_items WHERE id = 'api_x'");
   });
 
+  test("one-time codes never reach the sorting model", () => {
+    ingest([
+      msg({
+        from: { name: "Quarry", email: "no-reply@codes.test" },
+        subject: "Your sign-in code",
+        bodyText: "Your verification code is 482913. It expires in 10 minutes.",
+        remoteThreadId: "otp",
+      }),
+    ]);
+    const t = thread("otp");
+    env.ctx.db.run("INSERT INTO autopilot_items (id, user_id, thread_id, message_id, stage, created_at) SELECT 'api_otp', ?, ?, id, 'deciding', ? FROM messages WHERE thread_id = ?", LOCAL_USER_ID, t.id, Date.now(), t.id);
+    const prompt = env.ctx.autopilot.decidePrompt(LOCAL_USER_ID, ["api_otp"]);
+    assert.ok(prompt.includes("verification code is"), "the message is still there");
+    assert.ok(!prompt.includes("482913"), "but its code is masked");
+    env.ctx.db.run("DELETE FROM autopilot_items WHERE id = 'api_otp'");
+  });
+
   test("Autopilot can't send, and other agents can't record its decisions", async () => {
     const user = env.ctx.users.get(LOCAL_USER_ID)!;
     const pilot = env.ctx.autopilot.principal(LOCAL_USER_ID);

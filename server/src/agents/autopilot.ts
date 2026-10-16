@@ -3,6 +3,7 @@ import { HttpError } from "../auth/users.ts";
 import { defineCommand, type Actor, type Command } from "../commands/registry.ts";
 import type { AppContext } from "../context.ts";
 import { newId } from "../lib/crypto.ts";
+import { maskCodes } from "../mail/signals.ts";
 import type { Agent } from "./agents.ts";
 import { ENGINE_IDS, type EngineId } from "./engines/types.ts";
 
@@ -475,11 +476,14 @@ export class Autopilot {
       "SELECT subject, category, message_count, last_outbound_at FROM threads WHERE id = ?",
       it.thread_id,
     );
-    const m = this.ctx.db.get<{ from_name: string; from_email: string; to_json: string; cc_json: string; subject: string; sent_at: number; body_text: string; snippet: string; is_bulk: number; list_unsubscribe: string | null }>(
+    const mRow = this.ctx.db.get<{ from_name: string; from_email: string; to_json: string; cc_json: string; subject: string; sent_at: number; body_text: string; snippet: string; is_bulk: number; list_unsubscribe: string | null }>(
       "SELECT from_name, from_email, to_json, cc_json, subject, sent_at, body_text, snippet, is_bulk, list_unsubscribe FROM messages WHERE id = ?",
       it.message_id,
     );
-    if (!t || !m) return null;
+    if (!t || !mRow) return null;
+    // A sorting model never needs a one-time code, and an injected instruction shouldn't be able to read one out.
+    const m = { ...mRow, ...maskCodes({ subject: mRow.subject, text: mRow.body_text, snippet: mRow.snippet }) };
+    m.body_text = m.text;
     const known = this.ctx.db.get<{ n: number }>(
       `SELECT count(*) AS n FROM messages WHERE outgoing = 1 AND account_id IN (SELECT id FROM accounts WHERE user_id = ?) AND to_json LIKE ?`,
       userId,
