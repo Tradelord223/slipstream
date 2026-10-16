@@ -5,7 +5,9 @@ import type { Actor } from "../commands/registry.ts";
 import type { AppContext } from "../context.ts";
 import { newId, randomToken, sha256 } from "../lib/crypto.ts";
 import { compile } from "../mail/query.ts";
+import { maskCodes } from "../mail/signals.ts";
 import { toolName } from "../http/v1.ts";
+import { assistantEnabled } from "./assistant.ts";
 import { OAUTH_ACCESS_PREFIX, policyPatchSchema, SCOPES, type Agent, type Policy, type Scope } from "./agents.ts";
 import { EngineAccounts } from "./engines/accounts.ts";
 import { ChatGPTAuth } from "./engines/chatgpt-auth.ts";
@@ -278,6 +280,11 @@ export class CloudAgent {
     throw new HttpError(400, "Choose a model for the assistant first (Settings → Models & accounts).");
   }
 
+  /** The assistant switch is the server's, not only the dashboard's: with it off, nothing here starts a run for the person. */
+  private assertAssistantOn(userId: string) {
+    if (!assistantEnabled(this.ctx, userId)) throw new HttpError(409, "The assistant is off. Turn on the built-in assistant in Settings → AI to start a chat.");
+  }
+
   /** Spend and concurrency. Autopilot has its own two slots, so it never crowds out the person's runs. */
   private checkLimits(userId: string, origin = "assistant") {
     if (this.spentThisMonth(userId) >= this.budgets(userId).monthlyBudgetCents)
@@ -397,6 +404,7 @@ export class CloudAgent {
 
   /** Start a run on an engine. Returns at once; work streams in. */
   async start(userId: string, instruction: string, routineId: string | null = null, context?: { threadIds?: string[]; view?: string }, engineId?: EngineId | null) {
+    this.assertAssistantOn(userId);
     const engine = await this.pickEngine(userId, engineId);
     const now = Date.now();
     const contextText = [`Now: ${new Date(now).toISOString()} (the user's zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}).`, this.contextText(userId, context)]
@@ -457,6 +465,7 @@ export class CloudAgent {
       allow?: { commands: string[]; threadIds?: string[] };
     },
   ) {
+    this.assertAssistantOn(userId);
     const engine = this.engines.get(engineId);
     if (!engine) throw new HttpError(400, "That model isn't available on this server.");
     const st = await engine.status(userId);
@@ -614,7 +623,9 @@ export class CloudAgent {
           userId,
         ),
       )
-      .filter((t): t is { id: string; subject: string } => Boolean(t));
+      .filter((t): t is { id: string; subject: string } => Boolean(t))
+      // The subject goes to a model, which never needs a one-time code.
+      .map((t) => ({ id: t.id, subject: maskCodes({ subject: t.subject }).subject }));
     return [
       context?.view ? `The user is looking at: ${context.view}.` : "",
       focus.length ? `The user is pointing at these conversations (id: subject):\n${focus.map((t) => `- ${t.id}: ${t.subject}`).join("\n")}` : "",
@@ -625,6 +636,7 @@ export class CloudAgent {
 
   /** Follow-up message in a run whose session is still alive. */
   async reply(userId: string, runId: string, text: string, context?: { threadIds?: string[]; view?: string }) {
+    this.assertAssistantOn(userId);
     const r = this.ctx.db.get<RunRow>("SELECT * FROM cloud_runs WHERE id = ? AND user_id = ?", runId, userId);
     if (r && r.engine !== MANAGED) {
       if (this.active.has(runId)) throw new HttpError(409, "Still working on your last message. Wait for it, or stop it.");
@@ -874,6 +886,8 @@ export class CloudAgent {
   async tick(now = Date.now()) {
     const due = this.ctx.db.all<RoutineRow>("SELECT * FROM cloud_routines WHERE enabled = 1");
     for (const r of due) {
+      // With the assistant off nothing starts; the routine is left as it is and picks up again when it's turned on.
+      if (!assistantEnabled(this.ctx, r.user_id)) continue;
       // With no model to run it, leave the routine as it is so it fires once one is connected.
       if (!(await this.canRun(r.user_id, (r.engine as EngineId | null) ?? null))) continue;
       const t = JSON.parse(r.trigger) as z.infer<typeof trigger>;
@@ -899,7 +913,7 @@ export class CloudAgent {
       );
       this.ctx.db.run("UPDATE cloud_routines SET last_checked_at = ? WHERE id = ?", now, r.id);
       if (hits.length) {
-        const list = hits.map((h) => `- ${h.id}: ${h.subject}`).join("\n");
+        const list = hits.map((h) => `- ${h.id}: ${maskCodes({ subject: h.subject }).subject}`).join("\n");
         await this.runRoutine(r.user_id, r.id, `\n\nNew conversations that matched (ids):\n${list}`).catch((e: Error) =>
           console.error(`[slipstream] routine ${r.name}:`, e.message),
         );

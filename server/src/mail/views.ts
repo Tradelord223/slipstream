@@ -47,7 +47,10 @@ export const LIST_COLUMNS = `t.id, t.account_id, t.subject, t.snippet, t.partici
   (SELECT group_concat(l.name, char(31)) FROM thread_labels tl JOIN labels l ON l.id = tl.label_id WHERE tl.thread_id = t.id) AS labels`;
 
 export function shapeRow(r: ThreadListRow) {
-  const detail = r.signal ? (JSON.parse(r.signal) as Signal) : null;
+  // threads.signal is an array, most important first. A bare object (written before it became one) reads as a list of one.
+  const parsed = r.signal ? (JSON.parse(r.signal) as Signal | Signal[]) : null;
+  const signals = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  const detail = signals[0] ?? null;
   const participants = JSON.parse(r.participants) as { name: string; email: string }[];
   return {
     id: r.id,
@@ -71,6 +74,7 @@ export function shapeRow(r: ThreadListRow) {
     signal: detail?.kind ?? null,
     signalAt: detail ? r.signal_at : null,
     signalDetail: detail,
+    signals,
     // Where /api/logos can find a company mark for this row; people never get one.
     logoDomain: r.category !== "important" && participants[0] ? logoDomain(participants[0].email) : null,
   };
@@ -80,15 +84,15 @@ export function shapeRow(r: ThreadListRow) {
 const hideRowCodes = (r: ReturnType<typeof shapeRow>) => ({ ...r, ...maskCodes({ subject: r.subject, snippet: r.snippet }) });
 
 /** WHERE clause for a split: its own query, scoped to the inbox, minus custom splits for the built-ins. */
-export function splitWhere(split: SplitRow, all: SplitRow[], now: number): { where: string; params: (string | number)[] } {
-  const own = compile(split.query, now);
+export function splitWhere(split: SplitRow, all: SplitRow[], now: number, opts: { hideCodes?: boolean } = {}): { where: string; params: (string | number)[] } {
+  const own = compile(split.query, now, { agent: opts.hideCodes });
   const parts = [own.where];
   const params = [...own.params];
   if (!own.scoped) parts.push("t.in_inbox = 1");
   if (split.builtin) {
     for (const s of all) {
       if (s.builtin) continue;
-      const other = compile(s.query, now);
+      const other = compile(s.query, now, { agent: opts.hideCodes });
       parts.push(`NOT (${other.where})`);
       params.push(...other.params);
     }
@@ -119,7 +123,7 @@ export function listThreads(ctx: AppContext, userId: string, q: ListQuery, opts:
   }
 
   if (q.view === "search") {
-    const compiled = compile(q.q ?? "", now);
+    const compiled = compile(q.q ?? "", now, { agent: opts.hideCodes });
     where.push(compiled.where);
     params.push(...compiled.params);
     if (!compiled.scoped) where.push("t.in_trash = 0 AND t.in_spam = 0");
@@ -127,7 +131,7 @@ export function listThreads(ctx: AppContext, userId: string, q: ListQuery, opts:
     const splits = db.all<SplitRow>("SELECT * FROM splits WHERE user_id = ? ORDER BY position", userId);
     const split = splits.find((s) => s.id === q.split);
     if (!split) throw new HttpError(404, "Split not found");
-    const s = splitWhere(split, splits, now);
+    const s = splitWhere(split, splits, now, opts);
     where.push(s.where);
     params.push(...s.params);
   } else {
@@ -151,14 +155,14 @@ export function listThreads(ctx: AppContext, userId: string, q: ListQuery, opts:
   return { threads: page, next: more && last ? `${last.sortAt}:${last.id}` : null };
 }
 
-export function counts(ctx: AppContext, userId: string) {
+export function counts(ctx: AppContext, userId: string, opts: { hideCodes?: boolean } = {}) {
   const { db } = ctx;
   const now = Date.now();
   const splits = db.all<SplitRow>("SELECT * FROM splits WHERE user_id = ? ORDER BY position", userId);
   const scope = "t.account_id IN (SELECT id FROM accounts WHERE user_id = ?)";
   const out: Record<string, { total: number; unread: number }> = {};
   for (const s of splits) {
-    const w = splitWhere(s, splits, now);
+    const w = splitWhere(s, splits, now, opts);
     out[s.id] = db.get<{ total: number; unread: number }>(
       `SELECT count(*) AS total, coalesce(sum(t.unread_count > 0), 0) AS unread FROM threads t WHERE ${scope} AND ${w.where}`,
       userId,

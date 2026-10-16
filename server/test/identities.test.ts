@@ -49,7 +49,14 @@ describe("managing identities", () => {
     const reply = await (await patch(env, `/api/accounts/${acc}/identities/${made.id}`, { replyTo: "Desk@fernpoint.test" })).json();
     assert.equal(reply.name, "Help desk", "a PATCH that only sets the reply-to keeps the display name");
     assert.equal(reply.replyTo, "desk@fernpoint.test");
+    const signed = await (await patch(env, `/api/accounts/${acc}/identities/${made.id}`, { signatureHtml: "<p>Best</p>" })).json();
+    assert.equal(signed.name, "Help desk", "a PATCH that only sets the signature keeps the display name");
+    assert.equal(signed.replyTo, "desk@fernpoint.test", "and the reply-to");
+    assert.equal(signed.signatureHtml, "<p>Best</p>");
+    const none = await (await patch(env, `/api/accounts/${acc}/identities/${made.id}`, {})).json();
+    assert.equal(none.name, "Help desk", "an empty PATCH changes nothing");
     await patch(env, `/api/accounts/${acc}/identities/${made.id}`, { replyTo: null });
+    assert.equal(listIdentities(env.ctx.db, acc)[0]!.name, "Help desk", "kept in the database, not only in the reply");
 
     const renamed = await (await patch(env, `/api/accounts/${acc}/identities/${made.id}`, { email: "support@fernpoint.test" })).json();
     assert.equal(renamed.name, "Help desk");
@@ -151,6 +158,33 @@ describe("who a message may be sent as", () => {
     const made = await (await post(env, "/api/drafts", body({ fromEmail: ALIAS }))).json();
     const moved = await (await env.api(`/api/drafts/${made.id}`, { method: "PUT", json: body({ accountId: second }) })).json();
     assert.equal(moved.fromEmail, "sam@kettleby.test");
+  });
+
+  test("a draft whose address was removed later still saves what's typed", async () => {
+    const own = addAccount(env.ctx, LOCAL_USER_ID, "kim@fernpoint.test", "imap");
+    const alias = "billing@fernpoint.test";
+    const added = addIdentity(env.ctx.db, LOCAL_USER_ID, own, { email: alias, name: "Billing" });
+    const draft = await (await post(env, "/api/drafts", body({ accountId: own, fromEmail: alias }))).json();
+    assert.equal(draft.fromEmail, alias);
+    assert.equal((await env.api(`/api/accounts/${own}/identities/${added.id}`, { method: "DELETE" })).status, 200);
+
+    // The editor sends the From it holds with every autosave; it names the removed address and changes nothing.
+    const saved = await env.api(`/api/drafts/${draft.id}`, { method: "PUT", json: body({ accountId: own, fromEmail: alias, bodyHtml: "<p>Typed after the removal</p>" }) });
+    assert.equal(saved.status, 200);
+    assert.match((await saved.json()).bodyHtml, /Typed after the removal/);
+    const bare = await env.api(`/api/drafts/${draft.id}`, { method: "PUT", json: body({ accountId: own, bodyHtml: "<p>And again</p>" }) });
+    assert.equal(bare.status, 200);
+    assert.equal(env.ctx.db.get<{ f: string | null; b: string }>("SELECT from_email AS f, body_html AS b FROM drafts WHERE id = ?", draft.id)!.b, "<p>And again</p>");
+    assert.equal(env.ctx.db.get<{ f: string | null }>("SELECT from_email AS f FROM drafts WHERE id = ?", draft.id)!.f, alias, "the stale address stays until someone picks another");
+
+    // A newly chosen address is still checked, and sending still refuses the stale one.
+    assert.equal((await env.api(`/api/drafts/${draft.id}`, { method: "PUT", json: body({ accountId: own, fromEmail: "ceo@fernpoint.test" }) })).status, 400);
+    const send = await post(env, `/api/drafts/${draft.id}/send`, {});
+    assert.equal(send.status, 400);
+    assert.match((await send.json()).error, /can't send from that address/);
+    const fixed = await env.api(`/api/drafts/${draft.id}`, { method: "PUT", json: body({ accountId: own, fromEmail: "kim@fernpoint.test" }) });
+    assert.equal(fixed.status, 200);
+    assert.equal((await fixed.json()).fromEmail, "kim@fernpoint.test");
   });
 
   test("agents can't spoof a From through the draft commands", async () => {

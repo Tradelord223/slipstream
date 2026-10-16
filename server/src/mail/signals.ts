@@ -27,29 +27,33 @@ export interface SignalInput {
 
 /** Longest stretch of a body the rules read. Codes and shipping notices are short; this bounds the work. */
 const MAX_TEXT = 12_000;
+/** Longest subject the rules read. */
+const MAX_SUBJECT = 500;
 
 const PRIORITY: SignalKind[] = ["urgent", "code", "security", "delivery"];
 
-/** The signal a thread row shows: urgent, then code, then security, then delivery. */
+/** Signals most important first: urgent, then code, then security, then delivery. Ties keep their order. */
+export function orderSignals(signals: Signal[]): Signal[] {
+  return PRIORITY.flatMap((kind) => signals.filter((s) => s.kind === kind));
+}
+
+/** The signal a thread row leads with: the first of orderSignals. */
 export function topSignal(signals: Signal[]): Signal | null {
-  for (const kind of PRIORITY) {
-    const hit = signals.find((s) => s.kind === kind);
-    if (hit) return hit;
-  }
-  return null;
+  return orderSignals(signals)[0] ?? null;
 }
 
 export function detectSignals(m: SignalInput): Signal[] {
   const text = m.text.slice(0, MAX_TEXT);
+  const subject = m.subject.slice(0, MAX_SUBJECT);
   const out: Signal[] = [];
   if (!m.isBulk) {
-    const urgent = detectUrgent(m.subject, text);
+    const urgent = detectUrgent(subject, text);
     if (urgent) out.push(urgent);
   }
-  if (locateCode(m.subject, text)) out.push({ kind: "code" });
-  const security = detectSecurity(m.subject, text, m.fromName);
+  if (locateCode(subject, text)) out.push({ kind: "code" });
+  const security = detectSecurity(subject, text, m.fromName);
   if (security) out.push(security);
-  const delivery = detectDelivery(m.subject, text);
+  const delivery = detectDelivery(subject, text);
   if (delivery) out.push(delivery);
   return out;
 }
@@ -82,12 +86,17 @@ const CODE_KEYWORD = new RegExp(
 
 /** Words that, right before a number, say it's some other kind of number. */
 const NOT_A_CODE_LABEL =
-  /\b(?:order|invoice|account|acct|reference|ref|tracking|ticket|case|booking|receipt|transaction|policy|member|customer|phone|tel|call|zip|postal|ending|ends|card|amount|total|balance|id|no|num|number|pnr|flight|gate|room|suite|apt|unit|version|build|issue|page|step|ext)\.?\s*(?:number|no\.?|num|#|id|ending in|is|:|=|-)?\s*[:#=-]?\s*$/i;
+  /\b(?:order|invoice|account|acct|reference|ref|tracking|ticket|case|booking|receipt|transaction|policy|member|customer|phone|tel|call|zip|postal|ending|ends|card|amount|total|balance|id|no|num|number|pnr|flight|gate|room|suite|apt|unit|version|build|issue|page|step|ext)\.?\s{0,6}(?:number|no\.?|num|#|id|ending in|is|:|=|-)?\s{0,6}[:#=-]?\s{0,6}$/i;
 /** Promo codes look like codes. Anything around them that talks about money off means it isn't a sign-in. */
 const PROMO_CONTEXT = /promo|discount|coupon|% off|\bsave\b|\bsale\b|off your|redeem|checkout|voucher|free shipping|offer/i;
 const UNIT_TOKEN = /^\d+(?:AM|PM|MB|GB|KB|TB|MS|KG|LB|MM|CM|PX|MHZ|GHZ|USD|EUR|GBP|ST|ND|RD|TH|K|P)$/;
+// The look-ahead stays inside the 8 characters a token can be, so a long run of capitals costs a few steps per position.
 const CODE_TOKEN =
-  /\d{3}[ -]\d{3}(?!\d)|\d{4}[ -]\d{4}(?!\d)|\d{4,8}|(?=[A-Z0-9]*\d[A-Z0-9]*\d)[A-Z0-9]{4,8}/g;
+  /\d{3}[ -]\d{3}(?!\d)|\d{4}[ -]\d{4}(?!\d)|\d{4,8}|(?=[A-Z0-9]{0,7}\d[A-Z0-9]{0,7}\d)[A-Z0-9]{4,8}/g;
+/** A real message names its code once or twice; later keywords in a pathological one aren't worth the scan. */
+const MAX_KEYWORD_HITS = 40;
+const GAP_AFTER = /^[\s:=\-–—]*(?:(?:is|are|was)[\s:=\-–—]*)?$/i;
+const GAP_BEFORE = /^\s*(?:(?:is|was)\s*)?(?:(?:your|the|my)\s*)?$/i;
 
 interface Located {
   /** The code with separators removed, as someone would paste it. */
@@ -96,7 +105,7 @@ interface Located {
 
 /** The code in a subject or body, or null. The subject wins when it carries one. */
 export function locateCode(subject: string, text: string): Located | null {
-  return findCode(subject) ?? findCode(text.slice(0, MAX_TEXT));
+  return findCode(subject.slice(0, MAX_SUBJECT)) ?? findCode(text.slice(0, MAX_TEXT));
 }
 
 /** The one-time code itself, or null. Called on demand for a person who asked; values are never stored. */
@@ -108,21 +117,23 @@ function findCode(s: string): Located | null {
   if (!s) return null;
   CODE_KEYWORD.lastIndex = 0;
   let best: { code: string; distance: number } | null = null;
-  for (let k = CODE_KEYWORD.exec(s); k; k = CODE_KEYWORD.exec(s)) {
+  let hits = 0;
+  for (let k = CODE_KEYWORD.exec(s); k && hits < MAX_KEYWORD_HITS; k = CODE_KEYWORD.exec(s), hits++) {
     const kStart = k.index;
     const kEnd = k.index + k[0].length;
     const from = Math.max(0, kStart - 80);
     const to = Math.min(s.length, kEnd + 80);
-    CODE_TOKEN.lastIndex = from;
-    for (let t = CODE_TOKEN.exec(s); t && t.index < to; t = CODE_TOKEN.exec(s)) {
-      const start = t.index;
+    // Tokens are matched inside the window only. One cut by the window's edge is rejected by plausible() as part of something longer.
+    const near = s.slice(from, to);
+    CODE_TOKEN.lastIndex = 0;
+    for (let t = CODE_TOKEN.exec(near); t; t = CODE_TOKEN.exec(near)) {
+      const start = from + t.index;
       const end = start + t[0].length;
-      if (start < from || end > to) continue;
       // The keyword's own text can't be the code (the "2FA" keyword has digits).
       if (start < kEnd && end > kStart) continue;
       const after = start >= kEnd;
       const gap = after ? s.slice(kEnd, start) : s.slice(end, kStart);
-      const direct = after ? /^[\s:=\-–—]*(?:is|are|was)?[\s:=\-–—]*$/i.test(gap) : /^\s*(?:is|was)?\s*(?:your|the|my)?\s*$/i.test(gap);
+      const direct = (after ? GAP_AFTER : GAP_BEFORE).test(gap);
       if (!plausible(s, start, end, direct)) continue;
       const distance = after ? gap.length : gap.length + 5; // reading order: the code usually follows its name
       if (!best || distance < best.distance) best = { code: t[0].replace(/[ -]/g, ""), distance };
@@ -205,14 +216,18 @@ const STATUS_RULES: { status: DeliveryStatus; strong: boolean; re: RegExp }[] = 
   },
 ];
 
-const TRACKING_LABEL = /tracking\s*(?:number|no\.?|num|id|code|#)\s*(?:is|:|#)?\s*:?\s*([A-Z0-9][A-Z0-9-]{6,34})\b/gi;
+// Every gap is bounded: whitespace-heavy mail must not make the label search backtrack.
+const TRACKING_LABEL = /tracking\s{0,3}(?:number|no\.?|num|id|code|#)[\s:#]{0,8}(?:is[\s:#]{0,4})?([A-Z0-9][A-Z0-9-]{6,34})\b/gi;
+/** A real message labels its tracking number once or twice. */
+const MAX_TRACKING_LABELS = 20;
 const WELL_KNOWN_TRACKING = /\b(1Z[0-9A-Z]{16}|9[2-5]\d{20,24}|[A-Z]{2}\d{9}[A-Z]{2})\b/;
 
 const KNOWN_CARRIERS = [
   "UPS", "FedEx", "DHL", "USPS", "Royal Mail", "Canada Post", "Australia Post", "Evri", "DPD", "GLS", "Yamato", "LaserShip", "OnTrac",
   "Amazon Logistics", "Purolator", "PostNL", "Correos", "La Poste", "Deutsche Post", "Japan Post", "Sendle", "Aramex", "Parcelforce", "An Post",
 ];
-const NAMED_CARRIER = /(?:\b[Cc]arrier|\b[Cc]ourier|\b[Ss]hipped (?:via|with|by)|\b[Dd]elivered (?:via|by|with)|\b[Dd]elivery partner|\b[Ss]hipping partner)\s*(?:is|:|-)?\s+([A-Z][\w&'’.-]*(?:\s+[A-Z][\w&'’.-]*){0,3})/;
+const KNOWN_CARRIER_RES = KNOWN_CARRIERS.map((name) => [name, new RegExp(`(?<![A-Za-z])${name.replace(/ /g, "\\s{1,3}")}(?![A-Za-z])`)] as const);
+const NAMED_CARRIER = /(?:\b[Cc]arrier|\b[Cc]ourier|\b[Ss]hipped (?:via|with|by)|\b[Dd]elivered (?:via|by|with)|\b[Dd]elivery partner|\b[Ss]hipping partner)\s{0,3}(?:is|:|-)?\s{1,8}([A-Z][\w&'’.-]*(?:\s+[A-Z][\w&'’.-]*){0,3})/;
 const CARRIER_STOP = new Set(["Tracking", "Track", "Estimated", "Expected", "Delivery", "Order", "Shipping", "Status", "Service", "Number", "Your", "The", "Ship", "Date"]);
 
 function detectDelivery(rawSubject: string, text: string): Signal | null {
@@ -231,7 +246,7 @@ function detectDelivery(rawSubject: string, text: string): Signal | null {
     return null;
   };
   // A tracking number on its own already says a package exists; with no status word it's shipped news.
-  const status = statusIn(subject) ?? statusIn(text.slice(0, 4000)) ?? (trackingMatch && /tracking\s*(?:number|no|id|#)/i.test(head) ? "shipped" : null);
+  const status = statusIn(subject) ?? statusIn(text.slice(0, 4000)) ?? (trackingMatch && /tracking\s{0,3}(?:number|no|id|#)/i.test(head) ? "shipped" : null);
   if (!status) return null;
 
   const signal: Extract<Signal, { kind: "delivery" }> = { kind: "delivery", status };
@@ -243,7 +258,8 @@ function detectDelivery(rawSubject: string, text: string): Signal | null {
 
 function matchTracking(s: string): string | null {
   TRACKING_LABEL.lastIndex = 0;
-  for (let m = TRACKING_LABEL.exec(s); m; m = TRACKING_LABEL.exec(s)) {
+  let labels = 0;
+  for (let m = TRACKING_LABEL.exec(s); m && labels < MAX_TRACKING_LABELS; m = TRACKING_LABEL.exec(s), labels++) {
     const value = m[1]!;
     const digits = value.replace(/\D/g, "").length;
     // A real tracking id is long and mostly digits; "SM-4471" is an order number.
@@ -253,9 +269,7 @@ function matchTracking(s: string): string | null {
 }
 
 function matchCarrier(s: string): string | null {
-  for (const name of KNOWN_CARRIERS) {
-    if (new RegExp(`(?<![A-Za-z])${name.replace(/ /g, "\\s+")}(?![A-Za-z])`).test(s)) return name;
-  }
+  for (const [name, re] of KNOWN_CARRIER_RES) if (re.test(s)) return name;
   const named = NAMED_CARRIER.exec(s)?.[1];
   if (!named) return null;
   const words: string[] = [];

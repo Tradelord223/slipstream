@@ -141,6 +141,8 @@ interface RuleRow {
   query: string;
   enabled: number;
   last_checked_at: number;
+  /** 1 when an agent wrote the search: text matches in it skip conversations with a one-time code. */
+  by_agent: number;
   created_at: number;
 }
 
@@ -154,25 +156,30 @@ function assertQuery(query: string) {
   if (compile(query).where === "1") throw new HttpError(400, "That search doesn't match anything specific");
 }
 
-export function createRule(ctx: AppContext, userId: string, label: string, query: string) {
+export function createRule(ctx: AppContext, userId: string, label: string, query: string, byAgent = false) {
   assertQuery(query);
   const name = normalize(label);
   if (!labelRows(ctx, userId, name).length) createLabel(ctx, userId, name);
   const id = newId("lrl");
   const now = Date.now();
-  ctx.db.run("INSERT INTO label_rules (id, user_id, label, query, enabled, last_checked_at, created_at) VALUES (?,?,?,?,1,?,?)", id, userId, name, query, now, now);
+  ctx.db.run(
+    "INSERT INTO label_rules (id, user_id, label, query, enabled, last_checked_at, by_agent, created_at) VALUES (?,?,?,?,1,?,?,?)",
+    id, userId, name, query, now, byAgent ? 1 : 0, now,
+  );
   return shapeRule(ctx.db.get<RuleRow>("SELECT * FROM label_rules WHERE id = ?", id)!);
 }
 
-export function updateRule(ctx: AppContext, userId: string, id: string, change: { label?: string; query?: string; enabled?: boolean }) {
+export function updateRule(ctx: AppContext, userId: string, id: string, change: { label?: string; query?: string; enabled?: boolean }, byAgent = false) {
   const r = ctx.db.get<RuleRow>("SELECT * FROM label_rules WHERE id = ? AND user_id = ?", id, userId);
   if (!r) throw new HttpError(404, "Rule not found");
   if (change.query) assertQuery(change.query);
   ctx.db.run(
-    "UPDATE label_rules SET label = coalesce(?, label), query = coalesce(?, query), enabled = coalesce(?, enabled) WHERE id = ?",
+    "UPDATE label_rules SET label = coalesce(?, label), query = coalesce(?, query), enabled = coalesce(?, enabled), by_agent = coalesce(?, by_agent) WHERE id = ?",
     change.label ? normalize(change.label) : null,
     change.query ?? null,
     change.enabled === undefined ? null : change.enabled ? 1 : 0,
+    // Whoever last wrote the search owns it: a person's rewrite clears the mark, an agent's sets it.
+    change.query ? (byAgent ? 1 : 0) : null,
     id,
   );
   return shapeRule(ctx.db.get<RuleRow>("SELECT * FROM label_rules WHERE id = ?", id)!);
@@ -186,8 +193,8 @@ export function deleteRule(ctx: AppContext, userId: string, id: string) {
 }
 
 /** Threads a rule would label: matching, not already labelled, optionally only those with mail since `since`. */
-export function ruleMatches(ctx: AppContext, rule: { user_id: string; label: string; query: string }, since: number | null, limit = 5000): string[] {
-  const c = compile(rule.query);
+export function ruleMatches(ctx: AppContext, rule: { user_id: string; label: string; query: string; by_agent?: number }, since: number | null, limit = 5000): string[] {
+  const c = compile(rule.query, Date.now(), { agent: Boolean(rule.by_agent) });
   return ctx.db
     .all<{ id: string }>(
       `SELECT t.id FROM threads t WHERE t.account_id IN (${userAccounts}) AND (${c.where})
