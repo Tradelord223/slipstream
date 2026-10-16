@@ -299,7 +299,11 @@ export class ChatGPTAuth {
   private listen(p: Pending, port: number): Promise<boolean> {
     return new Promise((resolve) => {
       const server = createServer((req, res) => {
-        void this.onRequest(p, server, req.method, req.url ?? "", res);
+        this.onRequest(p, server, req.method, req.url ?? "", res).catch((err: unknown) => {
+          console.error("[slipstream] ChatGPT sign-in callback:", err instanceof Error ? err.message : err);
+          if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+          res.end("Sign-in failed. Go back to Slipstream and try again.");
+        });
       });
       server.once("error", () => resolve(false));
       server.listen(port, "127.0.0.1", () => {

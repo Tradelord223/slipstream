@@ -436,7 +436,7 @@ export class CloudAgent {
       });
       this.ctx.db.run("UPDATE cloud_runs SET session_id = ?, status = 'running' WHERE id = ?", session.id, id);
       this.ctx.commands.record({ kind: "agent", user, agent: principal }, "cloud.run", `Started: ${instruction.slice(0, 120)}`, {});
-      void this.drive(userId, id, session.id);
+      this.background(userId, id, this.drive(userId, id, session.id));
     } catch (err) {
       this.finish(userId, id, "failed", explain(err));
       throw new HttpError(502, explain(err));
@@ -485,7 +485,7 @@ export class CloudAgent {
     if (origin !== "autopilot") this.ctx.commands.record({ kind: "agent", user, agent: principal }, "cloud.run", `Started: ${opts.instruction.slice(0, 120)}`, {});
     this.emit(userId, id);
     opts.onStart?.(id);
-    void this.driveLocal(userId, id, opts.message);
+    this.background(userId, id, this.driveLocal(userId, id, opts.message));
     return this.run(userId, id);
   }
 
@@ -646,7 +646,7 @@ export class CloudAgent {
       this.append(runId, { kind: "user", text, at: Date.now() });
       this.ctx.db.run("UPDATE cloud_runs SET status = 'running', error = NULL, finished_at = NULL WHERE id = ?", runId);
       this.emit(userId, runId);
-      void this.driveLocal(userId, runId, extra ? `${text}\n\n${extra}` : text);
+      this.background(userId, runId, this.driveLocal(userId, runId, extra ? `${text}\n\n${extra}` : text));
       return this.run(userId, runId);
     }
     const key = this.apiKey(userId);
@@ -659,7 +659,7 @@ export class CloudAgent {
     this.append(runId, { kind: "user", text, at: Date.now() });
     this.ctx.db.run("UPDATE cloud_runs SET status = 'running', finished_at = NULL WHERE id = ?", runId);
     this.emit(userId, runId);
-    if (!this.active.has(runId)) void this.drive(userId, runId, r.session_id);
+    if (!this.active.has(runId)) this.background(userId, runId, this.drive(userId, runId, r.session_id));
     return this.run(userId, runId);
   }
 
@@ -774,6 +774,14 @@ export class CloudAgent {
     this.ctx.db.run("UPDATE cloud_runs SET transcript = ? WHERE id = ?", JSON.stringify(list.slice(-400)), runId);
   }
 
+  /** A run that goes on after the request returns. If it fails before it can report for itself, the run is marked failed here. */
+  private background(userId: string, runId: string, run: Promise<unknown>) {
+    run.catch((err: unknown) => {
+      console.error(`[slipstream] run ${runId}:`, err instanceof Error ? err.message : err);
+      this.finish(userId, runId, "failed", "Something went wrong while this run was working. Try again.");
+    });
+  }
+
   private finish(userId: string, runId: string, status: "done" | "failed" | "budget" | "stopped", error: string | null) {
     const changed = this.ctx.db.run(
       "UPDATE cloud_runs SET status = ?, error = ?, finished_at = ? WHERE id = ? AND status IN ('starting','running')",
@@ -855,7 +863,7 @@ export class CloudAgent {
     const stuck = this.ctx.db.all<RunRow>("SELECT * FROM cloud_runs WHERE status IN ('starting','running')");
     for (const r of stuck) {
       if (r.engine !== MANAGED) this.finish(r.user_id, r.id, "failed", "Interrupted when Slipstream restarted. Send a follow-up to pick up where it left off.");
-      else if (r.session_id && this.apiKey(r.user_id) && this.config(r.user_id)) void this.drive(r.user_id, r.id, r.session_id);
+      else if (r.session_id && this.apiKey(r.user_id) && this.config(r.user_id)) this.background(r.user_id, r.id, this.drive(r.user_id, r.id, r.session_id));
       else this.finish(r.user_id, r.id, "failed", "Interrupted when Slipstream restarted.");
     }
   }

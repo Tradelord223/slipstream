@@ -194,7 +194,7 @@ export async function handleMcp(ctx: AppContext, actor: Actor, request: Request)
   try {
     return await transport.handleRequest(request);
   } finally {
-    void server.close();
+    server.close().catch((err: unknown) => console.error("[slipstream] mcp close:", err instanceof Error ? err.message : err));
   }
 }
 
