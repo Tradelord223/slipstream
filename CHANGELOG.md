@@ -14,7 +14,7 @@
 - The server checks that every From belongs to the account, for people and agents alike. Mail with your alias in its From header counts as yours only when your provider files it as sent.
 
 **AI off by default, and a Privacy & safety page**
-- The built-in assistant and Autopilot stay hidden until you turn them on in Settings → AI & agents. Your own agents can connect over MCP and the CLI either way.
+- The built-in assistant and Autopilot stay hidden until you turn them on in Settings → AI & agents. Off is enforced by the server: Autopilot and routines pause too, and switching back on starts from that moment rather than catching up. Your own agents can connect over MCP and the CLI either way.
 - Settings → Privacy & safety says in plain words how email is shown, what is stored and encrypted, and what any model sees.
 - `npm run test:render` renders 19 hostile emails in headless Chrome and fails if any run script or reach the network. It found and fixed one leak: quoted background images in replies and forwards.
 
