@@ -47,7 +47,13 @@ Custom splits are any query in the search language. A thread that matches a cust
 
 ## Search language
 
-`from:` `to:` `cc:` `subject:` `label:` `filename:` `has:attachment` `is:unread|read|starred|snoozed|done|muted|vip|important|unanswered` `in:inbox|sent|done|trash|spam|snoozed|all` `category:important|news|notification|other` `after:2026-01-31` `before:` `newer:7d` `older:2w` `account:me@x.com`, plus `-negation`, `a OR b` and `"exact phrases"`. Free text runs against an FTS5 index (porter stemming, diacritics folded) with prefix matching. User input is always quoted into FTS terms, so it can never inject FTS syntax.
+`from:` `to:` `cc:` `subject:` `label:` `filename:` `has:attachment` `is:unread|read|starred|snoozed|done|muted|vip|important|unanswered|code|delivery|security|urgent` `in:inbox|sent|done|trash|spam|snoozed|all` `category:important|news|notification|other` `after:2026-01-31` `before:` `newer:7d` `older:2w` `account:me@x.com`, plus `-negation`, `a OR b` and `"exact phrases"`. Free text runs against an FTS5 index (porter stemming, diacritics folded) with prefix matching. User input is always quoted into FTS terms, so it can never inject FTS syntax.
+
+## Everyday signals
+
+Plain rules in `mail/signals.ts` (no model) read each incoming message once, when it is stored, and keep a short list in `messages.signals`: a one-time **code**, a **delivery** update, a new sign-in **security** alert, or **urgent** mail from a person (legal notices, overdue bills, same-day deadlines; never from bulk senders). `threads.signal` holds the top one for the latest incoming message, which is what list rows and `is:code|delivery|security|urgent` use. The rules favor staying quiet over guessing.
+
+A code's value is never stored or put in a signal. `GET /api/messages/:id/code` finds it again for a signed-in person, and agents and team snapshots get message text with codes masked. When a newer update arrives for the same tracking number, older untouched updates in the inbox are marked done as "Slipstream" with an undo (setting `helpers.deliveries`). Mail stored before this existed is scanned in the background at startup.
 
 ## Data model (SQLite)
 

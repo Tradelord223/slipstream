@@ -207,14 +207,14 @@ export function buildCatalog(): Command[] {
       readOnly: true,
       input: listInput,
       run: (ctx, actor, i) => {
-        const r = listThreads(ctx, actor.user.id, i);
+        const r = listThreads(ctx, actor.user.id, i, { hideCodes: actor.kind === "agent" });
         return { result: i.detail === "full" ? r : compactList(r) };
       },
     }),
     defineCommand({
       name: "mail.search",
       title: "Search mail",
-      description: `Search everything with Slipstream's search language: from:, to:, cc:, subject:, label:, has:attachment, is:unread|starred|snoozed|done|vip|unanswered, in:inbox|sent|done|trash|spam|all, category:important|news|notification, after:2026-01-31, before:, newer:7d, older:2w, -negation, a OR b, "phrases", and plain words for full-text search. ${UNTRUSTED}`,
+      description: `Search everything with Slipstream's search language: from:, to:, cc:, subject:, label:, has:attachment, is:unread|starred|snoozed|done|vip|unanswered|code|delivery|security|urgent (is:package and is:signin also work), in:inbox|sent|done|trash|spam|all, category:important|news|notification, after:2026-01-31, before:, newer:7d, older:2w, -negation, a OR b, "phrases", and plain words for full-text search. ${UNTRUSTED}`,
       scope: "read",
       readOnly: true,
       input: z.object({
@@ -225,7 +225,7 @@ export function buildCatalog(): Command[] {
         detail,
       }),
       run: (ctx, actor, i) => {
-        const r = listThreads(ctx, actor.user.id, { view: "search", q: i.query, account: i.account, limit: i.limit, before: i.before });
+        const r = listThreads(ctx, actor.user.id, { view: "search", q: i.query, account: i.account, limit: i.limit, before: i.before }, { hideCodes: actor.kind === "agent" });
         return { result: i.detail === "full" ? r : compactList(r) };
       },
     }),
@@ -237,7 +237,7 @@ export function buildCatalog(): Command[] {
       readOnly: true,
       input: z.object({ threadId: z.string().max(100) }),
       run: (ctx, actor, i) => {
-        const t = getThread(ctx, actor.user.id, i.threadId);
+        const t = getThread(ctx, actor.user.id, i.threadId, { hideCodes: actor.kind === "agent" });
         return {
           result: {
             thread: t.thread,
@@ -348,7 +348,7 @@ export function buildCatalog(): Command[] {
         const stored = ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE user_id = ? AND key = 'secret:anthropic'", actor.user.id);
         const key = stored ? ctx.secrets.open<string>(JSON.parse(stored.value) as string) : ctx.config.anthropicApiKey;
         if (!key) throw new HttpError(400, "No Anthropic API key is set in Settings → AI.");
-        const t = getThread(ctx, actor.user.id, i.threadId);
+        const t = getThread(ctx, actor.user.id, i.threadId, { hideCodes: true });
         try {
           const summary = await summarizeThread(
             key,
@@ -386,9 +386,9 @@ export function buildCatalog(): Command[] {
               id: s.id,
               name: s.name,
               ...c.splits[s.id],
-              newest: i.perSplit ? compactList(listThreads(ctx, userId, { view: "split", split: s.id, limit: i.perSplit })).threads : [],
+              newest: i.perSplit ? compactList(listThreads(ctx, userId, { view: "split", split: s.id, limit: i.perSplit }, { hideCodes: actor.kind === "agent" })).threads : [],
             })),
-            remindersToday: compactList(listThreads(ctx, userId, { view: "search", q: `in:snoozed`, limit: 50 })).threads.filter(
+            remindersToday: compactList(listThreads(ctx, userId, { view: "search", q: `in:snoozed`, limit: 50 }, { hideCodes: actor.kind === "agent" })).threads.filter(
               (t) => t.remindAt && Date.parse(t.remindAt) <= endOfDay,
             ),
             labels: listLabels(ctx, userId).map((l) => ({ name: l.name, count: l.count, unread: l.unread })),

@@ -4,6 +4,7 @@ import type { Db } from "../db/index.ts";
 import { newId, sha256 } from "../lib/crypto.ts";
 import { baseSubject, htmlToText, makeSnippet } from "../lib/text.ts";
 import { categorize, isBulkMessage } from "./classify.ts";
+import { scanSignals, topSignal } from "./signals.ts";
 import type { Address, FlagUpdate, IncomingMessage, SyncPage, ThreadRef } from "./types.ts";
 
 export interface AccountRow {
@@ -38,6 +39,7 @@ interface MessageAgg {
   outgoing: number;
   is_bulk: number;
   list_unsubscribe: string | null;
+  signals: string | null;
   has_att: number;
 }
 
@@ -159,14 +161,17 @@ export class MailStore {
     const bodyText = m.bodyText || (m.bodyHtml ? htmlToText(m.bodyHtml) : "");
     const snippet = m.snippet ? makeSnippet(m.snippet) : makeSnippet(bodyText);
     const isBulk = isBulkMessage({ from: m.from, bulk: m.bulk, listUnsubscribe: m.listUnsubscribe, outgoing });
+    const signals = outgoing
+      ? []
+      : scanSignals({ subject: m.subject, fromEmail: m.from.email, fromName: m.from.name, text: bodyText, isBulk, sentAt: m.sentAt });
     const id = newId("msg");
     const now = Date.now();
 
     const res = this.db.run(
       `INSERT INTO messages (id, thread_id, account_id, remote_id, message_id_header, in_reply_to, refs,
         from_name, from_email, to_json, cc_json, bcc_json, reply_to, subject, sent_at, snippet, body_text, body_html,
-        unread, starred, in_inbox, in_trash, in_spam, outgoing, list_unsubscribe, is_bulk, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        unread, starred, in_inbox, in_trash, in_spam, outgoing, list_unsubscribe, is_bulk, signals, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       threadId,
       account.id,
@@ -193,6 +198,7 @@ export class MailStore {
       outgoing ? 1 : 0,
       m.listUnsubscribe ?? null,
       isBulk ? 1 : 0,
+      json(signals),
       now,
     );
 
@@ -433,7 +439,7 @@ export class MailStore {
     if (!thread) return;
     const msgs = this.db.all<MessageAgg>(
       `SELECT m.id, from_name, from_email, to_json, cc_json, subject, sent_at, snippet, unread, starred, in_inbox, in_trash,
-              in_spam, outgoing, is_bulk, list_unsubscribe,
+              in_spam, outgoing, is_bulk, list_unsubscribe, signals,
               EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id AND a.inline = 0) AS has_att
        FROM messages m WHERE thread_id = ? ORDER BY sent_at`,
       threadId,
@@ -492,7 +498,12 @@ export class MailStore {
     const inInbox = msgs.some((m) => m.in_inbox && !m.in_trash && !m.in_spam);
     const lastInbound = inbound.at(-1)?.sent_at ?? null;
     const sortAt = Math.max(last.sent_at, thread.reminded_at ?? 0);
+    // The chip a list row shows comes from the latest message someone sent us.
+    const latestIn = inbound.at(-1);
+    const top = latestIn?.signals ? topSignal(JSON.parse(latestIn.signals)) : null;
     const base = {
+      signal: top ? json(top) : null,
+      signal_at: top && latestIn ? latestIn.sent_at : null,
       subject: baseSubject(first.subject) || baseSubject(last.subject),
       snippet: last.snippet,
       participants: json(participants.slice(0, 8)),
@@ -510,10 +521,10 @@ export class MailStore {
     if (pending && pending.n > 0) {
       this.db.run(
         `UPDATE threads SET subject=?, snippet=?, participants=?, first_message_at=?, last_message_at=?, last_inbound_at=?,
-          last_outbound_at=?, message_count=?, has_attachments=?, in_sent=?, category=?, sort_at=?, updated_at=? WHERE id=?`,
+          last_outbound_at=?, message_count=?, has_attachments=?, in_sent=?, category=?, sort_at=?, signal=?, signal_at=?, updated_at=? WHERE id=?`,
         base.subject, base.snippet, base.participants, base.first_message_at, base.last_message_at, base.last_inbound_at,
         base.last_outbound_at, base.message_count, base.has_attachments, base.in_sent, base.category, base.sort_at,
-        Date.now(), threadId,
+        base.signal, base.signal_at, Date.now(), threadId,
       );
       return;
     }
@@ -539,7 +550,7 @@ export class MailStore {
     this.db.run(
       `UPDATE threads SET subject=?, snippet=?, participants=?, first_message_at=?, last_message_at=?, last_inbound_at=?,
         last_outbound_at=?, message_count=?, unread_count=?, starred=?, in_inbox=?, in_trash=?, in_spam=?, has_attachments=?,
-        in_sent=?, category=?, snoozed_until=?, sort_at=?, updated_at=? WHERE id=?`,
+        in_sent=?, category=?, snoozed_until=?, sort_at=?, signal=?, signal_at=?, updated_at=? WHERE id=?`,
       base.subject, base.snippet, base.participants, base.first_message_at, base.last_message_at, base.last_inbound_at,
       base.last_outbound_at, base.message_count,
       msgs.reduce((n, m) => n + (m.unread ? 1 : 0), 0),
@@ -547,7 +558,7 @@ export class MailStore {
       inboxFlag,
       msgs.every((m) => m.in_trash) ? 1 : 0,
       msgs.every((m) => m.in_spam) ? 1 : 0,
-      base.has_attachments, base.in_sent, base.category, snoozed, base.sort_at, Date.now(), threadId,
+      base.has_attachments, base.in_sent, base.category, snoozed, base.sort_at, base.signal, base.signal_at, Date.now(), threadId,
     );
   }
 

@@ -7,7 +7,9 @@ import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 import type { ServerEvent } from "../events.ts";
+import { PROVIDERS } from "../agents/engines/accounts.ts";
 import { triageCommandName } from "../commands/catalog.ts";
+import { extractCode } from "../mail/signals.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
 import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, shapeRow, type SplitRow, type ThreadListRow } from "../mail/views.ts";
 import type { AccountRow } from "../mail/store.ts";
@@ -42,6 +44,24 @@ export function mailRoutes(ctx: AppContext) {
   app.get("/counts", (c) => c.json(counts(ctx, c.get("user").id)));
 
   app.get("/threads/:id", (c) => c.json(getThread(ctx, c.get("user").id, c.req.param("id"))));
+
+  /**
+   * A one-time code, found again in the message when a person asks. People only: an agent never gets
+   * one (the command registry masks codes for agents, and agent tokens can't reach /api/messages anyway).
+   */
+  app.get("/messages/:id/code", (c) => {
+    if (c.get("actor").kind !== "human") throw new HttpError(403, "Only a person can read a sign-in code.");
+    const m = db.get<{ subject: string; body_text: string }>(
+      `SELECT m.subject, m.body_text FROM messages m JOIN accounts a ON a.id = m.account_id
+       WHERE m.id = ? AND a.user_id = ? AND m.outgoing = 0`,
+      c.req.param("id"),
+      c.get("user").id,
+    );
+    const code = m ? extractCode(m.subject, m.body_text) : null;
+    if (!code) throw new HttpError(404, "No code in that message");
+    c.header("Cache-Control", "no-store");
+    return c.json({ code });
+  });
 
   app.post("/triage", async (c) => {
     const { kind, ...input } = triageBody.parse(await c.req.json());
@@ -243,6 +263,7 @@ export function mailRoutes(ctx: AppContext) {
           }
         }),
     );
+    settings.assistant ??= assistantDefault(ctx, user.id);
     return c.json({
       mode: ctx.config.mode,
       user,
@@ -263,6 +284,23 @@ export function mailRoutes(ctx: AppContext) {
   });
 
   return app;
+}
+
+/**
+ * Until someone picks on/off, the assistant follows whether they've set up a model: a default engine or model,
+ * a saved or environment key, a ChatGPT sign-in, the cloud agent, or any agent run.
+ */
+function assistantDefault(ctx: AppContext, userId: string): "on" | "off" {
+  const { db } = ctx;
+  const engines = db.get<{ value: string }>("SELECT value FROM settings WHERE user_id = ? AND key = 'engines'", userId);
+  const prefs = engines ? (JSON.parse(engines.value) as { defaultEngine?: string; models?: object }) : {};
+  const configured =
+    Boolean(prefs.defaultEngine) ||
+    Object.keys(prefs.models ?? {}).length > 0 ||
+    PROVIDERS.some((p) => ctx.cloud.accounts.keySource(userId, p)) ||
+    Boolean(db.get("SELECT 1 AS x FROM settings WHERE user_id = ? AND (key LIKE 'secret:%' OR key = 'cloudAgent')", userId)) ||
+    Boolean(db.get("SELECT 1 AS x FROM cloud_runs WHERE user_id = ? LIMIT 1", userId));
+  return configured ? "on" : "off";
 }
 
 /**

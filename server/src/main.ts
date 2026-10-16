@@ -19,6 +19,7 @@ import { Webhooks } from "./agents/webhooks.ts";
 import { CloudAgent } from "./agents/cloud.ts";
 import { Autopilot } from "./agents/autopilot.ts";
 import { runRules } from "./mail/labels.ts";
+import { backfillSignals, bundleDeliveries } from "./mail/signal-jobs.ts";
 import { buildCatalog } from "./commands/catalog.ts";
 import { Commands } from "./commands/service.ts";
 
@@ -86,6 +87,17 @@ export async function start(config = loadConfig()) {
     }
   }, 5_000);
   rulesTimer.unref();
+  // Everyday signals: scan mail from before they existed, then keep delivery updates tidy as new ones arrive.
+  const backfill = new AbortController();
+  backfillSignals(ctx, { signal: backfill.signal }).catch((err) => console.error("[slipstream] signals backfill:", err));
+  const bundleTimer = setInterval(() => {
+    try {
+      bundleDeliveries(ctx);
+    } catch (err) {
+      console.error("[slipstream] delivery bundling:", err);
+    }
+  }, 10_000);
+  bundleTimer.unref();
 
   const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   // Local mode: a loopback listener that only serves MCP + OAuth, for Tailscale Serve/Funnel or a tunnel.
@@ -102,6 +114,8 @@ export async function start(config = loadConfig()) {
     ctx.cloud.close();
     ctx.autopilot.close();
     clearInterval(rulesTimer);
+    clearInterval(bundleTimer);
+    backfill.abort();
     await ctx.sync.stop();
     ctx.db.close();
     process.exit(0);

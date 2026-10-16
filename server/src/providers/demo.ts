@@ -316,10 +316,76 @@ Good to go, or do you want another pass?`,
               ["Speckled mug, oat glaze × 2", "$68.00"],
               ["Serving bowl, tide blue", "$84.00"],
               ["Shipping", "$9.00"],
+              ["Carrier", "Tidewell Parcel"],
+              ["Tracking number", "TWP4471903382"],
             ],
             "$161.00",
             "Each piece is thrown by hand, so yours will be a little different from the photo. That's the point.",
           ),
+        },
+      ],
+      inbox: true,
+    },
+    {
+      key: "saltmarrow-out",
+      subject: "Out for delivery today",
+      bulk: true,
+      unsubscribe: "<mailto:unsubscribe@saltmarrow.com>",
+      messages: [
+        {
+          from: P.saltmarrow,
+          to: [me],
+          ago: 3 * HOUR,
+          unread: true,
+          text: "Your Saltmarrow order #SM-4471 is out for delivery and should reach you today by 6 PM.\n\nCarrier: Tidewell Parcel\nTracking number: TWP4471903382\n\nIf nobody is home, the driver will leave the box with a neighbor or in a shaded spot by the door.",
+        },
+      ],
+      inbox: true,
+    },
+    {
+      key: "bank-code",
+      subject: "Your Quarrystone sign-in code",
+      bulk: true,
+      messages: [
+        {
+          from: P.bank,
+          to: [me],
+          ago: 2 * MIN,
+          unread: true,
+          text: "Your Quarrystone verification code is 618204.\n\nIt expires in 10 minutes. If you didn't try to sign in, ignore this message and your account stays as it is.\n\nQuarrystone will never ask you to read this code to anyone.",
+        },
+      ],
+      inbox: true,
+    },
+    {
+      key: "alert-signin",
+      subject: "New sign-in to your Tallyho Cloud account",
+      bulk: true,
+      messages: [
+        {
+          from: P.tallyAlerts,
+          to: [me],
+          ago: 40 * MIN,
+          unread: true,
+          text: "We noticed a new sign-in to your Tallyho Cloud account.\n\nDevice: Firefox on Windows\nPlace: Denver, Colorado\n\nIf this was you, there's nothing to do. If it wasn't, reset your password and we'll sign out every other device.",
+        },
+      ],
+      inbox: true,
+    },
+    {
+      key: "lease-deadline",
+      subject: "Studio lease renewal: deadline tomorrow",
+      messages: [
+        {
+          from: P.sam,
+          to: [me],
+          ago: 1 * HOUR + 10 * MIN,
+          unread: true,
+          text: `Jordan, the landlord just emailed. The renewal paperwork has to be back to them by 5 PM tomorrow, or the lease rolls to month-to-month at a higher rate.
+
+I've signed my pages. Yours is the last one. Can you sign tonight?
+
+Sam`,
         },
       ],
       inbox: true,

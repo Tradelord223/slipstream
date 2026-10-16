@@ -91,6 +91,8 @@ export const api = {
   threads: (p: ListParams, signal?: AbortSignal) =>
     get<ThreadPage>(`/api/threads${qs({ view: p.view, split: p.split, q: p.q, account: p.account, before: p.before, limit: p.limit })}`, signal),
   thread: (id: string, signal?: AbortSignal) => get<ThreadDetail>(`/api/threads/${encodeURIComponent(id)}`, signal),
+  /** A one-time code, read from the message only when asked. */
+  messageCode: (id: string) => get<{ code: string }>(`/api/messages/${encodeURIComponent(id)}/code`),
   counts: () => get<Counts>("/api/counts"),
   triage: (kind: TriageKind, threadIds: string[], extra: { until?: number; label?: string } = {}) =>
     post<TriageResult>("/api/triage", { kind, threadIds, ...extra }),

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext } from "../context.ts";
 import { compile } from "./query.ts";
+import { maskCodes, type Signal } from "./signals.ts";
 
 /**
  * Read models shared by the dashboard's REST routes and the agent command registry:
@@ -34,14 +35,18 @@ export interface ThreadListRow {
   category: string;
   in_inbox: number;
   in_trash: number;
+  signal: string | null;
+  signal_at: number | null;
   labels: string | null;
 }
 
 export const LIST_COLUMNS = `t.id, t.account_id, t.subject, t.snippet, t.participants, t.last_message_at, t.sort_at, t.message_count,
   t.unread_count, t.starred, t.has_attachments, t.snoozed_until, t.reminded_at, t.follow_up_at, t.category, t.in_inbox, t.in_trash,
+  t.signal, t.signal_at,
   (SELECT group_concat(l.name, char(31)) FROM thread_labels tl JOIN labels l ON l.id = tl.label_id WHERE tl.thread_id = t.id) AS labels`;
 
 export function shapeRow(r: ThreadListRow) {
+  const detail = r.signal ? (JSON.parse(r.signal) as Signal) : null;
   return {
     id: r.id,
     accountId: r.account_id,
@@ -61,8 +66,14 @@ export function shapeRow(r: ThreadListRow) {
     inInbox: Boolean(r.in_inbox),
     inTrash: Boolean(r.in_trash),
     labels: r.labels ? r.labels.split("\u001f") : [],
+    signal: detail?.kind ?? null,
+    signalAt: detail ? r.signal_at : null,
+    signalDetail: detail,
   };
 }
+
+/** For readers that must not see one-time codes (agents): the subject and snippet of a row with the code masked. */
+const hideRowCodes = (r: ReturnType<typeof shapeRow>) => ({ ...r, ...maskCodes({ subject: r.subject, snippet: r.snippet }) });
 
 /** WHERE clause for a split: its own query, scoped to the inbox, minus custom splits for the built-ins. */
 export function splitWhere(split: SplitRow, all: SplitRow[], now: number): { where: string; params: (string | number)[] } {
@@ -92,7 +103,7 @@ export const listQuerySchema = z.object({
 
 export type ListQuery = z.infer<typeof listQuerySchema>;
 
-export function listThreads(ctx: AppContext, userId: string, q: ListQuery) {
+export function listThreads(ctx: AppContext, userId: string, q: ListQuery, opts: { hideCodes?: boolean } = {}) {
   const { db } = ctx;
   const now = Date.now();
   const where: string[] = ["t.account_id IN (SELECT id FROM accounts WHERE user_id = ?)"];
@@ -131,7 +142,7 @@ export function listThreads(ctx: AppContext, userId: string, q: ListQuery) {
     q.limit + 1,
   );
   const more = rows.length > q.limit;
-  const page = rows.slice(0, q.limit).map(shapeRow);
+  const page = rows.slice(0, q.limit).map(shapeRow).map((r) => (opts.hideCodes ? hideRowCodes(r) : r));
   const last = page.at(-1);
   return { threads: page, next: more && last ? `${last.sortAt}:${last.id}` : null };
 }
@@ -163,7 +174,7 @@ export function counts(ctx: AppContext, userId: string) {
   return { splits: out, inbox, reminders, doneToday };
 }
 
-export function getThread(ctx: AppContext, userId: string, id: string) {
+export function getThread(ctx: AppContext, userId: string, id: string, opts: { hideCodes?: boolean } = {}) {
   const { db } = ctx;
   const row = db.get<ThreadListRow>(
     `SELECT ${LIST_COLUMNS} FROM threads t JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.user_id = ?`,
@@ -189,9 +200,11 @@ export function getThread(ctx: AppContext, userId: string, id: string) {
       outgoing: number;
       list_unsubscribe: string | null;
       message_id_header: string | null;
+      is_bulk: number;
+      signals: string | null;
     }>(
       `SELECT id, from_name, from_email, to_json, cc_json, bcc_json, reply_to, subject, sent_at, snippet, body_text, body_html,
-              unread, outgoing, list_unsubscribe, message_id_header
+              unread, outgoing, list_unsubscribe, message_id_header, is_bulk, signals
        FROM messages WHERE thread_id = ? ORDER BY sent_at`,
       id,
     )
@@ -210,18 +223,21 @@ export function getThread(ctx: AppContext, userId: string, id: string) {
       unread: Boolean(m.unread),
       outgoing: Boolean(m.outgoing),
       canUnsubscribe: Boolean(m.list_unsubscribe),
+      isBulk: Boolean(m.is_bulk),
+      signals: m.signals ? (JSON.parse(m.signals) as Signal[]) : [],
       attachments: db
         .all<{ id: string; filename: string; mime_type: string; size: number; content_id: string | null; inline: number }>(
           "SELECT id, filename, mime_type, size, content_id, inline FROM attachments WHERE message_id = ?",
           m.id,
         )
         .map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mime_type, size: a.size, contentId: a.content_id, inline: Boolean(a.inline) })),
-    }));
+    }))
+    .map((m) => (opts.hideCodes ? maskCodes(m) : m));
   const draft = db.get<{ id: string }>(
     "SELECT id FROM drafts WHERE thread_id = ? AND user_id = ? AND status IN ('draft','failed') ORDER BY updated_at DESC LIMIT 1",
     id,
     userId,
   );
   const shared = db.get<{ id: string }>("SELECT id FROM shared_threads WHERE source_thread_id = ?", id);
-  return { thread: shapeRow(row), messages, draftId: draft?.id ?? null, sharedId: shared?.id ?? null };
+  return { thread: opts.hideCodes ? hideRowCodes(shapeRow(row)) : shapeRow(row), messages, draftId: draft?.id ?? null, sharedId: shared?.id ?? null };
 }
