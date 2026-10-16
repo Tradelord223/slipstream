@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slipstream social preview</title>
+<link rel="stylesheet" href="_brand.css">
+<style>
+  /* 1280 x 640. Everything that matters sits inside the central 1200 x 560 (40px margins). */
+  body { width: 1280px; height: 640px; position: relative; background: #0b0d12; color: #e7eaf0; }
+  .copy { position: absolute; left: 80px; top: 0; bottom: 0; width: 500px; display: flex; flex-direction: column; justify-content: center; }
+  .copy img { display: block; width: 320px; height: auto; margin-left: -2px; }
+  h1 { margin-top: 44px; font-size: 44px; line-height: 1.14; font-weight: 600; letter-spacing: -0.022em; color: #e7eaf0; text-wrap: balance; }
+  p { margin-top: 28px; font-size: 18px; line-height: 1.4; font-weight: 450; color: #a3abba; white-space: nowrap; letter-spacing: -0.005em; }
+  /* The real inbox, cropped to the list. It leaves the canvas on the right and bottom. */
+  .shot { position: absolute; left: 580px; top: 72px; width: 720px; height: 600px; overflow: hidden; border: 1px solid #232937; border-radius: 12px; background: #11141b; }
+  .shot img { display: block; position: absolute; left: calc(-486px * var(--s)); top: calc(-34px * var(--s)); width: calc(2880px * var(--s)); max-width: none; --s: 0.7; }
+</style>
+</head>
+<body>
+  <div class="copy">
+    <img src="../wordmark-dark.svg" alt="Slipstream">
+    <h1>Email at the speed of thought, for you and your agents.</h1>
+    <p>Open source · Local-first · Gmail, Outlook, IMAP · MCP</p>
+  </div>
+  <div class="shot"><img src="../../screenshots/inbox-dark.png" alt=""></div>
+</body>
+</html>

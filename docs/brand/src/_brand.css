@@ -1,0 +1,10 @@
+/* Shared by the brand sources. Geist comes from the repo's own dependency, so the render matches the app. */
+@font-face {
+  font-family: "Geist";
+  src: url("../../../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-display: block;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { overflow: hidden; }
+body { font-family: "Geist", sans-serif; -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; }
