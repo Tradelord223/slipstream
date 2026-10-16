@@ -370,8 +370,7 @@
 }
 
 @media (max-width: 719px) {
-  .composer-full .composer-fields,
-  .composer-full .composer-foot {
+  .composer-full .composer-fields {
     padding-left: 0;
   }
   .composer-full .recipient-row {
