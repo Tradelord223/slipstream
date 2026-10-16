@@ -109,7 +109,7 @@ export class Webhooks {
     for (const h of hooks) {
       const wanted = JSON.parse(h.events) as string[];
       if (!wanted.includes("*") && !wanted.includes(event.type)) continue;
-      void this.deliver(h, event);
+      this.deliver(h, event).catch((err) => console.error("[slipstream] webhook delivery:", err));
     }
   }
 

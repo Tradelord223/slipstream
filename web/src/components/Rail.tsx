@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { ago } from "../lib/format.ts";
 import { useNow, useDismiss } from "../lib/hooks.ts";
+import { reconnectOAuthPath } from "./connect/hosts.ts";
 import { Keys } from "./Keycap.tsx";
 import { LabelTree } from "./labels/LabelTree.tsx";
 import { Icon, Logo, type IconName } from "./Icon.tsx";
@@ -176,8 +177,14 @@ function SyncStatus() {
   if (scoped.length === 0) return <div className="sync-line muted">No accounts yet</div>;
   const reauth = scoped.find((a) => a.syncStatus === "reauth");
   if (reauth) {
-    return (
-      <Link to="/settings/accounts" className="sync-line sync-warn">
+    // Gmail and Outlook go straight to that provider's sign-in; a password account opens its sign-in in Settings.
+    const oauth = reconnectOAuthPath(reauth);
+    return oauth ? (
+      <a href={oauth} className="sync-line sync-warn">
+        Reconnect {reauth.email}
+      </a>
+    ) : (
+      <Link to={`/settings/accounts?reconnect=${encodeURIComponent(reauth.id)}`} className="sync-line sync-warn">
         Reconnect {reauth.email}
       </Link>
     );

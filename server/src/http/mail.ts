@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
-import type { AppContext, Env } from "../context.ts";
+import { importStatus, type AppContext, type Env } from "../context.ts";
 import type { ServerEvent } from "../events.ts";
 import { assistantSetting } from "../agents/assistant.ts";
 import { triageCommandName } from "../commands/catalog.ts";
@@ -33,7 +33,7 @@ export function mailRoutes(ctx: AppContext) {
   const app = new Hono<Env>();
 
   const userAccounts = (userId: string) =>
-    db.all<AccountRow>("SELECT * FROM accounts WHERE user_id = ? ORDER BY created_at", userId);
+    db.all<AccountRow & { preset: string | null }>("SELECT * FROM accounts WHERE user_id = ? ORDER BY created_at", userId);
 
   app.get("/threads", (c) => {
     const started = performance.now();
@@ -259,8 +259,8 @@ export function mailRoutes(ctx: AppContext) {
       syncError: a.sync_error,
       lastSyncedAt: a.last_synced_at,
       firstSyncedAt: a.first_synced_at,
-      importing: ctx.imports.has(a.id),
-      imported: ctx.imports.get(a.id)?.imported ?? 0,
+      preset: a.preset,
+      ...importStatus(ctx.imports, a.id),
       identities: listIdentities(db, a.id),
     }));
     const splits = db

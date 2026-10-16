@@ -4,8 +4,9 @@ import { afterEach, describe, test } from "node:test";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
 import { loadConfig, microsoftApp } from "../src/config.ts";
 import type { ServerEvent } from "../src/events.ts";
+import { importStatus } from "../src/context.ts";
 import { createApp } from "../src/http/app.ts";
-import type { AccountDeps } from "../src/http/accounts.ts";
+import { retireDemoMailboxes, type AccountDeps } from "../src/http/accounts.ts";
 import type { MailProvider, SyncPage } from "../src/mail/types.ts";
 import { DEMO_IDENTITY } from "../src/providers/demo.ts";
 import { discover, type DnsLookup, type MxRecord, type SrvRecord } from "../src/providers/discover.ts";
@@ -163,13 +164,13 @@ describe("connecting real mail retires the demo mailbox", () => {
   }
   const accepted: AccountDeps = { verifyImap: async () => {} };
 
-  async function connect(env: TestEnv, app = createApp(env.ctx, undefined, { accounts: accepted })) {
+  async function connect(env: TestEnv, app = createApp(env.ctx, undefined, { accounts: accepted }), extra: Record<string, unknown> = {}) {
     const port = await closedPort();
     const res = await app.fetch(
       new Request("http://127.0.0.1:4399/api/accounts/imap", {
         method: "POST",
         headers: { host: "127.0.0.1:4399", "x-slipstream": "1", "content-type": "application/json" },
-        body: JSON.stringify({ email: "jordan@fernpoint.co", password: "pw", imapHost: "127.0.0.1", imapPort: port, smtpHost: "127.0.0.1", smtpPort: port }),
+        body: JSON.stringify({ email: "jordan@fernpoint.co", password: "pw", imapHost: "127.0.0.1", imapPort: port, smtpHost: "127.0.0.1", smtpPort: port, ...extra }),
       }),
     );
     assert.equal(res.status, 200);
@@ -249,6 +250,52 @@ describe("connecting real mail retires the demo mailbox", () => {
     addAccount(env.ctx, LOCAL_USER_ID, DEMO_IDENTITY.email, "demo");
     await connect(env);
     assert.deepEqual(providers(env), ["demo", "imap"]);
+  });
+
+  test("at startup, a demo mailbox left over from an older version goes once there is real mail", async () => {
+    const env = fresh();
+    const demo = addAccount(env.ctx, LOCAL_USER_ID, DEMO_IDENTITY.email, "demo");
+    await env.ctx.sync.syncAccount(demo);
+    assert.ok(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM messages_fts")!.n > 0);
+
+    // Only the demo mailbox so far: it stays, the person has nothing else.
+    await retireDemoMailboxes(env.ctx);
+    assert.deepEqual(providers(env), ["demo"]);
+
+    addAccount(env.ctx, LOCAL_USER_ID, "jordan@fernpoint.co", "imap");
+    await retireDemoMailboxes(env.ctx);
+    assert.deepEqual(providers(env), ["imap"]);
+    assert.equal(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM messages_fts")!.n, 0, "its search entries went with it");
+    assert.equal(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE account_id = ?", demo)!.n, 0);
+    await retireDemoMailboxes(env.ctx);
+    assert.deepEqual(providers(env), ["imap"], "running it again changes nothing");
+  });
+
+  test("at startup, developer demo mode keeps its demo mailbox", async () => {
+    const env = fresh({ demo: true });
+    addAccount(env.ctx, LOCAL_USER_ID, DEMO_IDENTITY.email, "demo");
+    addAccount(env.ctx, LOCAL_USER_ID, "jordan@fernpoint.co", "imap");
+    await retireDemoMailboxes(env.ctx);
+    assert.deepEqual(providers(env), ["demo", "imap"]);
+  });
+
+  test("an IMAP account keeps the preset it was connected with, and reconnecting updates the same account", async () => {
+    const env = fresh();
+    const app = createApp(env.ctx, undefined, { accounts: accepted });
+    const id = await connect(env, app, { preset: "icloud" });
+    const shown = async () => ((await (await env.api("/api/bootstrap")).json()).accounts as { id: string; preset: string | null }[]).map((a) => [a.id, a.preset]);
+    assert.deepEqual(await shown(), [[id, "icloud"]]);
+
+    // A new app password for the same address: the same account, still iCloud.
+    env.ctx.db.run("UPDATE accounts SET sync_status = 'reauth', sync_error = 'bad password' WHERE id = ?", id);
+    assert.equal(await connect(env, app, { preset: "icloud", password: "new" }), id);
+    assert.deepEqual(await shown(), [[id, "icloud"]]);
+    assert.equal(env.ctx.db.get<{ s: string }>("SELECT sync_status AS s FROM accounts WHERE id = ?", id)?.s !== "reauth", true);
+
+    // Typed-in servers have no preset to remember.
+    const other = fresh();
+    const otherId = await connect(other);
+    assert.deepEqual(((await (await other.api("/api/bootstrap")).json()).accounts as { id: string; preset: string | null }[]).map((a) => [a.id, a.preset]), [[otherId, null]]);
   });
 
   test("a failed sign-in leaves the demo mailbox alone", async () => {
@@ -603,6 +650,39 @@ describe("importing a mail file", () => {
     assert.equal(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE account_id = ? AND created_at > ?", accountId, stamped!)!.n, 0, "every imported message predates it");
     const boot = (await (await env.api("/api/bootstrap")).json()).accounts.find((x: { id: string }) => x.id === accountId);
     assert.deepEqual([boot.importing, boot.imported, boot.firstSyncedAt], [false, 0, stamped]);
+  });
+
+  test("two imports into one account run side by side: it fills until the last ends and is stamped once", async () => {
+    const env = fresh();
+    const ends = new Map<string, ServerEvent>();
+    let whenFirstEnded: { importing: boolean; imported: number; stamped: number | null } | null = null;
+    const bothEnded = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("the imports never finished")), 10_000);
+      env.ctx.events.subscribe([`user:${LOCAL_USER_ID}`], (e) => {
+        if (e.type !== "import" || e.status === "running") return;
+        ends.set(e.jobId, e);
+        // Inside the event, so the other job can't have moved on: this is exactly what a client reloading now would see.
+        if (ends.size === 1) whenFirstEnded = { ...importStatus(env.ctx.imports, e.accountId), stamped: firstSynced(env, e.accountId)?.first_synced_at ?? null };
+        if (ends.size === 2) (clearTimeout(timer), resolve());
+      });
+    });
+    // The long one starts first, so the short one ends while it is still reading.
+    const long = (await (await startImport(env, 3000)).json()) as { jobId: string; accountId: string };
+    const short = (await (await startImport(env, 300)).json()) as { jobId: string; accountId: string };
+    assert.notEqual(long.jobId, short.jobId);
+    assert.equal(long.accountId, short.accountId, "both land in the same archive account");
+    await bothEnded;
+
+    assert.equal([...ends.keys()][0], short.jobId, "the short one ended first");
+    const first = whenFirstEnded as { importing: boolean; imported: number; stamped: number | null } | null;
+    assert.ok(first, "the first end was seen");
+    assert.equal(first.importing, true, "the account is still filling from the long one");
+    assert.equal(first.stamped, null, "and is not 'first synced' yet");
+    assert.deepEqual([...ends.values()].map((e) => e.type === "import" && e.status), ["done", "done"]);
+    assert.equal(env.ctx.imports.size, 0);
+    assert.equal(typeof firstSynced(env, long.accountId)!.first_synced_at, "number");
+    const boot = (await (await env.api("/api/bootstrap")).json()).accounts.find((x: { id: string }) => x.id === long.accountId);
+    assert.deepEqual([boot.importing, boot.imported], [false, 0]);
   });
 });
 

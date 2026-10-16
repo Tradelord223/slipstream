@@ -73,7 +73,9 @@ Finally, Settings → Accounts → **Add account**, enter your Outlook, Hotmail,
 
 ## Any IMAP server
 
-Settings → Accounts → **Add account** and enter your address. For iCloud, Fastmail, Yahoo, Zoho and Proton Mail Bridge, Slipstream already knows the server names. For a custom domain it reads the domain's MX and server records to find the host (Zoho's regional servers in the EU, India and Australia included); if it can't, it asks you to type your IMAP and SMTP hosts. Most providers want an app-specific password rather than your main one.
+Settings → Accounts → **Add account** and enter your address. For iCloud, Fastmail, Yahoo, Zoho and Proton Mail Bridge, Slipstream already knows the server names. For a custom domain it reads the domain's MX and server records to find the host (Zoho's regional servers in the EU, India and Australia included); if it can't, it asks you to type your IMAP and SMTP hosts. Server names found in a custom domain's own records are shown before you enter a password, so you can check them. Most providers want an app-specific password rather than your main one.
+
+If an account stops signing in (you changed its password, or the sign-in expired), press **Reconnect** next to it in Settings → Accounts. Gmail and Outlook open their own sign-in; an account with a password opens its sign-in with the address filled in, and the new password updates the same account.
 
 ## Send from an alias or your own domain
 

@@ -129,7 +129,7 @@ function Shell() {
     const connected = q.get("connected");
     const error = q.get("error");
     if (!connected && !error) return;
-    if (connected) toast.info(q.get("provider") === "microsoft" || connected === "microsoft" ? "Outlook connected" : "Gmail connected");
+    if (connected) toast.info(q.get("provider") === "microsoft" ? "Outlook connected" : "Gmail connected");
     else if (error) toast.error(oauthErrorText(error));
     navigate(location.pathname, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps

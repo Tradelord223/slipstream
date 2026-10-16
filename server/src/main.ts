@@ -7,6 +7,7 @@ import { loadConfig, type Config } from "./config.ts";
 import type { AppContext } from "./context.ts";
 import { Db } from "./db/index.ts";
 import { Events } from "./events.ts";
+import { retireDemoMailboxes } from "./http/accounts.ts";
 import { createApp } from "./http/app.ts";
 import { createPublicApp, remotePort, watchRemoteOrigin } from "./http/remote.ts";
 import { newId, SecretBox } from "./lib/crypto.ts";
@@ -69,12 +70,11 @@ async function seedDemo(ctx: AppContext): Promise<void> {
 export async function start(config = loadConfig()) {
   // Everything Slipstream writes is private mail data: owner-only files.
   process.umask(0o077);
-  // A background job (import, sync, agent run) that fails without anyone awaiting it is logged, not fatal:
-  // it must not take every other account's mail down with it. Synchronous crashes still exit.
-  process.on("unhandledRejection", (reason) => console.error("[slipstream] unhandled rejection:", reason));
   const ctx = createContext(config);
   if (config.mode === "local") ctx.users.ensureLocalUser();
   if (config.demo) await seedDemo(ctx);
+  // A demo mailbox left from before the demo became developer-only goes once the person has real mail.
+  await retireDemoMailboxes(ctx);
 
   const here = dirname(fileURLToPath(import.meta.url));
   const staticDir = [join(here, "web"), join(here, "../../dist/web")].find((d) => existsSync(join(d, "index.html")));

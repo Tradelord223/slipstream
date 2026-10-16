@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api.ts";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
 import { ConnectFlow } from "../../components/connect/ConnectFlow.tsx";
-import { providerLabel } from "../../components/connect/hosts.ts";
+import { canReconnect, providerLabel, reconnectOAuthPath } from "../../components/connect/hosts.ts";
 import { ImportMail } from "../../components/connect/ImportMail.tsx";
 import { Dialog } from "../../components/Dialog.tsx";
 import { Icon } from "../../components/Icon.tsx";
@@ -11,14 +11,17 @@ import { ago } from "../../lib/format.ts";
 import { useNow } from "../../lib/hooks.ts";
 import { refreshCounts } from "../../store/counts.ts";
 import { reload } from "../../store/list.ts";
+import { navigate, useLocation } from "../../store/route.ts";
 import { refreshSession, useSession } from "../../store/session.ts";
 import { toast } from "../../store/toasts.ts";
 import type { Account, Identity } from "../../types.ts";
 
 export function AccountsSettings() {
   const accounts = useSession((s) => s.accounts);
+  const { search } = useLocation();
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [reconnecting, setReconnecting] = useState<Account | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
 
   const closeAdd = () => {
@@ -26,12 +29,21 @@ export function AccountsSettings() {
     requestAnimationFrame(() => addButton.current?.focus());
   };
 
+  // The rail's "Reconnect" link for a password account lands here with ?reconnect=<id>: open that account's sign-in.
+  const wanted = new URLSearchParams(search).get("reconnect");
+  useEffect(() => {
+    if (!wanted) return;
+    const account = accounts.find((a) => a.id === wanted);
+    if (account && canReconnect(account) && !reconnectOAuthPath(account)) setReconnecting(account);
+    navigate("/settings/accounts", { replace: true });
+  }, [wanted]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="settings-list">
       <section className="panel-block" aria-label="Connected accounts">
         <ul className="account-list" role="list">
           {accounts.map((a) => (
-            <AccountRow key={a.id} account={a} />
+            <AccountRow key={a.id} account={a} onReconnect={() => setReconnecting(a)} />
           ))}
           {accounts.length === 0 && <li className="muted account-empty">No accounts yet.</li>}
         </ul>
@@ -45,6 +57,21 @@ export function AccountsSettings() {
         </div>
       </section>
       {importing && <ImportBox />}
+      {reconnecting && (
+        <Dialog label={`Reconnect ${reconnecting.email}`} onClose={() => setReconnecting(null)} className="dialog-connect" lockScrim>
+          <ConnectFlow
+            variant="dialog"
+            title={`Reconnect ${reconnecting.email}`}
+            reconnect={{ email: reconnecting.email, name: reconnecting.name, preset: reconnecting.preset ?? null }}
+            onClose={() => setReconnecting(null)}
+            onConnected={async (c) => {
+              await refreshSession();
+              toast.info(`Reconnected ${c.email}`);
+              setReconnecting(null);
+            }}
+          />
+        </Dialog>
+      )}
       {adding && (
         <Dialog label="Add an account" onClose={closeAdd} className="dialog-connect" lockScrim>
           <ConnectFlow
@@ -65,7 +92,7 @@ export function AccountsSettings() {
   );
 }
 
-function AccountRow({ account: a }: { account: Account }) {
+function AccountRow({ account: a, onReconnect }: { account: Account; onReconnect: () => void }) {
   const now = useNow();
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -86,6 +113,12 @@ function AccountRow({ account: a }: { account: Account }) {
     } finally {
       setBusy(false);
     }
+  };
+  // Gmail and Outlook sign in again on Google's or Microsoft's own page; a password account opens its sign-in here.
+  const reconnect = () => {
+    const oauth = reconnectOAuthPath(a);
+    if (oauth) window.location.href = oauth;
+    else onReconnect();
   };
   const remove = async () => {
     try {
@@ -114,6 +147,11 @@ function AccountRow({ account: a }: { account: Account }) {
         <span className={`account-status tone-${status.tone}`} role="status">
           {status.text}
         </span>
+        {canReconnect(a) && (
+          <button className="btn btn-sm btn-primary" onClick={reconnect} aria-label={`Reconnect ${a.email}`}>
+            Reconnect
+          </button>
+        )}
         <button className="btn btn-sm" onClick={() => void sync()} disabled={busy}>
           <Icon name="refresh" /> Sync now
         </button>

@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
-import type { AppContext, Env } from "../context.ts";
+import { importStatus, type AppContext, type Env } from "../context.ts";
 import { newId, randomToken } from "../lib/crypto.ts";
 import { readMailFile } from "../import/mailfile.ts";
 import { addIdentity, removeIdentity, updateIdentity } from "../mail/identities.ts";
@@ -48,6 +48,43 @@ export interface AccountDeps {
 const MAX_DISCOVERIES_PER_USER = 4;
 const MAX_DISCOVERIES = 16;
 
+/** Removes an account and everything synced from it. */
+async function removeAccount(ctx: AppContext, accountId: string) {
+  await ctx.sync.forget(accountId);
+  ctx.db.tx(() => {
+    // Contentless FTS rows aren't removed by the cascade; clear them first.
+    ctx.db.run("DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE account_id = ?)", accountId);
+    ctx.db.run("DELETE FROM accounts WHERE id = ?", accountId);
+  });
+}
+
+/**
+ * Connecting real mail retires the invented demo mailbox (it only exists in developer demo mode, where it stays).
+ * The client hears about it as a change to those threads, the same event a sync sends.
+ */
+async function dropDemoAccounts(ctx: AppContext, userId: string) {
+  if (ctx.config.demo) return;
+  for (const demo of ctx.db.all<{ id: string }>("SELECT id FROM accounts WHERE user_id = ? AND provider = 'demo'", userId)) {
+    const threadIds = ctx.db.all<{ id: string }>("SELECT id FROM threads WHERE account_id = ?", demo.id).map((t) => t.id);
+    await removeAccount(ctx, demo.id);
+    ctx.events.emitToUser(userId, { type: "threads", accountId: demo.id, threadIds });
+  }
+}
+
+/**
+ * At startup: a demo mailbox left from before the demo became developer-only goes away for anyone who has connected a
+ * real account since. A person with only the demo mailbox keeps it until they connect one.
+ */
+export async function retireDemoMailboxes(ctx: AppContext): Promise<void> {
+  const owners = ctx.db.all<{ user_id: string }>(
+    "SELECT DISTINCT user_id FROM accounts WHERE provider = 'demo' AND user_id IN (SELECT user_id FROM accounts WHERE provider != 'demo')",
+  );
+  for (const { user_id } of owners) await dropDemoAccounts(ctx, user_id);
+}
+
+/** A background promise nobody awaits: its failure is logged where it starts, never left to crash the process. */
+const logFailure = (what: string) => (err: unknown) => console.error(`[slipstream] ${what}:`, err);
+
 export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
   const { db, sync, secrets, config, store, events, imports } = ctx;
   const verify = deps.verifyImap ?? verifyImap;
@@ -60,53 +97,35 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
     return ACCOUNT_COLORS[n % ACCOUNT_COLORS.length]!;
   };
 
-  /** Removes an account and everything synced from it. */
-  const removeAccount = async (accountId: string) => {
-    await sync.forget(accountId);
-    db.tx(() => {
-      // Contentless FTS rows aren't removed by the cascade; clear them first.
-      db.run("DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE account_id = ?)", accountId);
-      db.run("DELETE FROM accounts WHERE id = ?", accountId);
-    });
-  };
-
-  /**
-   * Connecting real mail retires the invented demo mailbox (it only exists in developer demo mode, where it stays).
-   * The client hears about it as a change to those threads, the same event a sync sends.
-   */
-  const dropDemoAccounts = async (userId: string) => {
-    if (config.demo) return;
-    for (const demo of db.all<{ id: string }>("SELECT id FROM accounts WHERE user_id = ? AND provider = 'demo'", userId)) {
-      const threadIds = db.all<{ id: string }>("SELECT id FROM threads WHERE account_id = ?", demo.id).map((t) => t.id);
-      await removeAccount(demo.id);
-      events.emitToUser(userId, { type: "threads", accountId: demo.id, threadIds });
-    }
-  };
-
-  const upsertAccount = async (userId: string, provider: string, email: string, name: string, auth: unknown): Promise<string> => {
-    await dropDemoAccounts(userId);
+  /** `preset` is the IMAP preset it was connected with, kept for the account's label; a reconnect without one leaves it as it was. */
+  const upsertAccount = async (userId: string, provider: string, email: string, name: string, auth: unknown, preset: string | null = null): Promise<string> => {
+    await dropDemoAccounts(ctx, userId);
     const existing = db.get<{ id: string }>(
       "SELECT id FROM accounts WHERE user_id = ? AND provider = ? AND email = ?",
       userId,
       provider,
-      email,
+      email.toLowerCase(),
     );
     if (existing) {
       db.run(
-        "UPDATE accounts SET auth_enc = ?, name = ?, sync_status = 'idle', sync_error = NULL WHERE id = ?",
+        "UPDATE accounts SET auth_enc = ?, name = ?, preset = coalesce(?, preset), sync_status = 'idle', sync_error = NULL WHERE id = ?",
         secrets.seal(auth),
         name,
+        preset,
         existing.id,
       );
-      void sync.forget(existing.id).then(() => sync.syncAccount(existing.id));
+      sync
+        .forget(existing.id)
+        .then(() => sync.syncAccount(existing.id))
+        .catch(logFailure(`sync of ${email}`));
       return existing.id;
     }
     const id = newId("acc");
     db.run(
-      "INSERT INTO accounts (id, user_id, provider, email, name, color, auth_enc, created_at) VALUES (?,?,?,?,?,?,?,?)",
-      id, userId, provider, email.toLowerCase(), name, nextColor(userId), auth === null ? null : secrets.seal(auth), Date.now(),
+      "INSERT INTO accounts (id, user_id, provider, email, name, color, auth_enc, preset, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      id, userId, provider, email.toLowerCase(), name, nextColor(userId), auth === null ? null : secrets.seal(auth), preset, Date.now(),
     );
-    void sync.syncAccount(id);
+    sync.syncAccount(id).catch(logFailure(`sync of ${email}`));
     return id;
   };
 
@@ -150,7 +169,7 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
     await verify(settings).catch((err: Error) => {
       throw new HttpError(400, `Couldn't sign in: ${err.message}`);
     });
-    const id = await upsertAccount(user.id, "imap", body.email, body.name, settings);
+    const id = await upsertAccount(user.id, "imap", body.email, body.name, settings, body.preset ?? null);
     return c.json({ id });
   });
 
@@ -159,7 +178,7 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
     const acc = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ? AND user_id = ?", c.req.param("id"), user.id);
     if (!acc) throw new HttpError(404, "Account not found");
     if (acc.sync_status === "reauth") db.run("UPDATE accounts SET sync_status = 'idle' WHERE id = ?", acc.id);
-    void sync.syncAccount(acc.id);
+    sync.syncAccount(acc.id).catch(logFailure(`sync of ${acc.email}`));
     return c.json({ ok: true });
   });
 
@@ -204,7 +223,7 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
     const user = c.get("user");
     const acc = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ? AND user_id = ?", c.req.param("id"), user.id);
     if (!acc) throw new HttpError(404, "Account not found");
-    await removeAccount(acc.id);
+    await removeAccount(ctx, acc.id);
     return c.json({ ok: true });
   });
 
@@ -287,14 +306,11 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
     const accountId = await upsertAccount(user.id, "archive", accountEmail, `Imported · ${label}`, null);
     const jobId = newId("job");
 
-    imports.set(accountId, { jobId, imported: 0 });
+    imports.set(jobId, { accountId, imported: 0 });
     void (async () => {
       let imported = 0;
       let batch: IncomingMessage[] = [];
       let removed = false;
-      const finish = () => {
-        if (imports.get(accountId)?.jobId === jobId) imports.delete(accountId);
-      };
       /** Stores the pending batch. False once the account is gone (removed in Settings mid-import): nothing more can be stored. */
       const flush = (): boolean => {
         const account = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", accountId);
@@ -308,11 +324,12 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
         batch = [];
         const touched = store.ingest(account, { messages, cursor: "archive", done: true });
         imported += messages.length;
-        imports.set(accountId, { jobId, imported });
+        imports.set(jobId, { accountId, imported });
         events.emitToUser(user.id, { type: "import", jobId, accountId, status: "running", imported });
         if (touched.length) events.emitToUser(user.id, { type: "threads", accountId, threadIds: touched });
         return true;
       };
+      let end: { status: "done" } | { status: "failed"; error: string };
       try {
         read: for (const file of saved) {
           for await (const msg of readMailFile(file.path, file.name, ownerEmail || undefined)) {
@@ -322,15 +339,7 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
           }
         }
         const gone = removed || !flush();
-        // Stamped after the last batch, so everything imported counts as history rather than new mail.
-        if (!gone) db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
-        finish();
-        events.emitToUser(
-          user.id,
-          gone
-            ? { type: "import", jobId, accountId, status: "failed", imported, error: "The account was removed while its mail was being imported." }
-            : { type: "import", jobId, accountId, status: "done", imported },
-        );
+        end = gone ? { status: "failed", error: "The account was removed while its mail was being imported." } : { status: "done" };
       } catch (err) {
         // Keep what was read before the failure. The batch is emptied before it is stored and the account is checked
         // first, so this can't repeat the store that failed; and nothing in a catch may throw.
@@ -339,13 +348,17 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
         } catch (flushErr) {
           console.error("[slipstream] import:", flushErr);
         }
-        finish();
-        events.emitToUser(user.id, { type: "import", jobId, accountId, status: "failed", imported, error: err instanceof Error ? err.message : String(err) });
+        end = { status: "failed", error: err instanceof Error ? err.message : String(err) };
       } finally {
-        finish();
+        // The one cleanup point, before anything is announced, so a client that reacts to the event finds the job gone.
+        imports.delete(jobId);
         rmSync(dir, { recursive: true, force: true });
       }
-    })().catch((err) => console.error("[slipstream] import:", err));
+      // Stamped after the last batch of the account's last job, so everything imported counts as history rather than new mail.
+      if (end.status === "done" && !importStatus(imports, accountId).importing)
+        db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
+      events.emitToUser(user.id, { type: "import", jobId, accountId, imported, ...end });
+    })().catch(logFailure("import"));
 
     return c.json({ jobId, accountId });
   });

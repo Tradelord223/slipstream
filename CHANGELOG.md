@@ -7,7 +7,13 @@
 - **The invented demo mailbox is for developers only:** `npm run dev`, `SLIPSTREAM_DEMO=1` or `slipstream --demo`. Outside developer demo mode a new install doesn't create one. If you upgrade from a version that gave you one, it is removed when you connect a real account; in developer demo mode it stays beside your real accounts.
 - **"Continue with Microsoft" needs your install's Microsoft app** for now (see [docs/connect-accounts.md](docs/connect-accounts.md#register-slipstreams-microsoft-app)) until Slipstream ships its own. Google works the same way, with your install's Google app.
 - **Fixed:** removing an account that had synced mail failed with an error.
-- **Fixed:** removing an account while its mail file was still being imported stopped the whole server. The import now ends with a plain note, and the server keeps running. A background job that fails unexpectedly is logged instead of closing Slipstream.
+- **Fixed:** removing an account while its mail file was still being imported stopped the whole server. The import now ends with a plain note, and the server keeps running. The first sync after connecting an account and each import log their own failures instead of leaving them to close Slipstream.
+- **Reconnect:** an account that needs to sign in again, or couldn't sync, has a Reconnect button in Settings → Accounts, and the rail's "Reconnect" link goes to it. Gmail and Outlook start their own sign-in; a password account opens its sign-in with the address filled in, so the new password updates the same account.
+- **Mail servers found in a domain's own settings** are always shown, with a short note, before you enter a password.
+- **IMAP accounts remember their provider**, so iCloud, Fastmail, Yahoo, Zoho and Proton accounts are labelled as such instead of "Email account" (accounts connected before this show it after they're reconnected).
+- **Two imports into one account** no longer clash: the account keeps filling until the last one ends.
+- **Doctor changes nothing:** it no longer creates the data folder or leaves `-wal` and `-shm` files next to the database.
+- **Fixed:** a demo mailbox left from an older version is removed at startup once you have a real account.
 - **Imports finish properly:** an imported file's account is no longer marked as "first synced" before its messages have arrived, and the app reports how far an import has got after a reload.
 - **Sign-in errors say which provider** (Google or Microsoft) they came from.
 - **Address lookup is more careful:** only domains that Hotmail, Outlook, Live and Yahoo really run are assumed, anything else is looked up; Zoho addresses in the EU, India and Australia get their own region's servers; the limit on simultaneous lookups is per person as well as overall; and a lookup that times out is cancelled.

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync, statfsSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import type { Config } from "./config.ts";
 import { migrations } from "./db/schema.ts";
@@ -10,8 +10,8 @@ import { SecretBox } from "./lib/crypto.ts";
 
 /**
  * `slipstream doctor`: checks an install without starting it and says, in plain words, what's wrong and how to fix it.
- * It only reads: the database is opened read-only, no key file is created, and the one network request is to
- * Slipstream's own health check on this machine.
+ * It changes nothing: the data folder isn't created, the database is opened so that no side files appear (see
+ * openDatabase), no key file is created, and the one network request is to Slipstream's own health check on this machine.
  *
  *   slipstream doctor          # people
  *   slipstream doctor --json   # agents and scripts; exit code 1 when anything fails
@@ -63,24 +63,28 @@ export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promi
 
   // Data folder
   const shown = config.dataDir.replace(homedir(), "~");
-  const dirMode = statSync(config.dataDir).mode & 0o777;
-  add(
-    dirMode & 0o077
-      ? { id: "data-dir", status: "warn", title: `Data folder ${shown} can be read by other users on this computer`, fix: `Run: chmod 700 "${config.dataDir}"` }
-      : { id: "data-dir", status: "ok", title: `Data folder ${shown}, readable only by you` },
-  );
-
-  // Disk space
-  try {
-    const fs = statfsSync(config.dataDir);
-    const free = fs.bavail * fs.bsize;
+  if (!existsSync(config.dataDir)) {
+    add({ id: "data-dir", status: "info", title: "No data folder yet", detail: `${shown} is created the first time Slipstream starts.` });
+  } else {
+    const dirMode = statSync(config.dataDir).mode & 0o777;
     add(
-      free < LOW_DISK
-        ? { id: "disk", status: "warn", title: `Only ${size(free)} free on the disk holding your mail`, fix: "Free up space. Slipstream stores new mail and attachments here." }
-        : { id: "disk", status: "ok", title: `${size(free)} free on disk` },
+      dirMode & 0o077
+        ? { id: "data-dir", status: "warn", title: `Data folder ${shown} can be read by other users on this computer`, fix: `Run: chmod 700 "${config.dataDir}"` }
+        : { id: "data-dir", status: "ok", title: `Data folder ${shown}, readable only by you` },
     );
-  } catch {
-    add({ id: "disk", status: "info", title: "Couldn't read free disk space" });
+
+    // Disk space
+    try {
+      const fs = statfsSync(config.dataDir);
+      const free = fs.bavail * fs.bsize;
+      add(
+        free < LOW_DISK
+          ? { id: "disk", status: "warn", title: `Only ${size(free)} free on the disk holding your mail`, fix: "Free up space. Slipstream stores new mail and attachments here." }
+          : { id: "disk", status: "ok", title: `${size(free)} free on disk` },
+      );
+    } catch {
+      add({ id: "disk", status: "info", title: "Couldn't read free disk space" });
+    }
   }
 
   // Database
@@ -89,7 +93,8 @@ export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promi
     add({ id: "database", status: "info", title: "No database yet", detail: "It's created the first time Slipstream starts." });
   } else {
     try {
-      db = new DatabaseSync(config.dbPath, { readOnly: true });
+      const opened = openDatabase(config.dbPath);
+      db = opened.db;
       const version = (db.prepare("SELECT version FROM schema_version").get() as { version: number } | undefined)?.version ?? 0;
       const ok = (db.prepare("PRAGMA quick_check").get() as { quick_check: string }).quick_check === "ok";
       // Recent writes live in the -wal file until SQLite folds them in.
@@ -99,8 +104,8 @@ export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promi
       else if (version > migrations.length)
         add({ id: "database", status: "fail", title: "The database was written by a newer Slipstream", detail: `Database version ${version}, this Slipstream knows ${migrations.length}.`, fix: "Update Slipstream: npm install -g slipstream-mail@latest" });
       else if (version < migrations.length)
-        add({ id: "database", status: "ok", title: `Database ${size(bytes)}, no damage found`, detail: `It will be upgraded (version ${version} → ${migrations.length}) the next time Slipstream starts.` });
-      else add({ id: "database", status: "ok", title: `Database ${size(bytes)}, up to date, no damage found` });
+        add({ id: "database", status: "ok", title: `Database ${size(bytes)}, no damage found`, detail: [`It will be upgraded (version ${version} → ${migrations.length}) the next time Slipstream starts.`, opened.note].filter(Boolean).join(" ") });
+      else add({ id: "database", status: "ok", title: `Database ${size(bytes)}, up to date, no damage found`, detail: opened.note });
     } catch (err) {
       add({ id: "database", status: "fail", title: "Couldn't open the database", detail: err instanceof Error ? err.message : String(err), fix: "Check that the data folder belongs to you, and that no other program has the file locked." });
       db?.close();
@@ -172,8 +177,8 @@ export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promi
     let healthy = 0;
     for (const a of real) {
       const id = `account:${a.email}`;
-      if (a.sync_status === "reauth") add({ id, status: "fail", title: `${a.email} needs you to sign in again`, detail: a.sync_error ?? undefined, fix: "Settings → Accounts → Reconnect." });
-      else if (a.sync_status === "error") add({ id, status: "warn", title: `${a.email} couldn't sync`, detail: a.sync_error ?? undefined, fix: "Check the account's password or app password in Settings → Accounts; it retries on its own." });
+      if (a.sync_status === "reauth") add({ id, status: "fail", title: `${a.email} needs you to sign in again`, detail: a.sync_error ?? undefined, fix: "In Settings → Accounts, press Reconnect next to this account." });
+      else if (a.sync_status === "error") add({ id, status: "warn", title: `${a.email} couldn't sync`, detail: a.sync_error ?? undefined, fix: "It retries on its own. If the password or app password changed, press Reconnect next to this account in Settings → Accounts." });
       else if (a.provider !== "archive" && a.last_synced_at !== null && now - a.last_synced_at > DAY && health === "slipstream")
         add({ id, status: "warn", title: `${a.email} hasn't synced in ${Math.round((now - a.last_synced_at) / DAY)} days`, fix: "Press Sync now in Settings → Accounts, and check your connection." });
       else healthy++;
@@ -207,6 +212,25 @@ export function formatReport(r: DoctorReport, color = false): string {
   const { fail, warn } = r.summary;
   lines.push("", fail || warn ? [fail ? `${fail} problem${fail > 1 ? "s" : ""}` : "", warn ? `${warn} warning${warn > 1 ? "s" : ""}` : ""].filter(Boolean).join(", ") + "." : "Everything looks good.");
   return lines.join("\n");
+}
+
+/**
+ * Opens the database without creating or changing any file. A plain read-only open of a WAL database makes `-wal` and
+ * `-shm` files when none exist, and, being read-only, never removes them, so doctor would leave them behind.
+ *
+ * - `-wal` and `-shm` both exist: the server is running, or crashed and left them. A plain read-only open creates
+ *   nothing new, and it reads the recent changes in the WAL, so the answers are current.
+ * - Otherwise nothing is running, so the file is opened immutable (`?immutable=1`): SQLite takes no locks and makes
+ *   no side files. That is only safe because nothing is writing; it would be wrong against a live server, which is
+ *   why that case never reaches it. The trade-off: an immutable open ignores a stray `-wal` that has no `-shm`
+ *   beside it, so that case says some recent changes weren't read.
+ */
+function openDatabase(path: string): { db: DatabaseSync; note?: string } {
+  if (existsSync(`${path}-wal`) && existsSync(`${path}-shm`)) return { db: new DatabaseSync(path, { readOnly: true }) };
+  const url = pathToFileURL(path);
+  url.search = "mode=ro&immutable=1";
+  const wal = existsSync(`${path}-wal`) ? statSync(`${path}-wal`).size : 0;
+  return { db: new DatabaseSync(url.href, { readOnly: true }), note: wal > 0 ? `${size(wal)} of recent changes in the -wal file weren't read.` : undefined };
 }
 
 function size(bytes: number): string {

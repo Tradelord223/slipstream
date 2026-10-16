@@ -16,8 +16,20 @@ import type { Actor } from "./commands/registry.ts";
 
 /** A mail-file import that is running now, so a reloaded client can tell the account is still filling. */
 export interface ImportProgress {
-  jobId: string;
+  accountId: string;
   imported: number;
+}
+
+/** Where an account's imports stand: filling while any of its jobs runs, with the messages stored so far across them. */
+export function importStatus(imports: AppContext["imports"], accountId: string): { importing: boolean; imported: number } {
+  let importing = false;
+  let imported = 0;
+  for (const job of imports.values()) {
+    if (job.accountId !== accountId) continue;
+    importing = true;
+    imported += job.imported;
+  }
+  return { importing, imported };
 }
 
 /** Everything a request handler might need, built once at boot. */
@@ -36,7 +48,7 @@ export interface AppContext {
   cloud: CloudAgent;
   autopilot: Autopilot;
   logos: SenderLogos;
-  /** Running imports by account id; an entry exists only while its job does. */
+  /** Running imports by job id (several can fill one account); an entry exists only while its job does. */
   imports: Map<string, ImportProgress>;
 }
 

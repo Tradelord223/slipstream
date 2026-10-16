@@ -3,7 +3,8 @@ import { api, ApiError } from "../../api.ts";
 import { useSession } from "../../store/session.ts";
 import type { Discovery } from "../../types.ts";
 import { Icon, Logo, type IconName } from "../Icon.tsx";
-import { domainOf, EMAIL_RE, GUIDE_URL, KIND_NAME, kindFromDiscovery, kindFromDomain, nameFromEmail, type Kind } from "./hosts.ts";
+import { domainOf } from "../../lib/format.ts";
+import { EMAIL_RE, GUIDE_URL, KIND_NAME, kindFromDiscovery, nameFromEmail, type Kind } from "./hosts.ts";
 import { ImportMail } from "./ImportMail.tsx";
 
 export interface Connected {
@@ -82,6 +83,7 @@ export function ConnectFlow({
   allowImport = false,
   footer,
   initial,
+  reconnect,
   onConnected,
   onBeforeOAuth,
   onClose,
@@ -95,6 +97,12 @@ export function ConnectFlow({
   footer?: ReactNode;
   /** Start on a provider's sign-in with a problem to show (Google or Microsoft sent the person back with an error). */
   initial?: { kind: Kind; error: string };
+  /**
+   * Sign in again to an existing password account. It opens on that account's sign-in with the address fixed, so the
+   * new password updates the same account instead of adding another. The preset is what it was connected with; an
+   * older account has none, and its provider is looked up from the address.
+   */
+  reconnect?: { email: string; name: string; preset: string | null };
   onConnected: (c: Connected) => void | Promise<void>;
   /** Called just before the browser leaves for Google or Microsoft. */
   onBeforeOAuth?: () => void;
@@ -104,24 +112,29 @@ export function ConnectFlow({
   const mode = useSession((s) => s.mode);
   const root = useRef<HTMLDivElement>(null);
 
-  const [step, setStep] = useState<Step>(initial ? "signin" : "email");
-  const [kind, setKind] = useState<Kind>(initial?.kind ?? "gmail");
-  const [email, setEmail] = useState("");
+  const presetKind = reconnect?.preset && reconnect.preset !== "other" && reconnect.preset !== "outlook" && Object.hasOwn(KIND_NAME, reconnect.preset) ? (reconnect.preset as Kind) : null;
+  const [step, setStep] = useState<Step>(initial || reconnect ? "signin" : "email");
+  const [kind, setKind] = useState<Kind>(initial?.kind ?? presetKind ?? (reconnect ? "other" : "gmail"));
+  const [email, setEmail] = useState(reconnect?.email ?? "");
+  // A reconnect to an account with no saved preset waits for the lookup of its provider.
+  const [resolving, setResolving] = useState(Boolean(reconnect) && !presetKind);
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [looking, setLooking] = useState(false);
   // Which address lookup is current; one that comes back after the person has moved on is dropped.
   const lookup = useRef(0);
   // The IMAP preset to send: the lookup's, or the chosen tile's. None for "Other" and for providers without one.
-  const [presetId, setPresetId] = useState<string | null>(null);
+  const [presetId, setPresetId] = useState<string | null>(presetKind);
   const [notice, setNotice] = useState("");
   const [presets, setPresets] = useState<Preset[]>([]);
 
-  const [name, setName] = useState<string | null>(null);
+  const [name, setName] = useState<string | null>(reconnect?.name || null);
   const [username, setUsername] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [reveal, setReveal] = useState(false);
   const [usePassword, setUsePassword] = useState(false);
   const [serversOpen, setServersOpen] = useState(false);
+  // The server names came from the domain's own DNS records: the person has to see them before a password goes there.
+  const [fromDns, setFromDns] = useState(false);
   const [server, setServer] = useState({ imapHost: "", imapPort: "993", imapSecure: true, smtpHost: "", smtpPort: "465", smtpSecure: true });
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState<"google" | "microsoft" | null>(null);
@@ -163,17 +176,36 @@ export function ConnectFlow({
     setPassword("");
     setReveal(false);
     setUsePassword(false);
+    const found = next === "other" ? serversFor(address, d) : null;
+    // Servers from SRV records are anyone's say-so (whoever runs the domain's DNS), unlike a known provider's or Zoho's
+    // regional hosts, so they are shown and never tucked away.
+    const dns = Boolean(found) && d?.source === "srv";
+    setFromDns(dns);
     if (next === "other") {
-      const found = serversFor(address, d);
       setServer(
         found
           ? { imapHost: found.imapHost, imapPort: String(found.imapPort), imapSecure: found.imapSecure, smtpHost: found.smtpHost, smtpPort: String(found.smtpPort), smtpSecure: found.smtpSecure }
           : { imapHost: "", imapPort: "993", imapSecure: true, smtpHost: "", smtpPort: "465", smtpSecure: true },
       );
-      setServersOpen(!found);
+      setServersOpen(!found || dns);
     }
     setStep("signin");
   };
+
+  useEffect(() => {
+    if (!reconnect || presetKind) return;
+    const id = ++lookup.current;
+    withTimeout(api.discover(reconnect.email), 8000)
+      .catch(() => null) // the lookup is a convenience: without it the server names are typed in
+      .then((found) => {
+        if (id !== lookup.current) return;
+        setResolving(false);
+        // Reconnecting a password account never switches it to Google or Microsoft sign-in, which would add a second account.
+        const next = found ? kindFromDiscovery(found) : "other";
+        enter(next === "outlook" ? "other" : next, found, reconnect.email);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const lookUp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -191,13 +223,11 @@ export function ConnectFlow({
     try {
       found = await withTimeout(api.discover(value), 8000);
     } catch {
-      found = null; // the lookup is a convenience; the provider tiles always work
+      found = null; // the server does the lookup, including for well-known domains; without it the provider tiles always work
     }
     if (id !== lookup.current) return; // the person picked a provider or changed the address meanwhile
     setLooking(false);
     if (found) return enter(kindFromDiscovery(found), found, value);
-    const known = kindFromDomain(value);
-    if (known) return enter(known, null, value);
     setNotice("We couldn't tell where this address's mail is kept. Choose your provider below.");
     requestAnimationFrame(() => root.current?.querySelector<HTMLElement>(".ob-tile")?.focus());
   };
@@ -208,6 +238,8 @@ export function ConnectFlow({
   };
 
   const back = () => {
+    // A reconnect has no earlier step to go back to.
+    if (reconnect) return onClose?.();
     abandonLookup();
     setStep("email");
     setErrors({});
@@ -380,7 +412,7 @@ export function ConnectFlow({
       </div>
       <div className="ob-tiles" role="group" aria-labelledby="ob-providers">
         {TILES.map((t) => (
-          <button key={t.kind} type="button" className="ob-tile" onClick={() => enter(t.kind, discovery && discovery.domain === domainOf(email) && kindFromDiscovery(discovery) === t.kind ? discovery : null)}>
+          <button key={t.kind} type="button" className="ob-tile" onClick={() => enter(t.kind, discovery && discovery.domain === domainOf(email.trim()) &&kindFromDiscovery(discovery) === t.kind ? discovery : null)}>
             <Icon name={t.icon} size={20} />
             <span>{t.label}</span>
           </button>
@@ -425,7 +457,7 @@ export function ConnectFlow({
 
   const oauthKind = kind === "gmail" ? "google" : kind === "outlook" ? "microsoft" : null;
   const oauthReady = kind === "gmail" ? googleReady : kind === "outlook" ? microsoftReady : false;
-  const showOAuth = oauthKind !== null && oauthReady && !usePassword;
+  const showOAuth = oauthKind !== null && oauthReady && !usePassword && !reconnect;
   const passwordForm = kind !== "outlook" && !showOAuth;
   const guide = GUIDES[kind];
   const label = kind === "other" ? "Your email account" : KIND_NAME[kind];
@@ -438,19 +470,107 @@ export function ConnectFlow({
     </p>
   );
 
+  const resolvingStep = (
+    <div data-step="signin" className="ob-step-pane">
+      <header className="ob-head">{heading(`Reconnect ${reconnect?.email ?? ""}`)}</header>
+      <p className="ob-status" role="status" aria-live="polite">
+        Checking your provider…
+      </p>
+    </div>
+  );
+
+  const serversBlock = kind === "other" && (
+    <div className="ob-disclosure">
+      {fromDns ? (
+        <>
+          <p className="ob-disclose-fixed">Mail servers</p>
+          <p className="form-hint" id="ob-servers-note">
+            These mail servers came from your domain's settings. Check they're right before you connect.
+          </p>
+        </>
+      ) : (
+        <button type="button" className="ob-disclose" aria-expanded={serversOpen} aria-controls="ob-servers" onClick={() => setServersOpen((o) => !o)}>
+          <Icon name={serversOpen ? "chevron-down" : "chevron-right"} size={14} /> Server settings
+        </button>
+      )}
+      {serversOpen && (
+        <div id="ob-servers" className="ob-servers">
+          {!discovery?.servers && <p className="form-hint">We couldn't find these automatically. Your provider lists them in its help pages.</p>}
+          <div className="ob-server-row">
+            <div className="ob-field">
+              <label htmlFor="ob-imap-host">IMAP server</label>
+              <input id="ob-imap-host" className="field" value={server.imapHost} onChange={(e) => setServer({ ...server, imapHost: e.target.value })} placeholder="imap.example.com" autoComplete="off" spellCheck={false} autoCapitalize="none" />
+            </div>
+            <div className="ob-field">
+              <label htmlFor="ob-imap-port">Port</label>
+              <input
+                id="ob-imap-port"
+                className="field num"
+                value={server.imapPort}
+                inputMode="numeric"
+                onChange={(e) => {
+                  const port = e.target.value.replace(/\D/g, "");
+                  const known = PORT_SECURE.imap[Number(port) as keyof typeof PORT_SECURE.imap];
+                  setServer({ ...server, imapPort: port, imapSecure: known ?? server.imapSecure });
+                }}
+              />
+            </div>
+          </div>
+          <div className="ob-server-row">
+            <div className="ob-field">
+              <label htmlFor="ob-smtp-host">SMTP server</label>
+              <input id="ob-smtp-host" className="field" value={server.smtpHost} onChange={(e) => setServer({ ...server, smtpHost: e.target.value })} placeholder="smtp.example.com" autoComplete="off" spellCheck={false} autoCapitalize="none" />
+            </div>
+            <div className="ob-field">
+              <label htmlFor="ob-smtp-port">Port</label>
+              <input
+                id="ob-smtp-port"
+                className="field num"
+                value={server.smtpPort}
+                inputMode="numeric"
+                onChange={(e) => {
+                  const port = e.target.value.replace(/\D/g, "");
+                  const known = PORT_SECURE.smtp[Number(port) as keyof typeof PORT_SECURE.smtp];
+                  setServer({ ...server, smtpPort: port, smtpSecure: known ?? server.smtpSecure });
+                }}
+              />
+            </div>
+          </div>
+          {errors.servers && (
+            <p className="ob-error" role="alert">
+              {errors.servers}
+            </p>
+          )}
+        </div>
+      )}
+      {!serversOpen && errors.servers && (
+        <p className="ob-error" role="alert">
+          {errors.servers}
+        </p>
+      )}
+    </div>
+  );
+
   const signinStep = (
     <div data-step="signin" className="ob-step-pane">
       <button type="button" className="btn btn-quiet btn-sm ob-back" onClick={back} disabled={busy}>
-        <Icon name="chevron-left" /> Back
+        {reconnect ? (
+          "Cancel"
+        ) : (
+          <>
+            <Icon name="chevron-left" /> Back
+          </>
+        )}
       </button>
       <header className="ob-head">
-        {heading(kind === "other" ? "Connect your email" : kind === "outlook" ? "Connect Outlook" : `Connect ${KIND_NAME[kind]}`)}
-        {kind === "gmail" && showOAuth && <p className="ob-lead">Sign in with Google and Slipstream takes it from there. A Google Workspace address works too.</p>}
-        {kind === "gmail" && !showOAuth && <p className="ob-lead">An app password lets Slipstream read and send your mail without your Google password. A Google Workspace address works the same way when Google offers app passwords for your account. If you don't see them, ask your administrator.</p>}
-        {kind === "outlook" && <p className="ob-lead">For Outlook.com, Hotmail and Microsoft 365 addresses.</p>}
-        {kind === "other" && <p className="ob-lead">Enter your address and password. Most providers need nothing else.</p>}
-        {(kind === "icloud" || kind === "yahoo" || kind === "fastmail" || kind === "zoho") && <p className="ob-lead">{label} asks for an app password: a separate password just for Slipstream.</p>}
-        {kind === "proton" && <p className="ob-lead">Proton Mail encrypts everything, so it connects through its Bridge app rather than a password.</p>}
+        {heading(reconnect ? `Reconnect ${reconnect.email}` : kind === "other" ? "Connect your email" : kind === "outlook" ? "Connect Outlook" : `Connect ${KIND_NAME[kind]}`)}
+        {reconnect && <p className="ob-lead">Enter the account's password again. Your mail stays as it is, and this account picks up where it left off.</p>}
+        {!reconnect && kind === "gmail" && showOAuth && <p className="ob-lead">Sign in with Google and Slipstream takes it from there. A Google Workspace address works too.</p>}
+        {!reconnect && kind === "gmail" && !showOAuth && <p className="ob-lead">An app password lets Slipstream read and send your mail without your Google password. A Google Workspace address works the same way when Google offers app passwords for your account. If you don't see them, ask your administrator.</p>}
+        {!reconnect && kind === "outlook" && <p className="ob-lead">For Outlook.com, Hotmail and Microsoft 365 addresses.</p>}
+        {!reconnect && kind === "other" && <p className="ob-lead">Enter your address and password. Most providers need nothing else.</p>}
+        {!reconnect && (kind === "icloud" || kind === "yahoo" || kind === "fastmail" || kind === "zoho") && <p className="ob-lead">{label} asks for an app password: a separate password just for Slipstream.</p>}
+        {!reconnect && kind === "proton" && <p className="ob-lead">Proton Mail encrypts everything, so it connects through its Bridge app rather than a password.</p>}
       </header>
 
       {generalError}
@@ -503,6 +623,7 @@ export function ConnectFlow({
               autoComplete="email"
               placeholder="you@example.com"
               value={email}
+              readOnly={Boolean(reconnect)}
               onChange={(e) => (setEmail(e.target.value), setErrors((x) => ({ ...x, email: undefined })))}
               aria-invalid={Boolean(errors.email)}
               aria-describedby={errors.email ? "ob-email-error" : undefined}
@@ -516,6 +637,9 @@ export function ConnectFlow({
               </p>
             )}
           </div>
+
+          {/* Servers found in the domain's DNS come before the password, so they're seen before it's typed. */}
+          {fromDns && serversBlock}
 
           {guide ? (
             <ol className="ob-steps">
@@ -582,68 +706,7 @@ export function ConnectFlow({
             <small className="form-hint">Shown on the mail you send.</small>
           </div>
 
-          {kind === "other" && (
-            <div className="ob-disclosure">
-              <button type="button" className="ob-disclose" aria-expanded={serversOpen} aria-controls="ob-servers" onClick={() => setServersOpen((o) => !o)}>
-                <Icon name={serversOpen ? "chevron-down" : "chevron-right"} size={14} /> Server settings
-              </button>
-              {serversOpen && (
-                <div id="ob-servers" className="ob-servers">
-                  {!discovery?.servers && <p className="form-hint">We couldn't find these automatically. Your provider lists them in its help pages.</p>}
-                  <div className="ob-server-row">
-                    <div className="ob-field">
-                      <label htmlFor="ob-imap-host">IMAP server</label>
-                      <input id="ob-imap-host" className="field" value={server.imapHost} onChange={(e) => setServer({ ...server, imapHost: e.target.value })} placeholder="imap.example.com" autoComplete="off" spellCheck={false} autoCapitalize="none" />
-                    </div>
-                    <div className="ob-field">
-                      <label htmlFor="ob-imap-port">Port</label>
-                      <input
-                        id="ob-imap-port"
-                        className="field num"
-                        value={server.imapPort}
-                        inputMode="numeric"
-                        onChange={(e) => {
-                          const port = e.target.value.replace(/\D/g, "");
-                          const known = PORT_SECURE.imap[Number(port) as keyof typeof PORT_SECURE.imap];
-                          setServer({ ...server, imapPort: port, imapSecure: known ?? server.imapSecure });
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div className="ob-server-row">
-                    <div className="ob-field">
-                      <label htmlFor="ob-smtp-host">SMTP server</label>
-                      <input id="ob-smtp-host" className="field" value={server.smtpHost} onChange={(e) => setServer({ ...server, smtpHost: e.target.value })} placeholder="smtp.example.com" autoComplete="off" spellCheck={false} autoCapitalize="none" />
-                    </div>
-                    <div className="ob-field">
-                      <label htmlFor="ob-smtp-port">Port</label>
-                      <input
-                        id="ob-smtp-port"
-                        className="field num"
-                        value={server.smtpPort}
-                        inputMode="numeric"
-                        onChange={(e) => {
-                          const port = e.target.value.replace(/\D/g, "");
-                          const known = PORT_SECURE.smtp[Number(port) as keyof typeof PORT_SECURE.smtp];
-                          setServer({ ...server, smtpPort: port, smtpSecure: known ?? server.smtpSecure });
-                        }}
-                      />
-                    </div>
-                  </div>
-                  {errors.servers && (
-                    <p className="ob-error" role="alert">
-                      {errors.servers}
-                    </p>
-                  )}
-                </div>
-              )}
-              {!serversOpen && errors.servers && (
-                <p className="ob-error" role="alert">
-                  {errors.servers}
-                </p>
-              )}
-            </div>
-          )}
+          {!fromDns && serversBlock}
 
           <button className="btn btn-primary btn-lg ob-wide" disabled={busy}>
             {busy ? "Checking…" : "Connect"}
@@ -659,7 +722,7 @@ export function ConnectFlow({
   return (
     <div className={`ob-flow ob-${variant}`} ref={root} onKeyDown={onKeyDown}>
       {step === "email" && emailStep}
-      {step === "signin" && signinStep}
+      {step === "signin" && (resolving ? resolvingStep : signinStep)}
       {step === "import" && importStep}
     </div>
   );

@@ -3,6 +3,7 @@ import { api } from "../api.ts";
 import { Snippet } from "../components/CopyBlock.tsx";
 import { ConnectFlow, type Connected } from "../components/connect/ConnectFlow.tsx";
 import { oauthErrorText, providerLabel, type Kind } from "../components/connect/hosts.ts";
+import { ImportMail } from "../components/connect/ImportMail.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import { Icon, Logo } from "../components/Icon.tsx";
 import { claudeCodeCommand, cliCommand, stdioConfig } from "../lib/connect.ts";
@@ -10,18 +11,18 @@ import { connectEvents, disconnectEvents, useImportJob, useSyncFetched } from ".
 import { getRoute, navigate, useRoute } from "../store/route.ts";
 import { finishOnboarding, markOnboarding, realAccounts, refreshSession, signOut, useSession } from "../store/session.ts";
 import { toast } from "../store/toasts.ts";
-import type { Account } from "../types.ts";
+import type { Account, SyncProgress } from "../types.ts";
 
 type Phase = "connect" | "progress" | "personalize";
 
 /** What the address bar says when Google or Microsoft sends the person back. */
-function returnTrip(): { connected: boolean; error: string | null; kind: Kind | null } {
+function returnTrip(): { error: string | null; kind: Kind | null } {
   const q = new URLSearchParams(location.search);
   const error = q.get("error");
   // The server names the provider on every return; the guesses are for a server that doesn't.
   const provider = q.get("provider");
   const where = provider === "microsoft" ? "outlook" : provider === "google" ? "gmail" : error?.startsWith("microsoft") || q.get("connected") === "microsoft" ? "outlook" : "gmail";
-  return { connected: Boolean(q.get("connected")), error, kind: error ? where : null };
+  return { error, kind: error ? where : null };
 }
 
 /**
@@ -110,7 +111,7 @@ export function OnboardingView() {
             }
           />
         )}
-        {phase === "progress" && accountId && <Arriving accountId={accountId} onOpen={openInbox} onStartOver={() => setPhase("connect")} />}
+        {phase === "progress" && accountId && <Arriving accountId={accountId} onOpen={openInbox} onStartOver={() => setPhase("connect")} onSwitch={setAccountId} />}
         {phase === "personalize" && <MakeItYours onFinish={leave} />}
         {mode === "team" && (
           <div className="ob-foot">
@@ -140,12 +141,14 @@ function milestone(count: number, archive: boolean): string {
   return `More than ${(Math.floor(count / 500) * 500 || 100).toLocaleString("en-US")} messages so far.`;
 }
 
-function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpen: () => void; onStartOver: () => void }) {
-  const account = useSession((s) => s.accounts.find((a) => a.id === accountId));
+function Arriving({ accountId, onOpen, onStartOver, onSwitch }: { accountId: string; onOpen: () => void; onStartOver: () => void; onSwitch: (accountId: string) => void }) {
+  // `progress` is the server's own count for the stage a sync is in; the account type doesn't carry it yet.
+  const account = useSession((s) => s.accounts.find((a) => a.id === accountId)) as (Account & { progress?: SyncProgress | null }) | undefined;
   const fetched = useSyncFetched(accountId);
   const job = useImportJob();
   const [retrying, setRetrying] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [choosing, setChoosing] = useState(false);
 
   const archive = account?.provider === "archive";
   const mine = job && job.accountId === accountId ? job : null;
@@ -166,11 +169,13 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
   const done = Boolean(account && (archive ? mine?.status === "done" || (account.firstSyncedAt && account.importing !== true) : account.firstSyncedAt));
   // The count is for this view's own run. After a reload there is no run to count, only an import's stored total.
   const running = !done && !problem && (archive ? mine?.status === "running" || account?.importing === true : account?.syncStatus === "syncing");
-  const count = archive ? (mine?.imported ?? account?.imported ?? 0) : fetched;
+  // The server's own count (kept current by the stream and by the poll below) when it sends one, else what the stream reported.
+  const count = archive ? (mine?.imported ?? account?.imported ?? 0) : account?.progress ? account.progress.done : fetched;
   const shown = running ? count : 0;
   const ready = !problem && (done || count > 0);
 
-  // The event stream is the fast path; asking now and then covers a stream that dropped.
+  // The event stream is the fast path; asking now and then covers a stream that dropped. The answer carries the
+  // progress numbers too, so the count keeps moving without it.
   useEffect(() => {
     if (done || problem) return;
     const t = setInterval(() => void refreshSession(), 4000);
@@ -178,9 +183,11 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
   }, [done, problem]);
 
   const retry = async () => {
+    // A sync can be asked again; an import needs its file, so the person chooses it again.
+    if (archive) return setChoosing(true);
     setRetrying(true);
     try {
-      if (!archive) await api.syncAccount(accountId);
+      await api.syncAccount(accountId);
       await refreshSession();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't start a sync");
@@ -201,6 +208,21 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
       toast.error(err instanceof Error ? err.message : "Couldn't remove that account");
       setRemoving(false);
     }
+  };
+
+  // The file was chosen again. With no address given, the archive is named after the file, so a different file starts a
+  // different account; the failed one is removed so it isn't left behind as a half-empty mailbox.
+  const restarted = async (newId: string) => {
+    if (newId !== accountId) {
+      try {
+        await api.removeAccount(accountId);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't remove the failed import");
+      }
+    }
+    await refreshSession();
+    onSwitch(newId);
+    setChoosing(false);
   };
 
   const differentAccount = (
@@ -236,12 +258,23 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
           <p className="form-error" role="alert">
             {problem}
           </p>
-          <div className="ob-actions">
-            <button className="btn btn-primary btn-lg" onClick={() => void retry()} disabled={retrying || removing}>
-              {retrying ? "Trying…" : "Try again"}
-            </button>
-            {differentAccount}
-          </div>
+          {archive && choosing ? (
+            <>
+              <ImportMail defaultOwner={account && !account.email.endsWith("@import.local") ? account.email : ""} onStarted={restarted} autoFocus />
+              <div className="ob-actions">
+                <button className="btn btn-quiet btn-lg" onClick={() => setChoosing(false)}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="ob-actions">
+              <button className="btn btn-primary btn-lg" onClick={() => void retry()} disabled={retrying || removing}>
+                {retrying ? "Trying…" : "Try again"}
+              </button>
+              {differentAccount}
+            </div>
+          )}
         </>
       ) : (
         <>

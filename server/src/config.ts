@@ -60,7 +60,8 @@ export function microsoftApp(mode: Mode, builtInClientId = BUILT_IN_MICROSOFT_CL
   return { clientId: undefined, clientSecret: env("MICROSOFT_CLIENT_SECRET"), tenant };
 }
 
-export function loadConfig(overrides: Partial<Config> = {}): Config {
+/** The settings, worked out from the environment. Creates nothing on disk; `slipstream doctor` uses this so it leaves the machine as it found it. */
+export function readConfig(overrides: Partial<Config> = {}): Config {
   const mode: Mode = env("SLIPSTREAM_MODE") === "team" ? "team" : "local";
   const port = Number(env("PORT") ?? env("SLIPSTREAM_PORT") ?? 4380);
   // Local mode never listens beyond loopback: it holds mail credentials and has no login.
@@ -72,7 +73,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
   allowedHosts.add(new URL(publicUrl).host);
   for (const h of (env("SLIPSTREAM_ALLOWED_HOSTS") ?? "").split(",")) if (h.trim()) allowedHosts.add(h.trim());
 
-  const config: Config = {
+  return {
     mode,
     host,
     port,
@@ -93,6 +94,11 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     sourceUrl: env("SLIPSTREAM_SOURCE_URL") ?? "https://github.com/Tradelord223/slipstream",
     ...overrides,
   };
+}
+
+/** The settings, with the data folder created if it isn't there yet. */
+export function loadConfig(overrides: Partial<Config> = {}): Config {
+  const config = readConfig(overrides);
   mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
   return config;
 }

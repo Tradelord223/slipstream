@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
-import { loadConfig, type Config } from "../src/config.ts";
+import { loadConfig, readConfig, type Config } from "../src/config.ts";
+import { Db } from "../src/db/index.ts";
 import { formatReport, runDoctor, type DoctorOptions } from "../src/doctor.ts";
 import { addAccount, makeEnv } from "./helpers.ts";
 
@@ -34,6 +36,56 @@ describe("slipstream doctor", () => {
     const { existsSync } = await import("node:fs");
     assert.ok(!existsSync(join(dir, "secret.key")), "doctor never creates the key");
     assert.ok(!existsSync(join(dir, "slipstream.db")), "or the database");
+  });
+
+  test("with no data folder it says so and does not create one", async () => {
+    const parent = freshDir();
+    const dir = join(parent, "not-yet");
+    const r = await runDoctor(readConfig({ dataDir: dir, dbPath: join(dir, "slipstream.db") }), offline);
+    assert.equal(byId(r, "data-dir")!.status, "info");
+    assert.equal(byId(r, "data-dir")!.title, "No data folder yet");
+    assert.equal(r.summary.fail, 0);
+    assert.ok(!existsSync(dir), "doctor never creates the data folder");
+    assert.deepEqual(readdirSync(parent), []);
+  });
+
+  test("checking a stopped install with a WAL database leaves no side files", async () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "slipstream.db");
+    const db = new Db(dbPath);
+    db.close(); // the last connection closing folds the WAL in and removes -wal and -shm
+    assert.deepEqual(readdirSync(dir), ["slipstream.db"]);
+    const r = await runDoctor(readConfig({ dataDir: dir, dbPath }), offline);
+    assert.equal(byId(r, "database")!.status, "ok", formatReport(r));
+    assert.match(byId(r, "database")!.title, /up to date, no damage found/);
+    assert.deepEqual(readdirSync(dir), ["slipstream.db"], "no -wal or -shm appeared");
+  });
+
+  test("after a crash, the leftover WAL is read and left exactly as it was", async () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "slipstream.db");
+    // A process that writes an account and is killed before it can fold the WAL in.
+    const script = join(freshDir(), "crash.ts");
+    writeFileSync(
+      script,
+      `import { Db } from ${JSON.stringify(join(import.meta.dirname, "..", "src", "db", "index.ts"))};
+       const db = new Db(process.argv[2]);
+       db.run("INSERT INTO users (id, email, name, created_at) VALUES ('usr_x', 'x@example.test', 'X', 0)");
+       db.run("INSERT INTO accounts (id, user_id, provider, email, created_at) VALUES ('acc_x', 'usr_x', 'imap', 'crash@example.test', 0)");
+       process.kill(process.pid, "SIGKILL");`,
+    );
+    try {
+      execFileSync(process.execPath, [script, dbPath], { stdio: "pipe" });
+    } catch {
+      /* killed on purpose */
+    }
+    const before = readdirSync(dir).sort();
+    assert.ok(before.includes("slipstream.db-wal") && before.includes("slipstream.db-shm"), `the crash left its side files: ${before}`);
+    const walSize = statSync(`${dbPath}-wal`).size;
+    const r = await runDoctor(readConfig({ dataDir: dir, dbPath }), offline);
+    assert.equal(byId(r, "accounts")!.title, "1 mail account in good shape", "the account that lives only in the WAL is seen");
+    assert.deepEqual(readdirSync(dir).sort(), before);
+    assert.equal(statSync(`${dbPath}-wal`).size, walSize);
   });
 
   test("a working install with accounts in good shape", async () => {
@@ -121,20 +173,31 @@ describe("slipstream doctor", () => {
     assert.equal(byId(good, "backups")!.status, "ok");
   });
 
-  test("the CLI prints JSON for scripts and exits 1 only when something fails", () => {
-    const dir = freshDir();
+  test("the CLI prints JSON for scripts and exits 1 only when something fails, and creates nothing", async () => {
+    // A data folder that doesn't exist yet: running doctor must not make it.
+    const dir = join(freshDir(), "no-folder-yet");
     const cli = join(import.meta.dirname, "..", "src", "cli.ts");
-    const out = execFileSync(process.execPath, [cli, "doctor", "--json"], { env: { ...process.env, SLIPSTREAM_DATA_DIR: dir, SLIPSTREAM_PORT: "4977" }, encoding: "utf8" });
+    // A port nobody holds right now, and only the variables this test sets: nothing from the machine running the tests.
+    const port = await new Promise<number>((resolve) => {
+      const s = createServer();
+      s.listen(0, "127.0.0.1", () => {
+        const { port } = s.address() as { port: number };
+        s.close(() => resolve(port));
+      });
+    });
+    const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? dir, SLIPSTREAM_DATA_DIR: dir, SLIPSTREAM_PORT: String(port) };
+    const out = execFileSync(process.execPath, [cli, "doctor", "--json"], { env, encoding: "utf8" });
     const report = JSON.parse(out) as { summary: { fail: number }; checks: { id: string }[] };
     assert.equal(report.summary.fail, 0);
     assert.ok(report.checks.some((c) => c.id === "node"));
     // A team server with no public address fails, and says so in the exit code.
     let code = 0;
     try {
-      execFileSync(process.execPath, [cli, "doctor"], { env: { ...process.env, SLIPSTREAM_DATA_DIR: dir, SLIPSTREAM_PORT: "4977", SLIPSTREAM_MODE: "team", SLIPSTREAM_PUBLIC_URL: "", FLY_APP_NAME: "", RENDER_EXTERNAL_URL: "", RAILWAY_PUBLIC_DOMAIN: "" }, encoding: "utf8", stdio: "pipe" });
+      execFileSync(process.execPath, [cli, "doctor"], { env: { ...env, SLIPSTREAM_MODE: "team" }, encoding: "utf8", stdio: "pipe" });
     } catch (err) {
       code = (err as { status: number }).status;
     }
     assert.equal(code, 1);
+    assert.ok(!existsSync(dir), "neither run created the data folder");
   });
 });

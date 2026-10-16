@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agents, type Scope } from "./agents/agents.ts";
 import { LOCAL_USER_ID, Users } from "./auth/users.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, readConfig } from "./config.ts";
 import { Db } from "./db/index.ts";
 import { formatReport, runDoctor } from "./doctor.ts";
 
@@ -123,7 +123,7 @@ async function runCommand(argv: string[]) {
 }
 
 async function runDoctorCommand(args: string[]) {
-  const report = await runDoctor(loadConfig());
+  const report = await runDoctor(readConfig());
   console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatReport(report, Boolean(process.stdout.isTTY) && !process.env.NO_COLOR));
   if (report.summary.fail > 0) process.exitCode = 1;
 }

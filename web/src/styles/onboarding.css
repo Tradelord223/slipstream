@@ -343,6 +343,11 @@
 .ob-disclose:hover {
   color: var(--text);
 }
+.ob-disclose-fixed {
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
 .ob-servers {
   display: grid;
   gap: 12px;

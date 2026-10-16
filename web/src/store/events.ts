@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../types.ts";
+import type { ServerEvent, SyncProgress } from "../types.ts";
 import { bumpActivity, refreshApprovals } from "./agents.ts";
 import { refreshAutopilot } from "./autopilot.ts";
 import { cloudRunChanged, refreshCloud } from "./cloud.ts";
@@ -70,13 +70,8 @@ export function disconnectEvents() {
   source = null;
 }
 
-// The stream is bound to the person who opened it, so it closes when the session goes back to signing in (sign-out, an
-// expired cookie). It lives here rather than in signOut because session.ts can't import this file: compose.ts
-// subscribes to the session while it loads, and the cycle would reach it first.
-session.subscribe(() => {
-  const status = session.get().status;
-  if (status === "signin" || status === "setup") disconnectEvents();
-});
+// The stream is bound to the person who opened it. It closes when the screen that opened it goes: Shell and
+// OnboardingView both close it as they unmount, and signing out or an expired cookie replaces them with the sign-in.
 
 function handle(e: ServerEvent) {
   switch (e.type) {
@@ -91,6 +86,8 @@ function handle(e: ServerEvent) {
         const fetched = e.fetched;
         syncProgress.set((s) => ({ ...s, [e.accountId]: fetched }));
       }
+      // The web event type doesn't list `progress` yet; the server sends it with each sync event.
+      const { progress } = e as { progress?: SyncProgress };
       const accounts = session.get().accounts.map((a) =>
         a.id === e.accountId
           ? {
@@ -98,6 +95,8 @@ function handle(e: ServerEvent) {
               syncStatus: e.status,
               syncError: e.error ?? null,
               lastSyncedAt: e.status === "idle" ? Date.now() : a.lastSyncedAt,
+              // The server's count for the stage a sync is in, when it sends one (see Arriving).
+              ...(progress ? { progress } : {}),
             }
           : a,
       );

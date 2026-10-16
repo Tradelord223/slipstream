@@ -294,7 +294,7 @@ export class SenderLogos {
     const cancel = this.schedule(() => {
       this.pending.delete(domain);
       // Re-check at the moment of the fetch: the person may have switched logos off in the meantime.
-      if (this.fetchingAllowed(userId)) void this.fetchNow(domain);
+      if (this.fetchingAllowed(userId)) this.fetchNow(domain).catch((err) => console.error("[slipstream] sender logo:", err));
     }, this.delayMs());
     this.pending.set(domain, cancel);
   }
