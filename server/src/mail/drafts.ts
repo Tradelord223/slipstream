@@ -198,10 +198,14 @@ export function cancelSend(ctx: AppContext, userId: string, id: string) {
   return getDraft(ctx, userId, id);
 }
 
-/** Who a draft goes to, for approval previews and the "external" policy. */
+/**
+ * Who a draft goes to, for approval previews and the "external" policy. `from` is the address it will go out as
+ * (an agent may have chosen an alias); `accountEmail` is the account's own address, the only trustworthy
+ * answer to "which organisation is this?".
+ */
 export function draftRecipients(ctx: AppContext, userId: string, id: string) {
   const d = draftRow(ctx, userId, id);
-  const from = d.from_email ?? ctx.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ?", d.account_id)!.email;
+  const accountEmail = ctx.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ?", d.account_id)!.email;
   const all = [...JSON.parse(d.to_json), ...JSON.parse(d.cc_json), ...JSON.parse(d.bcc_json)] as { email: string }[];
-  return { draft: d, from, emails: all.map((a) => a.email) };
+  return { draft: d, from: d.from_email ?? accountEmail, accountEmail, emails: all.map((a) => a.email) };
 }

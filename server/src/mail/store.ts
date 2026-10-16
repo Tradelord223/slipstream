@@ -5,6 +5,7 @@ import { newId, sha256 } from "../lib/crypto.ts";
 import { baseSubject, htmlToText, makeSnippet } from "../lib/text.ts";
 import { categorize, isBulkMessage } from "./classify.ts";
 import { ownAddresses } from "./identities.ts";
+import { registrableDomain } from "./logos.ts";
 import { scanSignals, topSignal } from "./signals.ts";
 import type { Address, FlagUpdate, IncomingMessage, SyncPage, ThreadRef } from "./types.ts";
 
@@ -157,8 +158,10 @@ export class MailStore {
       return existing.thread_id;
     }
 
-    // Providers only know the account's main address; mail sent from an alias or custom domain is ours too.
-    const outgoing = Boolean(m.outgoing) || ownAddresses(this.db, account.id).has(m.from.email.toLowerCase());
+    // Providers say whether a message is ours from where it lives (Sent folder or label), and that answer wins:
+    // a From header is whatever the sender typed, so an inbound message From one of our aliases stays inbound.
+    // Only a message the provider couldn't classify falls back to comparing the From with our own addresses.
+    const outgoing = m.outgoing ?? ownAddresses(this.db, account.id).has(m.from.email.toLowerCase());
     const threadId = this.resolveThread(account.id, m);
     const bodyText = m.bodyText || (m.bodyHtml ? htmlToText(m.bodyHtml) : "");
     const snippet = m.snippet ? makeSnippet(m.snippet) : makeSnippet(bodyText);
@@ -172,8 +175,8 @@ export class MailStore {
     const res = this.db.run(
       `INSERT INTO messages (id, thread_id, account_id, remote_id, message_id_header, in_reply_to, refs,
         from_name, from_email, to_json, cc_json, bcc_json, reply_to, subject, sent_at, snippet, body_text, body_html,
-        unread, starred, in_inbox, in_trash, in_spam, outgoing, list_unsubscribe, is_bulk, signals, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        unread, starred, in_inbox, in_trash, in_spam, outgoing, list_unsubscribe, is_bulk, signals, created_at, sender_domain)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       threadId,
       account.id,
@@ -202,6 +205,7 @@ export class MailStore {
       isBulk ? 1 : 0,
       json(signals),
       now,
+      registrableDomain(m.from.email) ?? "",
     );
 
     this.db.run(

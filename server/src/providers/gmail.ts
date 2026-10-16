@@ -258,8 +258,8 @@ export class GmailProvider implements MailProvider {
       selfEmail: this.ctx.email,
       receivedAt: m.internalDate ? Number(m.internalDate) : undefined,
     });
-    // Mail sent from an alias still carries the SENT label.
-    if (folders.sent) message.outgoing = true;
+    // Ours means "carries the SENT label" (aliases included), never "the From header says so": anyone can write a From.
+    message.outgoing = folders.sent;
     return message;
   }
 

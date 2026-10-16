@@ -113,12 +113,15 @@ export function accountRoutes(ctx: AppContext) {
   // ---- Send-as identities --------------------------------------------------
 
   const emailField = z.string().trim().toLowerCase().max(320).pipe(z.email());
-  const identityBody = z.object({
+  const identityFields = {
     email: emailField,
-    name: z.string().trim().max(120).default(""),
+    name: z.string().trim().max(120),
     replyTo: emailField.nullable().optional(),
     signatureHtml: z.string().max(100_000).nullable().optional(),
-  });
+  };
+  const identityBody = z.object({ ...identityFields, name: identityFields.name.default("") });
+  // No defaults here: a field left out of a PATCH must stay as it is.
+  const identityPatch = z.object(identityFields).partial();
 
   app.post("/accounts/:id/identities", async (c) => {
     const body = identityBody.parse(await c.req.json());
@@ -126,7 +129,7 @@ export function accountRoutes(ctx: AppContext) {
   });
 
   app.patch("/accounts/:id/identities/:identityId", async (c) => {
-    const body = identityBody.partial().parse(await c.req.json());
+    const body = identityPatch.parse(await c.req.json());
     return c.json(updateIdentity(db, c.get("user").id, c.req.param("id"), c.req.param("identityId"), body));
   });
 

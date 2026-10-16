@@ -463,7 +463,8 @@ async function toIncoming(
     selfEmail,
     receivedAt: fm.internalDate ? new Date(fm.internalDate).getTime() : undefined,
   });
-  if (s.folders.sent) message.outgoing = true;
+  // Ours means "in the Sent folder" (aliases included), never "the From header says so": anyone can write a From.
+  message.outgoing = Boolean(s.folders.sent);
   return message;
 }
 

@@ -107,6 +107,18 @@ describe("Graph delta sync", () => {
     assert.equal(stub.callsTo("GET", delta("archive")).length, 1);
   });
 
+  it("calls a message ours because of the folder it is in, never because of its From header", async () => {
+    stub = new FetchStub();
+    folderRoutes(stub, {
+      inbox: [msg("forged", { from: { emailAddress: { name: "Me", address: "me@example.com" } } })],
+      sentitems: [msg("aliased", { from: { emailAddress: { name: "Help", address: "help@example.com" } } })],
+    });
+    const { graph } = newProvider();
+    const all = (await syncAll(graph)).pages.flatMap((p) => p.messages);
+    assert.equal(all.find((m) => m.remoteId === "forged")!.outgoing, false, "anyone can put our address in a From");
+    assert.equal(all.find((m) => m.remoteId === "aliased")!.outgoing, true, "mail in Sent Items is ours, whatever alias it went out as");
+  });
+
   it("maps a message to the normalized shape", async () => {
     stub = new FetchStub();
     folderRoutes(stub, {

@@ -283,7 +283,8 @@ export class GraphProvider implements MailProvider {
       starred: m.flag?.flagStatus === "flagged",
       folders,
       labels: (m.categories ?? []).map((name) => ({ remoteId: `cat:${name}`, name })),
-      outgoing: from.email !== "" && from.email === this.ctx.email.toLowerCase(),
+      // Ours means "in Sent Items" (aliases included), never "the From header says so": anyone can write a From.
+      outgoing: folders.sent,
       attachments: m.hasAttachments ? await this.attachments(m.id) : [],
     };
   }

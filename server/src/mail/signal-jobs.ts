@@ -1,4 +1,5 @@
 import type { AppContext } from "../context.ts";
+import { registrableDomain } from "./logos.ts";
 import { scanSignals } from "./signals.ts";
 
 /** Background work behind everyday signals: scanning mail that predates them, and tidying superseded delivery updates. */
@@ -48,7 +49,27 @@ export async function backfillSignals(ctx: AppContext, opts: { batch?: number; s
   return scanned;
 }
 
-const WATERMARK_KEY = "bundle:deliveriesAt";
+/**
+ * Fill in messages.sender_domain (the indexed domain behind sender logos) for mail stored before it existed.
+ * Same shape as the signals backfill: small batches, yielding between them, and every row gets a value
+ * ('' when the address has no registrable domain), so a second run finds nothing to do.
+ */
+export async function backfillSenderDomains(ctx: AppContext, opts: { batch?: number; signal?: AbortSignal } = {}): Promise<number> {
+  const batch = opts.batch ?? 1000;
+  let filled = 0;
+  while (!opts.signal?.aborted) {
+    const rows = ctx.db.all<{ id: string; from_email: string }>("SELECT id, from_email FROM messages WHERE sender_domain IS NULL LIMIT ?", batch);
+    if (rows.length === 0) break;
+    ctx.db.tx(() => {
+      for (const r of rows) ctx.db.run("UPDATE messages SET sender_domain = ? WHERE id = ?", registrableDomain(r.from_email) ?? "", r.id);
+    });
+    filled += rows.length;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  return filled;
+}
+
+const WATERMARK_KEY ="bundle:deliveriesAt";
 const STARTED_AT = Date.now();
 /** Only updates sent in the last few days count as arriving. A newly connected account or an import stores old mail as "new". */
 const FRESH_MS = 3 * 86_400_000;

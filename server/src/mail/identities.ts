@@ -87,6 +87,8 @@ export function resolveFrom(db: Db, accountId: string, fromEmail?: string | null
 /**
  * The identity a message was addressed to, for reply defaults. `addressedTo` is the original's To and Cc in
  * order; the first one that is an identity wins. Null when it was sent to the account's own address or to no identity.
+ * Only reply drafts use this, and those are never sent without the person or an approval; answering from the
+ * address you were written to is what every mainstream client does.
  */
 export function replyIdentity(db: Db, accountId: string, addressedTo: string[]): string | null {
   const wanted = addressedTo.map((a) => a.trim().toLowerCase()).filter(Boolean);

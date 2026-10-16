@@ -3,6 +3,7 @@ import { after, before, describe, test } from "node:test";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
 import type { Actor } from "../src/commands/registry.ts";
 import { createDraft, draftRecipients, sendDraft } from "../src/mail/drafts.ts";
+import { unsubscribe } from "../src/mail/unsubscribe.ts";
 import { addIdentity, listIdentities, ownAddresses, replyIdentity, resolveFrom, syncProviderIdentities } from "../src/mail/identities.ts";
 import type { AccountRow } from "../src/mail/store.ts";
 import { addAccount, makeEnv, msg, type TestEnv } from "./helpers.ts";
@@ -45,7 +46,13 @@ describe("managing identities", () => {
     assert.equal(edited.signatureHtml, null);
     assert.equal(edited.email, ALIAS, "fields left out stay");
 
+    const reply = await (await patch(env, `/api/accounts/${acc}/identities/${made.id}`, { replyTo: "Desk@fernpoint.test" })).json();
+    assert.equal(reply.name, "Help desk", "a PATCH that only sets the reply-to keeps the display name");
+    assert.equal(reply.replyTo, "desk@fernpoint.test");
+    await patch(env, `/api/accounts/${acc}/identities/${made.id}`, { replyTo: null });
+
     const renamed = await (await patch(env, `/api/accounts/${acc}/identities/${made.id}`, { email: "support@fernpoint.test" })).json();
+    assert.equal(renamed.name, "Help desk");
     assert.equal(renamed.email, "support@fernpoint.test");
 
     const gone = await env.api(`/api/accounts/${acc}/identities/${made.id}`, { method: "DELETE" });
@@ -170,6 +177,19 @@ describe("who a message may be sent as", () => {
     assert.equal(draftRecipients(env.ctx, LOCAL_USER_ID, d.id).from, ALIAS);
   });
 
+  test("an approval preview shows where replies will go", async () => {
+    const bot = agent(["read", "draft", "send"]);
+    const preview = async (fromEmail?: string) => {
+      const d = createDraft(env.ctx, LOCAL_USER_ID, { ...body(fromEmail ? { fromEmail } : {}), to: [{ name: "", email: "ana@kettleby.test" }], cc: [], bcc: [] } as never);
+      const res = await env.ctx.commands.execute(bot, "drafts.send", { draftId: d.id });
+      return env.ctx.db.get<{ preview: string }>("SELECT preview FROM approvals WHERE id = ?", (res as { approvalId: string }).approvalId)!.preview;
+    };
+    const viaAlias = await preview(ALIAS);
+    assert.match(viaAlias, /^From: Fernpoint Help <help@fernpoint\.test>\nReply-To: desk@fernpoint\.test\nTo: /);
+    assert.match(viaAlias, /\n\nHi$/, "a blank line still separates the headers from the text");
+    assert.doesNotMatch(await preview(), /Reply-To/, "the account's own address has none");
+  });
+
   test("replies default to the address the original was sent to; reply-all leaves all your addresses off", async () => {
     const bot = agent(["read", "draft"]);
     const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
@@ -203,11 +223,11 @@ describe("mail sent from an alias", () => {
   });
   after(() => env.cleanup());
 
-  test("is outgoing even when the provider says it isn't", () => {
+  test("is outgoing when the provider says so, whichever alias it went out as", () => {
     const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
     const ann = { name: "Ann", email: "ann@kettleby.test" };
     env.ctx.store.ingest(account, {
-      messages: [msg({ from: { name: "Fernpoint Support", email: "Support@Fernpoint.test" }, to: [ann], outgoing: false, subject: "Your order", remoteThreadId: "t1", unread: false, folders: { inbox: false, sent: true, trash: false, spam: false } })],
+      messages: [msg({ from: { name: "Fernpoint Support", email: "Support@Fernpoint.test" }, to: [ann], outgoing: true, subject: "Your order", remoteThreadId: "t1", unread: false, folders: { inbox: false, sent: true, trash: false, spam: false } })],
       cursor: null,
       done: false,
     });
@@ -224,6 +244,111 @@ describe("mail sent from an alias", () => {
     assert.deepEqual(JSON.parse(t.participants).map((p: { email: string }) => p.email), ["ann@kettleby.test"], "your own addresses aren't listed as participants");
     const contacts = env.ctx.db.all<{ email: string; sent_count: number; received_count: number }>("SELECT email, sent_count, received_count FROM contacts WHERE account_id = ?", acc);
     assert.deepEqual(contacts.map((c) => ({ ...c })), [{ email: "ann@kettleby.test", sent_count: 1, received_count: 0 }], "the recipient counts as sent to; you don't become your own contact");
+  });
+
+  test("mail the provider calls inbound stays inbound even when its From is one of our aliases", () => {
+    const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
+    env.ctx.store.ingest(account, {
+      messages: [
+        msg({
+          from: { name: "Fernpoint Support", email: "support@fernpoint.test" },
+          to: [{ name: "Sam", email: ME }, { name: "Victim", email: "victim@elsewhere.test" }],
+          outgoing: false,
+          subject: "Forged",
+          remoteThreadId: "forged",
+        }),
+      ],
+      cursor: null,
+      done: false,
+    });
+    const m = env.ctx.db.get<{ outgoing: number }>("SELECT outgoing FROM messages WHERE subject = 'Forged'")!;
+    assert.equal(m.outgoing, 0);
+    const t = env.ctx.db.get<{ in_sent: number; last_outbound_at: number | null; last_inbound_at: number | null }>("SELECT in_sent, last_outbound_at, last_inbound_at FROM threads WHERE remote_id = 'forged'")!;
+    assert.equal(t.in_sent, 0);
+    assert.equal(t.last_outbound_at, null);
+    assert.ok(t.last_inbound_at);
+    assert.deepEqual(env.ctx.db.all("SELECT email FROM contacts WHERE account_id = ? AND sent_count > 0 AND email IN ('victim@elsewhere.test', ?)", acc, ME), [], "nobody becomes someone you have written to");
+  });
+
+  test("mail in the Sent folder from an alias counts as outgoing", () => {
+    const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
+    env.ctx.store.ingest(account, {
+      messages: [msg({ from: { name: "Fernpoint Support", email: "support@fernpoint.test" }, to: [{ name: "Bo", email: "bo@kettleby.test" }], outgoing: true, subject: "Sent copy", remoteThreadId: "sent-copy", unread: false, folders: { inbox: false, sent: true, trash: false, spam: false } })],
+      cursor: null,
+      done: false,
+    });
+    assert.equal(env.ctx.db.get<{ outgoing: number }>("SELECT outgoing FROM messages WHERE subject = 'Sent copy'")!.outgoing, 1);
+    assert.equal(env.ctx.db.get<{ sent_count: number }>("SELECT sent_count FROM contacts WHERE account_id = ? AND email = 'bo@kettleby.test'", acc)!.sent_count, 1);
+  });
+
+  test("a provider that can't tell falls back to our own addresses, aliases included", () => {
+    const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
+    env.ctx.store.ingest(account, {
+      messages: [msg({ from: { name: "Fernpoint Support", email: "support@fernpoint.test" }, outgoing: undefined, subject: "Unclassified", remoteThreadId: "unclassified" })],
+      cursor: null,
+      done: false,
+    });
+    assert.equal(env.ctx.db.get<{ outgoing: number }>("SELECT outgoing FROM messages WHERE subject = 'Unclassified'")!.outgoing, 1);
+  });
+});
+
+describe("the external send policy", () => {
+  let env: TestEnv;
+  before(() => {
+    env = makeEnv();
+  });
+  after(() => env.cleanup());
+
+  const agent = (name: string): Actor => ({ kind: "agent", user: env.ctx.users.get(LOCAL_USER_ID)!, agent: env.ctx.agents.create(LOCAL_USER_ID, name, ["read", "draft", "send"], { send: "external" }).agent });
+  const send = async (bot: Actor, accountId: string, fromEmail: string | undefined, to: string[]) => {
+    const made = await env.ctx.commands.execute(bot, "drafts.create", { accountId, to, body: "Hello", fromEmail });
+    return env.ctx.commands.execute(bot, "drafts.send", { draftId: (made as { result: { id: string } }).result.id });
+  };
+  const reason = (res: { status: string; approvalId?: string }) => env.ctx.db.get<{ reason: string }>("SELECT reason FROM approvals WHERE id = ?", res.approvalId!)?.reason;
+
+  test("is judged against the account's own domain, not the From an agent picked", async () => {
+    const acc = addAccount(env.ctx, LOCAL_USER_ID, "sam@fernpoint.test", "imap");
+    addIdentity(env.ctx.db, LOCAL_USER_ID, acc, { email: "sam@kettleby.test", name: "Sam at Kettleby" });
+    const bot = agent("outside");
+    const inside = await send(bot, acc, undefined, ["ben@fernpoint.test"]);
+    assert.equal(inside.status, "done", "a colleague on the account's own domain needs no approval");
+
+    // The recipient's domain is the alias's, so judging by the From would have let this through.
+    const spoof = (await send(bot, acc, "sam@kettleby.test", ["ana@kettleby.test"])) as { status: string; approvalId?: string };
+    assert.equal(spoof.status, "pending_approval");
+    assert.equal(reason(spoof), "Sending as sam@kettleby.test to people outside fernpoint.test: ana@kettleby.test", "the reason names the address it goes out as");
+  });
+
+  test("a personal-mail account has no inside: every recipient waits for approval", async () => {
+    const acc = addAccount(env.ctx, LOCAL_USER_ID, "sam@gmail.com", "imap");
+    const bot = agent("personal");
+    const res = (await send(bot, acc, undefined, ["friend@gmail.com"])) as { status: string; approvalId?: string };
+    assert.equal(res.status, "pending_approval", "another gmail.com address is not a colleague");
+    assert.equal(reason(res), "Sending as sam@gmail.com to friend@gmail.com");
+  });
+});
+
+describe("one-key unsubscribe", () => {
+  test("sends from the account's own address even when the list wrote to an alias", async () => {
+    const env = makeEnv();
+    try {
+      const acc = addAccount(env.ctx, LOCAL_USER_ID, ME, "imap");
+      addIdentity(env.ctx.db, LOCAL_USER_ID, acc, { email: ALIAS, name: "Fernpoint Help" });
+      const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
+      env.ctx.store.ingest(account, {
+        messages: [msg({ from: { name: "Weekly", email: "news@lists.test" }, to: [{ name: "", email: ALIAS }], listUnsubscribe: "<mailto:leave@lists.test?subject=unsubscribe>", remoteThreadId: "list" })],
+        cursor: null,
+        done: false,
+      });
+      const threadId = env.ctx.db.get<{ id: string }>("SELECT id FROM threads WHERE remote_id = 'list'")!.id;
+      const res = await unsubscribe(env.ctx, LOCAL_USER_ID, threadId);
+      assert.equal(res.method, "email");
+      const draft = env.ctx.db.get<{ from_email: string | null; to_json: string }>("SELECT from_email, to_json FROM drafts WHERE account_id = ?", acc)!;
+      assert.equal(draft.from_email, null, "NULL is the account's own address");
+      assert.equal(JSON.parse(draft.to_json)[0].email, "leave@lists.test");
+    } finally {
+      env.cleanup();
+    }
   });
 });
 
