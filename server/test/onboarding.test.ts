@@ -11,7 +11,7 @@ import { DEMO_IDENTITY } from "../src/providers/demo.ts";
 import { discover, type DnsLookup, type MxRecord, type SrvRecord } from "../src/providers/discover.ts";
 import { addAccount, makeEnv, msg, type TestEnv } from "./helpers.ts";
 import { microsoftExchange } from "../src/providers/oauth.ts";
-import { FetchStub, testConfig } from "./stub.ts";
+import { FetchStub, json, testConfig } from "./stub.ts";
 
 const envs: TestEnv[] = [];
 const fresh = (over: Parameters<typeof makeEnv>[0] = {}) => {
@@ -313,6 +313,19 @@ describe("address discovery", () => {
     assert.equal((await discover("a@yahoo.co.jp", config, { dns: dnsOf() })).source, "none");
   });
 
+  test("only the country domains these brands really run are assumed; any other goes through DNS", async () => {
+    for (const email of ["a@live.zz", "a@live.io", "a@hotmail.zz", "a@outlook.co.zz", "a@yahoo.zz", "a@yahoo.com.zz"]) {
+      const dns = dnsOf();
+      const d = await discover(email, config, { dns });
+      assert.equal(d.source, "none", email);
+      assert.ok(dns.calls.length > 0, `${email} was looked up`);
+    }
+    // A real Hotmail domain that isn't on the list is still recognised, by its mail exchanger.
+    const dns = dnsOf({ "hotmail.nl": [{ exchange: "hotmail-nl.olc.protection.outlook.com", priority: 5 }] });
+    const d = await discover("a@hotmail.nl", config, { dns });
+    assert.deepEqual([d.provider, d.oauth, d.source], ["outlook", "microsoft", "mx"]);
+  });
+
   test("a Google Workspace domain is found by its MX records", async () => {
     const dns = dnsOf({ "fernpoint.co": [{ exchange: "alt1.aspmx.l.google.com", priority: 5 }, { exchange: "aspmx.l.google.com", priority: 1 }] });
     assert.deepEqual(await discover("jordan@fernpoint.co", config, { dns }), {
@@ -339,8 +352,17 @@ describe("address discovery", () => {
     assert.equal((await via("mta5.am0.yahoodns.net")).provider, "yahoo");
     const zoho = await via("mx.zoho.com");
     assert.deepEqual([zoho.provider, zoho.preset], ["zoho", "zoho"]);
-    const eu = await via("mx.zoho.eu");
-    assert.deepEqual([eu.provider, eu.preset], ["zoho", null]);
+    const jp = await via("mx.zoho.jp");
+    assert.deepEqual([jp.provider, jp.preset, jp.servers], ["zoho", null, null]);
+  });
+
+  test("Zoho's other regions come back with that region's own servers", async () => {
+    for (const tld of ["eu", "in", "com.au"]) {
+      const dns = dnsOf({ "fernpoint.co": [{ exchange: `mx.zoho.${tld}`, priority: 10 }, { exchange: `mx2.zoho.${tld}`, priority: 20 }] });
+      const d = await discover("a@fernpoint.co", config, { dns });
+      assert.deepEqual([d.provider, d.preset, d.source], ["zoho", null, "mx"], tld);
+      assert.deepEqual(d.servers, { imapHost: `imap.zoho.${tld}`, imapPort: 993, imapSecure: true, smtpHost: `smtp.zoho.${tld}`, smtpPort: 465, smtpSecure: true }, tld);
+    }
   });
 
   test("an unrecognised mail host falls through to the domain's SRV records", async () => {
@@ -380,13 +402,22 @@ describe("address discovery", () => {
     assert.deepEqual([d.provider, d.preset, d.oauth, d.servers, d.source], ["imap", null, null, null, "none"]);
   });
 
-  test("a resolver that never answers gives 'none' once the timeout passes, not an error", async () => {
+  test("a resolver that never answers gives 'none' once the timeout passes, not an error, and its queries are cancelled", async () => {
     const hang = new Promise<never>(() => {});
-    const dns: DnsLookup = { resolveMx: () => hang, resolveSrv: () => hang };
+    let cancelled = 0;
+    const dns: DnsLookup = { resolveMx: () => hang, resolveSrv: () => hang, cancel: () => void cancelled++ };
     const started = Date.now();
     const d = await discover("jordan@fernpoint.co", config, { dns, timeoutMs: 40 });
     assert.equal(d.source, "none");
     assert.ok(Date.now() - started < 1500);
+    assert.ok(cancelled > 0, "the stuck queries were told to stop");
+  });
+
+  test("an answer that comes in time cancels nothing", async () => {
+    let cancelled = 0;
+    const dns = { ...dnsOf({ "fernpoint.co": [{ exchange: "aspmx.l.google.com", priority: 1 }] }), cancel: () => void cancelled++ };
+    assert.equal((await discover("jordan@fernpoint.co", config, { dns })).source, "mx");
+    assert.equal(cancelled, 0);
   });
 
   describe("the route", () => {
@@ -418,23 +449,56 @@ describe("address discovery", () => {
       assert.equal((await callRoute(env, {}, "a@gmail.com")).status, 401);
     });
 
-    test("too many lookups at once are turned away rather than queued", async () => {
-      const env = fresh();
+    /** A resolver whose MX lookups wait until released, so requests stay open. */
+    const stalled = () => {
       const waiting: (() => void)[] = [];
       const dns: DnsLookup = {
         resolveMx: () => new Promise<MxRecord[]>((resolve) => waiting.push(() => resolve([]))),
         resolveSrv: async () => [],
       };
+      const release = () => waiting.splice(0).forEach((f) => f());
+      const settle = async (n: number) => {
+        for (let i = 0; i < 200 && waiting.length < n; i++) await new Promise((r) => setTimeout(r, 10));
+        assert.equal(waiting.length, n);
+      };
+      return { dns, release, settle };
+    };
+    const askAs = (app: ReturnType<typeof createApp>, email: string, cookie?: string) =>
+      app.fetch(
+        new Request(`http://127.0.0.1:4399/api/accounts/discover?email=${email}`, {
+          headers: { host: "127.0.0.1:4399", "x-slipstream": "1", ...(cookie ? { cookie } : {}) },
+        }),
+      );
+
+    test("one person's fifth simultaneous lookup is turned away rather than queued, and it frees up again", async () => {
+      const env = fresh();
+      const { dns, release, settle } = stalled();
       const app = createApp(env.ctx, undefined, { accounts: { discover: { dns, timeoutMs: 10_000 } } });
-      const ask = (email: string) =>
-        app.fetch(new Request(`http://127.0.0.1:4399/api/accounts/discover?email=${email}`, { headers: { host: "127.0.0.1:4399", "x-slipstream": "1" } }));
-      const open = Array.from({ length: 8 }, (_, i) => ask(`a@fernpoint${i}.co`));
-      for (let i = 0; i < 200 && waiting.length < 8; i++) await new Promise((r) => setTimeout(r, 10));
-      assert.equal(waiting.length, 8);
-      assert.equal((await ask("a@fernpoint9.co")).status, 429);
-      for (const release of waiting) release();
+      const open = Array.from({ length: 4 }, (_, i) => askAs(app, `a@fernpoint${i}.co`));
+      await settle(4);
+      assert.equal((await askAs(app, "a@fernpoint9.co")).status, 429);
+      release();
       assert.ok((await Promise.all(open)).every((r) => r.status === 200));
-      assert.equal((await ask("a@gmail.com")).status, 200, "and it frees up again");
+      assert.equal((await askAs(app, "a@gmail.com")).status, 200, "and it frees up again");
+    });
+
+    test("one person using their share does not lock out another, but everyone together hit a ceiling", async () => {
+      const env = fresh({ mode: "team" });
+      const cookies: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const u = await env.ctx.users.create(`p${i}@team.test`, `P${i}`, "correct horse battery");
+        cookies.push(`slipstream_session=${env.ctx.users.createSession(u.id)}`);
+      }
+      const { dns, release, settle } = stalled();
+      const app = createApp(env.ctx, undefined, { accounts: { discover: { dns, timeoutMs: 10_000 } } });
+      const open: (Promise<Response> | Response)[] = [];
+      for (const cookie of cookies.slice(0, 4)) for (let i = 0; i < 4; i++) open.push(askAs(app, `a@fernpoint${open.length}.co`, cookie));
+      await settle(16);
+      assert.equal((await askAs(app, "a@fernpoint90.co", cookies[0])).status, 429, "over their own share");
+      assert.equal((await askAs(app, "a@fernpoint91.co", cookies[4])).status, 429, "someone with nothing open, but the total is used up");
+      release();
+      assert.ok((await Promise.all(open)).every((r) => r.status === 200));
+      assert.equal((await askAs(app, "a@gmail.com", cookies[4])).status, 200);
     });
   });
 });
@@ -464,5 +528,142 @@ describe("first-sync progress", () => {
     );
     const last = events.filter((e) => e.type === "sync").at(-1);
     assert.ok(last && last.type === "sync" && last.status === "idle");
+  });
+});
+
+describe("importing a mail file", () => {
+  /** An mbox of `n` short messages, enough for many 250-message batches. */
+  const bigMbox = (n: number) =>
+    Array.from({ length: n }, (_, i) => `From a@fernpoint.co Mon Jan  1 00:00:00 2024\nMessage-ID: <i${i}@fernpoint.co>\nFrom: a@fernpoint.co\nTo: me@fernpoint.co\nSubject: Note ${i}\n\nHi\n`).join("\n");
+  const startImport = (env: TestEnv, n: number) => {
+    const form = new FormData();
+    form.append("file", new File([bigMbox(n)], "old.mbox"));
+    form.append("email", "me@fernpoint.co");
+    return env.api("/api/import", { method: "POST", body: form });
+  };
+  /** Resolves with the job's last event; `onFirstRunning` runs synchronously inside the first progress event. */
+  const terminal = (env: TestEnv, onFirstRunning?: () => void) =>
+    new Promise<ServerEvent>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("the import never finished")), 10_000);
+      let seen = false;
+      env.ctx.events.subscribe([`user:${LOCAL_USER_ID}`], (e) => {
+        if (e.type !== "import") return;
+        if (e.status === "running" && !seen) {
+          seen = true;
+          onFirstRunning?.();
+        }
+        if (e.status !== "running") {
+          clearTimeout(timer);
+          resolve(e);
+        }
+      });
+    });
+  const firstSynced = (env: TestEnv, id: string) => env.ctx.db.get<{ first_synced_at: number | null }>("SELECT first_synced_at FROM accounts WHERE id = ?", id);
+
+  test("removing the account mid-import ends the job instead of crashing the process", async () => {
+    const env = fresh();
+    const ended = terminal(env, () => {
+      // The same statements as removing the account in Settings, run inside the event so the timing is exact.
+      env.ctx.db.run("DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE account_id IN (SELECT id FROM accounts WHERE provider = 'archive'))");
+      env.ctx.db.run("DELETE FROM accounts WHERE provider = 'archive'");
+    });
+    const res = await startImport(env, 1500);
+    const accountId = ((await res.json()) as { accountId: string }).accountId;
+    const end = await ended;
+    assert.equal(end.type === "import" && end.status, "failed");
+    assert.match(end.type === "import" ? (end.error ?? "") : "", /removed/);
+    // The job has let go of the account, and the process is still here to run this line.
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(env.ctx.imports.size, 0);
+    assert.equal(firstSynced(env, accountId), undefined);
+  });
+
+  test("an archive is not 'first synced' until its import finishes, and bootstrap reports the progress", async () => {
+    const env = fresh();
+    let during: { importing: boolean; imported: number; firstSyncedAt: number | null } | null = null;
+    const ended = terminal(env, () => {
+      const a = env.ctx.db.get<{ id: string }>("SELECT id FROM accounts WHERE provider = 'archive'")!;
+      // Ask bootstrap while the job is between batches.
+      void env.api("/api/bootstrap").then(async (r) => {
+        during = (await r.json()).accounts.find((x: { id: string }) => x.id === a.id);
+      });
+    });
+    const res = await startImport(env, 600);
+    const { accountId } = (await res.json()) as { accountId: string };
+    const end = await ended;
+    assert.equal(end.type === "import" && end.status, "done");
+    for (let i = 0; i < 100 && during === null; i++) await new Promise((r) => setTimeout(r, 10));
+    const seen = during as { importing: boolean; imported: number; firstSyncedAt: number | null } | null;
+    assert.ok(seen, "bootstrap answered while importing");
+    assert.deepEqual([seen.importing, seen.firstSyncedAt], [true, null]);
+    assert.ok(seen.imported > 0);
+
+    const stamped = firstSynced(env, accountId)!.first_synced_at;
+    assert.equal(typeof stamped, "number");
+    assert.equal(env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM messages WHERE account_id = ? AND created_at > ?", accountId, stamped!)!.n, 0, "every imported message predates it");
+    const boot = (await (await env.api("/api/bootstrap")).json()).accounts.find((x: { id: string }) => x.id === accountId);
+    assert.deepEqual([boot.importing, boot.imported, boot.firstSyncedAt], [false, 0, stamped]);
+  });
+});
+
+describe("OAuth redirects say which provider they are about", () => {
+  const withKeys = () => fresh({ google: { clientId: "g-client", clientSecret: "g-secret" }, microsoft: { clientId: "m-client", tenant: "common" } });
+  const go = async (env: TestEnv, path: string) => {
+    const res = await env.api(path);
+    assert.equal(res.status, 302, path);
+    return new URL(res.headers.get("location")!, "http://127.0.0.1:4399");
+  };
+  const stateFor = (env: TestEnv, provider: string) => {
+    const state = `state-${provider}-${Math.random().toString(36).slice(2)}`;
+    env.ctx.db.run("INSERT INTO oauth_states (state, user_id, provider, verifier, expires_at) VALUES (?,?,?,?,?)", state, LOCAL_USER_ID, provider, "verifier", Date.now() + 60_000);
+    return state;
+  };
+
+  for (const provider of ["google", "microsoft"] as const) {
+    test(`${provider}: not configured, expired, denied and a failed exchange all name it`, async () => {
+      const bare = fresh({ google: {}, microsoft: { tenant: "common" } });
+      let u = await go(bare, `/api/oauth/${provider}/start`);
+      assert.deepEqual([u.pathname, u.searchParams.get("error"), u.searchParams.get("provider")], ["/settings/accounts", `${provider}-not-configured`, provider]);
+
+      const env = withKeys();
+      u = await go(env, `/api/oauth/${provider}/callback?state=nope&code=c`);
+      assert.deepEqual([u.searchParams.get("error"), u.searchParams.get("provider")], ["expired", provider]);
+
+      // A state that was started for the other provider is expired as far as this callback is concerned.
+      u = await go(env, `/api/oauth/${provider}/callback?state=${stateFor(env, provider === "google" ? "microsoft" : "google")}&code=c`);
+      assert.deepEqual([u.searchParams.get("error"), u.searchParams.get("provider")], ["expired", provider]);
+
+      u = await go(env, `/api/oauth/${provider}/callback?state=${stateFor(env, provider)}&error=access_denied`);
+      assert.deepEqual([u.searchParams.get("error"), u.searchParams.get("provider")], ["access_denied", provider]);
+      u = await go(env, `/api/oauth/${provider}/callback?state=${stateFor(env, provider)}`);
+      assert.deepEqual([u.searchParams.get("error"), u.searchParams.get("provider")], ["denied", provider]);
+
+      const stub = new FetchStub().on("POST", /\/token$/, json({ error: "invalid_grant" }, 400));
+      try {
+        u = await go(env, `/api/oauth/${provider}/callback?state=${stateFor(env, provider)}&code=bad`);
+      } finally {
+        stub.restore();
+      }
+      assert.equal(u.pathname, "/settings/accounts");
+      assert.ok(u.searchParams.get("error"));
+      assert.equal(u.searchParams.get("provider"), provider);
+    });
+  }
+
+  test("a successful sign-in names the provider too", async () => {
+    const env = withKeys();
+    env.ctx.sync.provider = () => ({ kind: "gmail", sync: async () => ({ messages: [], cursor: "1", done: true }) }) as unknown as MailProvider;
+    const stub = new FetchStub()
+      .on("POST", "https://oauth2.googleapis.com/token", { access_token: "at", refresh_token: "rt", expires_in: 3599 })
+      .on("GET", "https://openidconnect.googleapis.com/v1/userinfo", { email: "jordan@fernpoint.co", name: "Jordan" });
+    try {
+      const u = await go(env, `/api/oauth/google/callback?state=${stateFor(env, "google")}&code=good`);
+      assert.deepEqual([u.searchParams.get("connected"), u.searchParams.get("provider")], ["google", "google"]);
+    } finally {
+      stub.restore();
+    }
+    for (let i = 0; i < 100 && env.ctx.db.get<{ s: string }>("SELECT sync_status AS s FROM accounts WHERE email = 'jordan@fernpoint.co'")?.s === "syncing"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
   });
 });

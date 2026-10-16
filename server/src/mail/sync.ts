@@ -168,7 +168,8 @@ export class SyncEngine {
         }
       }
       // The first sync that reaches the end of the mailbox: mail stored before it is history, not news.
-      if (caughtUp) this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
+      // An archive has nothing to fetch, so reaching its end proves nothing; its import stamps it when the file is read.
+      if (caughtUp && account.provider !== "archive") this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
       await this.refreshIdentities(account, provider);
       setStatus("idle");
     } catch (err) {

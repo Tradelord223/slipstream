@@ -34,7 +34,7 @@ export function createContext(config: Config): AppContext {
   const sync = new SyncEngine(config, db, store, events, secrets);
   const agents = new Agents(db);
   const commands = new Commands(buildCatalog());
-  const ctx = { config, db, events, secrets, store, triage, users, sync, agents, commands } as AppContext;
+  const ctx = { config, db, events, secrets, store, triage, users, sync, agents, commands, imports: new Map() } as AppContext;
   ctx.webhooks = new Webhooks(ctx);
   ctx.cloud = new CloudAgent(ctx);
   ctx.autopilot = new Autopilot(ctx);
@@ -69,6 +69,9 @@ async function seedDemo(ctx: AppContext): Promise<void> {
 export async function start(config = loadConfig()) {
   // Everything Slipstream writes is private mail data: owner-only files.
   process.umask(0o077);
+  // A background job (import, sync, agent run) that fails without anyone awaiting it is logged, not fatal:
+  // it must not take every other account's mail down with it. Synchronous crashes still exit.
+  process.on("unhandledRejection", (reason) => console.error("[slipstream] unhandled rejection:", reason));
   const ctx = createContext(config);
   if (config.mode === "local") ctx.users.ensureLocalUser();
   if (config.demo) await seedDemo(ctx);

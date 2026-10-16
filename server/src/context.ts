@@ -14,6 +14,12 @@ import type { Autopilot } from "./agents/autopilot.ts";
 import type { SenderLogos } from "./mail/logos.ts";
 import type { Actor } from "./commands/registry.ts";
 
+/** A mail-file import that is running now, so a reloaded client can tell the account is still filling. */
+export interface ImportProgress {
+  jobId: string;
+  imported: number;
+}
+
 /** Everything a request handler might need, built once at boot. */
 export interface AppContext {
   config: Config;
@@ -30,6 +36,8 @@ export interface AppContext {
   cloud: CloudAgent;
   autopilot: Autopilot;
   logos: SenderLogos;
+  /** Running imports by account id; an entry exists only while its job does. */
+  imports: Map<string, ImportProgress>;
 }
 
 /** `actor` is the person, or the agent acting for them (bearer-token requests). */

@@ -94,7 +94,7 @@ export interface Discovery {
   preset: string | null;
   /** A one-click sign-in this install can offer for it, when its Google or Microsoft app is set up. */
   oauth: "google" | "microsoft" | null;
-  /** Server names for "Other" mail, when DNS (SRV records) says so; null when unknown. */
+  /** Server names when they are known: from SRV records, or a regional host (Zoho EU/IN/AU); null otherwise. */
   servers: ServerSettings | null;
   /** How it was worked out. */
   source: "mx" | "srv" | "preset" | "none";

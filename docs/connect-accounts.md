@@ -2,27 +2,31 @@
 
 Slipstream can work with mail in four ways. Pick whichever fits, and mix them freely: every account shows up in one unified inbox.
 
+Slipstream asks for your email address the first time you open it. To add another account later, go to Settings → Accounts → **Add account**. Slipstream reads your address's domain to find out who hosts your mail, using only that domain's own DNS records, then shows the sign-in that fits.
+
 | You have | Fastest path | Setup |
 |---|---|---|
 | Gmail (personal) | IMAP with an app password | 2 minutes, no developer console |
-| Gmail / Google Workspace | Google OAuth | ~10 minutes, once per Slipstream install |
-| Outlook.com / Microsoft 365 | Sign in with Microsoft (no app passwords) | ~10 minutes, once per install, unless your copy already includes it |
+| Gmail / Google Workspace | Continue with Google (OAuth) | ~10 minutes, once per Slipstream install |
+| Outlook.com / Microsoft 365 | Continue with Microsoft (no app passwords) | ~10 minutes, once per install, unless your copy already includes it |
 | iCloud, Fastmail, Yahoo, Zoho, Proton (Bridge), any other server | IMAP + SMTP | 2 minutes |
-| An export (Google Takeout, Thunderbird, Apple Mail) | Import `.mbox` / `.eml` | none |
+| An export (Google Takeout, Thunderbird, Apple Mail) | **Import a mail file** (`.mbox` / `.eml`) | none |
 
 Credentials are encrypted on your own disk (AES-256-GCM) and never leave your machine except to talk to your mail provider.
 
 ## Outlook and Microsoft 365
 
-Microsoft turned off app passwords for Outlook.com in September 2024, so a password won't get you in over IMAP any more. Outlook.com, Hotmail, Live and Microsoft 365 mail all connect with **Sign in with Microsoft**, which needs a Microsoft app registered once (the steps are below). If your copy of Slipstream already comes with one, the button works straight away. If it doesn't, register your own and start Slipstream with its ID.
+Microsoft's notice says Basic authentication, which means sending a username and password to the mail server, is no longer available to access any Outlook account after September 16, 2024 ([Microsoft: Modern Authentication Methods now needed to continue syncing Outlook email in non-Microsoft email apps](https://support.microsoft.com/en-US/Support/known-issues/modern-authentication-methods-now-needed-to-continue-syncing-outlook-email-in-non-microsoft-email-ap)). An app password is sent that way, so a password of any kind won't get you in over IMAP any more. Outlook.com, Hotmail, Live and Microsoft 365 mail all connect with **Continue with Microsoft**, which needs a Microsoft app registered once (the steps are below). Slipstream doesn't ship its own Microsoft app yet, so until it does, the button works only once your install has one: register your own and start Slipstream with its ID.
 
 ## Gmail with an app password (no OAuth app needed)
 
 1. Turn on 2-Step Verification for your Google account.
 2. Create an app password at <https://myaccount.google.com/apppasswords>.
-3. In Slipstream: Settings → Accounts → **Connect another mail server** → preset **Gmail**, enter your address and the 16-character app password.
+3. In Slipstream, enter your Gmail address (on the first screen, or under Settings → Accounts → **Add account**), choose **Use an app password instead** if you're offered Google sign-in, and paste the 16-letter app password.
 
-Slipstream uses Gmail's IMAP extensions, so labels and conversations behave like they do in Gmail. Google Workspace accounts and accounts with Advanced Protection can't use app passwords; use OAuth below.
+Slipstream uses Gmail's IMAP extensions, so labels and conversations behave like they do in Gmail.
+
+**Google Workspace (work or school) addresses** work the same way when Google offers app passwords for the account. Google's help says you need 2-Step Verification to create an app password, and that the option may be missing if you're signed in to a work, school or other organization account, if your 2-Step Verification is set up only for security keys, or if your account has Advanced Protection ([Google: Sign in with app passwords](https://support.google.com/accounts/answer/185833)). For Workspace, Google's admin help says users can sign in to legacy apps with an app password, and that enforcing security keys as the 2-Step Verification method disables them ([Google Workspace: How 2-Step Verification works with legacy apps](https://knowledge.workspace.google.com/admin/security/how-2-step-verification-works-with-legacy-apps)). If you don't see the app passwords page, ask your administrator, or use Google OAuth below.
 
 ## Gmail / Google Workspace with OAuth
 
@@ -38,13 +42,13 @@ Google treats full mailbox access as a *restricted* scope. A public, verified ap
    ```bash
    GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… slipstream
    ```
-6. Settings → Accounts → **Connect Gmail**.
+6. Settings → Accounts → **Add account**, enter your Gmail or Workspace address and choose **Continue with Google**.
 
 While the app is in *Testing*, Google expires refresh tokens after 7 days and caps it at 100 test users; Slipstream will ask you to reconnect. Internal (Workspace) apps and personal-use apps don't have that limit. For a personal install you can publish the app to *In production* without verification; Google shows an "unverified app" screen you click through once.
 
 ## Register Slipstream's Microsoft app
 
-You only do this if "Sign in with Microsoft" isn't available in your copy of Slipstream. It is free and takes about ten minutes, once. The app holds no password or secret, so there is nothing to keep safe except its ID.
+You only do this if "Continue with Microsoft" isn't available in your copy of Slipstream. Slipstream doesn't include its own Microsoft app yet, so for now that's every install. It is free and takes about ten minutes, once. The app holds no password or secret, so there is nothing to keep safe except its ID.
 
 1. Open the Microsoft Entra admin center (or the Azure portal) → **App registrations → New registration**. Name it `Slipstream`.
 2. Supported account types: **Accounts in any organizational directory and personal Microsoft accounts**. (Choose just your organization if only work accounts will use it.)
@@ -65,11 +69,11 @@ For a Web client add `MICROSOFT_CLIENT_SECRET=…` as well. `MICROSOFT_TENANT=<t
 
 Some work tenants need an administrator to approve new apps. If you see "Need admin approval", send your admin the app's client ID.
 
-Finally, Settings → Accounts → **Connect Outlook**.
+Finally, Settings → Accounts → **Add account**, enter your Outlook, Hotmail, Live or Microsoft 365 address and choose **Continue with Microsoft**.
 
 ## Any IMAP server
 
-Settings → Accounts → **Connect another mail server**. Presets fill in the server names for iCloud, Fastmail, Yahoo, Zoho and Proton Mail Bridge; choose **Other** to type your own IMAP and SMTP hosts. Most providers want an app-specific password rather than your main one.
+Settings → Accounts → **Add account** and enter your address. For iCloud, Fastmail, Yahoo, Zoho and Proton Mail Bridge, Slipstream already knows the server names. For a custom domain it reads the domain's MX and server records to find the host (Zoho's regional servers in the EU, India and Australia included); if it can't, it asks you to type your IMAP and SMTP hosts. Most providers want an app-specific password rather than your main one.
 
 ## Send from an alias or your own domain
 
@@ -83,7 +87,7 @@ If you remove an address that a queued message was going to use, that message fa
 
 ## Importing an export
 
-Settings → Accounts → **Import mail**, then drop one or more files:
+Choose **Import a mail file** on the first screen or under Settings → Accounts, then drop one or more files:
 
 - **Google Takeout** (`.mbox`): labels, stars, read state and conversations come across.
 - **Thunderbird / Apple Mail / mutt** (`.mbox`, `mboxrd`): messages land in Done and are fully searchable.

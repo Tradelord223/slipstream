@@ -25,12 +25,12 @@ export class Db {
     this.raw.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
     const row = this.raw.prepare("SELECT version FROM schema_version").get() as { version: number } | undefined;
     let version = row?.version ?? 0;
-    if (!row) this.raw.prepare("INSERT INTO schema_version (version) VALUES (0)").run();
+    if (!row) this.run("INSERT INTO schema_version (version) VALUES (0)");
     while (version < migrations.length) {
       this.tx(() => {
         this.raw.exec(migrations[version]!);
         version += 1;
-        this.raw.prepare("UPDATE schema_version SET version = ?").run(version);
+        this.run("UPDATE schema_version SET version = ?", version);
       });
     }
   }

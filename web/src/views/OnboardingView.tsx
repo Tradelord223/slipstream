@@ -152,7 +152,10 @@ function Arriving({ accountId, onOpen, onStartOver }: { accountId: string; onOpe
   const problem = archive
     ? mine?.status === "failed"
       ? (mine.error ?? "The file couldn't be read.")
-      : null
+      : !mine && account?.importing === false && !account.firstSyncedAt
+        ? // The import ended without finishing (Slipstream restarted, or it failed while this screen was closed).
+          "The import stopped before it finished. Import the file again to bring in the rest."
+        : null
     : account?.syncStatus === "error"
       ? (account.syncError ?? "Slipstream couldn't read this mailbox.")
       : account?.syncStatus === "reauth"

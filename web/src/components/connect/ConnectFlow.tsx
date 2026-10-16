@@ -446,7 +446,7 @@ export function ConnectFlow({
       <header className="ob-head">
         {heading(kind === "other" ? "Connect your email" : kind === "outlook" ? "Connect Outlook" : `Connect ${KIND_NAME[kind]}`)}
         {kind === "gmail" && showOAuth && <p className="ob-lead">Sign in with Google and Slipstream takes it from there. A Google Workspace address works too.</p>}
-        {kind === "gmail" && !showOAuth && <p className="ob-lead">An app password lets Slipstream read and send your mail without your Google password. Google Workspace addresses work too, unless your administrator has turned app passwords off.</p>}
+        {kind === "gmail" && !showOAuth && <p className="ob-lead">An app password lets Slipstream read and send your mail without your Google password. A Google Workspace address works the same way when Google offers app passwords for your account. If you don't see them, ask your administrator.</p>}
         {kind === "outlook" && <p className="ob-lead">For Outlook.com, Hotmail and Microsoft 365 addresses.</p>}
         {kind === "other" && <p className="ob-lead">Enter your address and password. Most providers need nothing else.</p>}
         {(kind === "icloud" || kind === "yahoo" || kind === "fastmail" || kind === "zoho") && <p className="ob-lead">{label} asks for an app password: a separate password just for Slipstream.</p>}
@@ -476,7 +476,7 @@ export function ConnectFlow({
               Outlook sign-in isn't set up on this install yet.
             </p>
             <p>
-              Microsoft no longer accepts app passwords.{" "}
+              Microsoft now requires its own sign-in page for Outlook in other apps.{" "}
               {mode === "team" ? "Ask whoever runs this Slipstream to set up Microsoft sign-in." : "Set MICROSOFT_CLIENT_ID to turn on Microsoft sign-in (see the guide)."}
             </p>
             <a href={GUIDE_URL} target="_blank" rel="noopener noreferrer">
