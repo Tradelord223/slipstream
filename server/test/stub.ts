@@ -77,6 +77,7 @@ export function testConfig(over: Partial<Config> = {}): Config {
     microsoft: { clientId: "m-client", clientSecret: undefined, tenant: "common" },
     demo: false,
     syncIntervalSeconds: 60,
+    senderLogos: true,
     ...over,
   };
 }

@@ -66,6 +66,7 @@ Cloudflare Workers and Containers aren't a fit. Their disks are ephemeral and in
 | `SLIPSTREAM_ALLOWED_HOSTS` | public URL host | Extra hostnames to accept, comma-separated. |
 | `SLIPSTREAM_SYNC_SECONDS` | `60` | How often to poll providers. |
 | `SLIPSTREAM_UNDO_SEND_SECONDS` | `10` | How long Undo Send waits. |
+| `SLIPSTREAM_SENDER_LOGOS` | on | `off` stops this server from ever fetching sender logos, whatever people choose in Settings. Logos are also off for each person until they turn them on. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | Enables "Connect Gmail". |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT` | none (tenant `common`) | Enables "Connect Outlook". |
 | `SLIPSTREAM_SOURCE_URL` | this project's GitHub repo | Where the app's "Source code" link points. If you run a modified Slipstream for other people, point it at your modified source. |
