@@ -135,6 +135,8 @@ export interface Thread {
   signalAt: number | null;
   /** Detail for the row chip (delivery status, urgent reason). */
   signalDetail: Signal | null;
+  /** Every signal on the latest incoming message, most important first (signal/signalDetail are the first). */
+  signals: Signal[];
   /** Registrable domain for /api/logos/:domain, for company senders only. */
   logoDomain: string | null;
 }
