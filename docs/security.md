@@ -41,6 +41,8 @@ Assume some mail will try. Slipstream's defenses are enforced by the server, not
 - **What a sender's site can learn.** That someone running Slipstream asked for its icon. It can't tell which message prompted it or who the message was for, and the request happens at a random time hours later, not when the mail arrives.
 - **Guarded requests.** The server only makes plain https requests on port 443 and refuses any address inside your own network or the internet's reserved ranges, including after redirects. Downloaded images are checked by their contents, and SVG logos are stripped down to plain shapes before they are stored.
 - **No lookups on demand.** Only senders who have actually written to you get a logo, a request for any other domain is refused, and the demo mailbox uses built-in invented logos without any network access.
+- **Other web pages can't ask.** Logos load only for Slipstream's own pages. A request from any other site, or from a browser that doesn't say where a request came from, gets nothing, so a web page can't probe which companies email you.
+- **Teammates can't learn from each other.** On a team server each person waits out their own random delay before seeing a logo, even when a teammate's request already fetched it, so how fast a logo appears says nothing about anyone else's mail.
 
 **Someone gets a copy of the database.**
 
