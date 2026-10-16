@@ -16,13 +16,15 @@ export function aiRoutes(ctx: AppContext) {
     return key;
   };
 
-  const threadMessages = (userId: string, threadId: string) => {
+  const threadMessages = async (userId: string, threadId: string) => {
     const owned = db.get<{ account_id: string }>(
       "SELECT t.account_id FROM threads t JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.user_id = ?",
       threadId,
       userId,
     );
     if (!owned) throw new HttpError(404, "Conversation not found");
+    // The model reads the whole conversation, not previews: messages synced as summaries are fetched first.
+    await ctx.sync.bodies.load(db.all<{ id: string }>("SELECT id FROM messages WHERE thread_id = ? AND body_state = 'none'", threadId).map((r) => r.id));
     const rows = db.all<{ from_name: string; from_email: string; to_json: string; sent_at: number; subject: string; body_text: string; body_html: string | null }>(
       "SELECT from_name, from_email, to_json, sent_at, subject, body_text, body_html FROM messages WHERE thread_id = ? ORDER BY sent_at",
       threadId,
@@ -52,7 +54,7 @@ export function aiRoutes(ctx: AppContext) {
     const user = c.get("user");
     const { threadId } = z.object({ threadId: z.string() }).parse(await c.req.json());
     const key = apiKeyFor(user.id);
-    const { messages } = threadMessages(user.id, threadId);
+    const { messages } = await threadMessages(user.id, threadId);
     const summary = await run(() => summarizeThread(key, messages));
     return c.json({ summary });
   });
@@ -63,7 +65,7 @@ export function aiRoutes(ctx: AppContext) {
       .object({ threadId: z.string().optional(), instruction: z.string().max(4_000).default(""), currentDraft: z.string().max(50_000).optional() })
       .parse(await c.req.json());
     const key = apiKeyFor(user.id);
-    const thread = body.threadId ? threadMessages(user.id, body.threadId) : { messages: [], me: { name: user.name, email: user.email } };
+    const thread = body.threadId ? await threadMessages(user.id, body.threadId) : { messages: [], me: { name: user.name, email: user.email } };
     const text = await run(() => draftReply(key, { ...thread, instruction: body.instruction, currentDraft: body.currentDraft }));
     return c.json({ text });
   });

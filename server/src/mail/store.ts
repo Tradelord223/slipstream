@@ -7,7 +7,7 @@ import { categorize, isBulkMessage } from "./classify.ts";
 import { ownAddresses } from "./identities.ts";
 import { registrableDomain } from "./logos.ts";
 import { orderSignals, scanSignals, type Signal } from "./signals.ts";
-import type { Address, FlagUpdate, IncomingMessage, SyncPage, ThreadRef } from "./types.ts";
+import type { Address, FlagUpdate, FullBody, IncomingAttachment, IncomingMessage, SyncPage, ThreadRef } from "./types.ts";
 
 export interface AccountRow {
   id: string;
@@ -181,8 +181,9 @@ export class MailStore {
     const res = this.db.run(
       `INSERT INTO messages (id, thread_id, account_id, remote_id, message_id_header, in_reply_to, refs,
         from_name, from_email, to_json, cc_json, bcc_json, reply_to, subject, sent_at, snippet, body_text, body_html,
-        unread, starred, in_inbox, in_trash, in_spam, outgoing, list_unsubscribe, is_bulk, signals, created_at, sender_domain)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        unread, starred, in_inbox, in_trash, in_spam, outgoing, list_unsubscribe, is_bulk, signals, created_at, sender_domain,
+        body_state, size)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       threadId,
       account.id,
@@ -212,6 +213,8 @@ export class MailStore {
       json(signals),
       now,
       registrableDomain(m.from.email) ?? "",
+      m.bodyComplete === false ? "none" : "cached",
+      m.size ?? null,
     );
 
     this.db.run(
@@ -254,6 +257,112 @@ export class MailStore {
     if (m.labels) this.setMessageLabels(account.id, id, m.labels);
     this.recordContacts(account.id, m, outgoing);
     return threadId;
+  }
+
+  /**
+   * A message that was synced as a summary has now been fetched in full. Its preview gives way to the real text, which is
+   * indexed for search and scanned again for codes and deliveries, and its attachment list is brought up to date.
+   * Returns the message's thread, or null when the message is gone or already had its body.
+   */
+  attachBody(messageId: string, body: FullBody): string | null {
+    const m = this.db.get<{
+      rowid: number;
+      thread_id: string;
+      subject: string;
+      from_name: string;
+      from_email: string;
+      to_json: string;
+      cc_json: string;
+      is_bulk: number;
+      outgoing: number;
+      sent_at: number;
+      body_state: string;
+    }>(
+      "SELECT rowid, thread_id, subject, from_name, from_email, to_json, cc_json, is_bulk, outgoing, sent_at, body_state FROM messages WHERE id = ?",
+      messageId,
+    );
+    if (!m || m.body_state === "cached") return null;
+    const text = body.text || (body.html ? htmlToText(body.html) : "");
+    const signals = m.outgoing
+      ? []
+      : scanSignals({ subject: m.subject, fromEmail: m.from_email, fromName: m.from_name, text, isBulk: Boolean(m.is_bulk), sentAt: m.sent_at });
+    this.db.tx(() => {
+      this.db.run(
+        "UPDATE messages SET body_text = ?, body_html = ?, body_state = 'cached', signals = ? WHERE id = ?",
+        text,
+        body.html ?? null,
+        json(signals),
+        messageId,
+      );
+      // The search index is contentless: the old row goes by rowid and the full text takes its place.
+      this.db.run("DELETE FROM messages_fts WHERE rowid = ?", m.rowid);
+      this.db.run(
+        "INSERT INTO messages_fts (rowid, subject, body, sender, recipients) VALUES (?,?,?,?,?)",
+        m.rowid,
+        m.subject,
+        text.slice(0, 200_000),
+        `${m.from_name} ${m.from_email}`,
+        [...(JSON.parse(m.to_json) as Address[]), ...(JSON.parse(m.cc_json) as Address[])].map((a) => `${a.name} ${a.email}`).join(" "),
+      );
+      this.reconcileAttachments(messageId, body.attachments);
+      this.recomputeThread(m.thread_id);
+    });
+    return m.thread_id;
+  }
+
+  /**
+   * The summary pass stored attachment details the provider could give without the message (or none). The full message has
+   * the real list: rows keep their ids (the dashboard holds them) and take the new handle; new ones are added; stale ones
+   * the person never downloaded go.
+   */
+  private reconcileAttachments(messageId: string, incoming: IncomingAttachment[]): void {
+    const rows = this.db.all<{ id: string; filename: string; mime_type: string; content_id: string | null; remote_id: string | null; blob_sha256: string | null }>(
+      "SELECT id, filename, mime_type, content_id, remote_id, blob_sha256 FROM attachments WHERE message_id = ?",
+      messageId,
+    );
+    const used = new Set<string>();
+    const find = (a: IncomingAttachment) => {
+      const free = rows.filter((r) => !used.has(r.id));
+      return (
+        free.find((r) => a.remoteId && r.remote_id === a.remoteId) ??
+        free.find((r) => a.contentId && r.content_id === a.contentId) ??
+        free.find((r) => r.filename === a.filename && r.mime_type === a.mimeType) ??
+        free.find((r) => r.filename === a.filename)
+      );
+    };
+    for (const a of incoming) {
+      const blob = a.content ? this.saveBlob(a.content) : null;
+      const size = a.size || a.content?.length || 0;
+      const row = find(a);
+      if (row) {
+        used.add(row.id);
+        this.db.run(
+          "UPDATE attachments SET mime_type = ?, size = ?, content_id = ?, inline = ?, remote_id = ?, blob_sha256 = coalesce(?, blob_sha256) WHERE id = ?",
+          a.mimeType,
+          size,
+          a.contentId ?? null,
+          a.inline ? 1 : 0,
+          a.remoteId ?? row.remote_id,
+          blob,
+          row.id,
+        );
+        continue;
+      }
+      this.db.run(
+        `INSERT INTO attachments (id, message_id, filename, mime_type, size, content_id, inline, remote_id, blob_sha256)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+        newId("att"),
+        messageId,
+        a.filename,
+        a.mimeType,
+        size,
+        a.contentId ?? null,
+        a.inline ? 1 : 0,
+        a.remoteId ?? null,
+        blob,
+      );
+    }
+    for (const r of rows) if (!used.has(r.id) && !r.blob_sha256) this.db.run("DELETE FROM attachments WHERE id = ?", r.id);
   }
 
   /**

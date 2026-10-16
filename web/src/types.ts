@@ -34,6 +34,8 @@ export interface Account {
   imported?: number;
   /** IMAP preset it was connected with (gmail, icloud, fastmail, yahoo, zoho, proton); null otherwise. */
   preset?: string | null;
+  /** Where this account's latest sync run is, for a screen opened mid-sync; null when this server hasn't run one. */
+  progress?: SyncProgress | null;
   /** Other addresses this account can send as (aliases, custom domains). */
   identities: Identity[];
 }
@@ -328,7 +330,7 @@ export interface TeamInfo {
 
 export type ServerEvent =
   | { type: "threads"; accountId: string; threadIds: string[] }
-  | { type: "sync"; accountId: string; status: string; error?: string | null; fetched?: number }
+  | { type: "sync"; accountId: string; status: string; error?: string | null; fetched?: number; progress?: SyncProgress }
   | { type: "drafts"; draftId: string; status: string; error?: string | null }
   | { type: "team"; workspaceId: string; sharedThreadId: string }
   | { type: "activity"; activityId: string }

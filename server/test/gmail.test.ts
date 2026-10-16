@@ -6,7 +6,8 @@ import { afterEach, describe, it } from "node:test";
 import { Db } from "../src/db/index.ts";
 import { MailStore, type AccountRow } from "../src/mail/store.ts";
 import { PermanentProviderError, ProviderAuthError, type OutgoingMessage, type RemoteAction } from "../src/mail/types.ts";
-import { GmailProvider } from "../src/providers/gmail.ts";
+import { GmailProvider, SUMMARY_FIELDS } from "../src/providers/gmail.ts";
+import { parseMime, type MimeNode } from "./mime-fake.ts";
 import { FetchStub, json, rawMail, testConfig, testCtx, type Call } from "./stub.ts";
 
 const BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -20,7 +21,40 @@ interface FakeMessage {
   labelIds: string[];
   raw: Buffer;
   internalDate?: string;
+  snippet?: string;
 }
+
+/** The part tree Gmail returns for format=full once the field mask has dropped every byte of body data. */
+function payloadOf(node: MimeNode, path: number[] = []): object {
+  const type = node.headers.get("content-type") ?? "text/plain";
+  const disposition = node.headers.get("content-disposition") ?? "";
+  const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? "";
+  return {
+    partId: path.join("."),
+    mimeType: type.split(";")[0]!.trim().toLowerCase(),
+    filename,
+    headers: node.all.map(([name, value]) => ({ name, value })),
+    body: { size: node.body.length, ...(filename ? { attachmentId: `att-${path.join(".")}` } : {}) },
+    ...(node.children ? { parts: node.children.map((c, i) => payloadOf(c, [...path, i + 1])) } : {}),
+  };
+}
+
+function summaryOf(id: string, m: FakeMessage): object {
+  const top = parseMime(m.raw);
+  const noise = ["Received", "DKIM-Signature", "ARC-Seal", "Authentication-Results"].map((name) => ({ name, value: "x".repeat(300) }));
+  return {
+    id,
+    threadId: m.threadId,
+    labelIds: m.labelIds,
+    snippet: m.snippet ?? top.body.toString().slice(0, 80).trim(),
+    sizeEstimate: m.raw.length,
+    internalDate: m.internalDate ?? "1791277200000",
+    payload: { ...payloadOf(top), headers: [...noise, ...top.all.map(([name, value]) => ({ name, value }))] },
+  };
+}
+
+/** Every GET of one message, by format. */
+const formats = (s: FetchStub, id: string) => s.callsTo("GET", `${BASE}/messages/${id}`).map((c) => c.url.searchParams.get("format"));
 
 /** A small fake of the Gmail endpoints the provider reads. */
 function mailbox(messages: Record<string, FakeMessage>, extra: { labels?: object[] } = {}): FetchStub {
@@ -31,6 +65,10 @@ function mailbox(messages: Record<string, FakeMessage>, extra: { labels?: object
     const m = messages[id];
     if (!m) return json({ error: { code: 404, message: "Requested entity was not found." } }, 404);
     const format = call.url.searchParams.get("format");
+    if (format === "full") {
+      assert.equal(call.url.searchParams.get("fields"), SUMMARY_FIELDS, "a summary asks for a field mask, not the whole message");
+      return json(summaryOf(id, m));
+    }
     return json(
       format === "raw"
         ? { id, threadId: m.threadId, labelIds: m.labelIds, raw: m.raw.toString("base64url"), internalDate: m.internalDate ?? "1791277200000" }
@@ -64,36 +102,62 @@ describe("Gmail ownership", () => {
 });
 
 describe("Gmail initial sync", () => {
-  it("pages through the list, maps labels, and ends on an incremental cursor", async () => {
-    const mail: Record<string, FakeMessage> = {
-      m1: { threadId: "t1", labelIds: ["INBOX", "UNREAD", "Label_1", "CATEGORY_UPDATES", "IMPORTANT"], raw: rawMail({ subject: "Quarterly plan", messageId: "<m1@x>" }) },
-      m2: { threadId: "t1", labelIds: ["SENT"], raw: rawMail({ from: "me@example.com", to: "ann@example.org", subject: "Re: Quarterly plan", messageId: "<m2@x>", inReplyTo: "<m1@x>" }) },
-      m3: { threadId: "t2", labelIds: ["TRASH", "STARRED"], raw: rawMail({ subject: "Old", messageId: "<m3@x>" }) },
-      m4: { threadId: "t3", labelIds: ["SPAM"], raw: rawMail({ subject: "Win big", messageId: "<m4@x>" }) },
-      m5: { threadId: "t4", labelIds: ["DRAFT"], raw: rawMail({ subject: "Unsent", messageId: "<m5@x>" }) },
-      m6: { threadId: "t5", labelIds: ["CHAT"], raw: rawMail({ subject: "chat", messageId: "<m6@x>" }) },
-      m7: { threadId: "t6", labelIds: [], raw: rawMail({ subject: "Archived", messageId: "<m7@x>" }) },
-    };
+  const sevenMessages = (): Record<string, FakeMessage> => ({
+    m1: { threadId: "t1", labelIds: ["INBOX", "UNREAD", "Label_1", "CATEGORY_UPDATES", "IMPORTANT"], raw: rawMail({ subject: "Quarterly plan", messageId: "<m1@x>", body: "Numbers inside &amp; more" }), snippet: "It&#39;s the plan &amp; the numbers" },
+    m2: { threadId: "t1", labelIds: ["SENT"], raw: rawMail({ from: "me@example.com", to: "ann@example.org", subject: "Re: Quarterly plan", messageId: "<m2@x>", inReplyTo: "<m1@x>" }) },
+    m3: { threadId: "t2", labelIds: ["TRASH", "STARRED"], raw: rawMail({ subject: "Old", messageId: "<m3@x>" }) },
+    m4: { threadId: "t3", labelIds: ["SPAM"], raw: rawMail({ subject: "Win big", messageId: "<m4@x>" }) },
+    m5: { threadId: "t4", labelIds: ["DRAFT"], raw: rawMail({ subject: "Unsent", messageId: "<m5@x>" }) },
+    m6: { threadId: "t5", labelIds: ["CHAT"], raw: rawMail({ subject: "chat", messageId: "<m6@x>" }) },
+    m7: { threadId: "t6", labelIds: [], raw: rawMail({ subject: "Archived", messageId: "<m7@x>" }) },
+  });
+
+  /** Lists the way Gmail does: the inbox query returns inbox mail, the window query pages through everything. */
+  function listing(mail: Record<string, FakeMessage>) {
     stub = mailbox(mail);
     stub.on("GET", `${BASE}/profile`, { emailAddress: "me@example.com", historyId: "100" });
-    stub.on("GET", `${BASE}/messages`, (call: Call) =>
-      call.url.searchParams.get("pageToken") === "p2"
-        ? json({ messages: [{ id: "m5", threadId: "t4" }, { id: "m6", threadId: "t5" }, { id: "m7", threadId: "t6" }] })
-        : json({ messages: [{ id: "m1", threadId: "t1" }, { id: "m2", threadId: "t1" }, { id: "m3", threadId: "t2" }, { id: "m4", threadId: "t3" }], nextPageToken: "p2" }),
-    );
+    stub.on("GET", `${BASE}/messages`, (call: Call) => {
+      const q = call.url.searchParams.get("q") ?? "";
+      if (q.startsWith("in:inbox")) return json({ messages: Object.entries(mail).filter(([, m]) => m.labelIds.includes("INBOX")).map(([id, m]) => ({ id, threadId: m.threadId })) });
+      return call.url.searchParams.get("pageToken") === "p2"
+        ? json({ messages: [{ id: "m5", threadId: "t4" }, { id: "m6", threadId: "t5" }, { id: "m7", threadId: "t6" }], resultSizeEstimate: 99 })
+        : json({ messages: [{ id: "m1", threadId: "t1" }, { id: "m2", threadId: "t1" }, { id: "m3", threadId: "t2" }, { id: "m4", threadId: "t3" }], nextPageToken: "p2", resultSizeEstimate: 7 });
+    });
+  }
+
+  it("opens with the newest inbox mail, then pages through the window, and ends on an incremental cursor", async () => {
+    listing(sevenMessages());
     const { gmail } = newProvider();
 
-    const first = await gmail.sync(null);
-    assert.equal(first.done, false);
-    assert.deepEqual(JSON.parse(first.cursor!), { phase: "initial", historyId: "100", pageToken: "p2" });
-    assert.deepEqual(first.messages.map((m) => m.remoteId), ["m1", "m2", "m3", "m4"]);
+    const inbox = await gmail.sync(null);
+    assert.equal(inbox.done, false);
+    assert.deepEqual(inbox.messages.map((m) => m.remoteId), ["m1"]);
+    assert.deepEqual(inbox.progress, { stage: "inbox", total: 1, count: 1, last: true });
+    assert.deepEqual(JSON.parse(inbox.cursor!), { phase: "initial", historyId: "100", top: true });
+    const inboxList = stub!.callsTo("GET", `${BASE}/messages`)[0]!.url.searchParams;
+    assert.equal(inboxList.get("q"), "in:inbox newer_than:120d");
+    assert.equal(inboxList.get("maxResults"), "100");
 
-    const list = stub.callsTo("GET", `${BASE}/messages`)[0]!.url.searchParams;
+    const first = await gmail.sync(inbox.cursor);
+    assert.equal(first.done, false);
+    assert.deepEqual(JSON.parse(first.cursor!), { phase: "initial", historyId: "100", top: true, pageToken: "p2", total: 7 });
+    assert.deepEqual(first.messages.map((m) => m.remoteId), ["m2", "m3", "m4"], "m1 came with the inbox page");
+    assert.deepEqual(first.progress, { stage: "history", total: 7, count: 4, last: false });
+    const list = stub!.callsTo("GET", `${BASE}/messages`)[1]!.url.searchParams;
     assert.equal(list.get("q"), "newer_than:120d -in:chats");
-    assert.equal(list.get("maxResults"), "500");
+    assert.equal(list.get("maxResults"), "100");
     assert.equal(list.get("includeSpamTrash"), "true");
 
-    const [m1, m2, m3, m4] = first.messages;
+    const [m2, m3, m4] = first.messages;
+    assert.equal(m2!.remoteThreadId, "t1");
+    assert.equal(m2!.folders.sent, true);
+    assert.equal(m2!.outgoing, true);
+    assert.equal(m2!.unread, false);
+    assert.deepEqual(m3!.folders, { inbox: false, sent: false, trash: true, spam: false });
+    assert.equal(m3!.starred, true);
+    assert.equal(m4!.folders.spam, true);
+
+    const [m1] = inbox.messages;
     assert.equal(m1!.remoteThreadId, "t1");
     assert.equal(m1!.subject, "Quarterly plan");
     assert.equal(m1!.messageIdHeader, "<m1@x>");
@@ -102,22 +166,139 @@ describe("Gmail initial sync", () => {
     assert.equal(m1!.starred, false);
     assert.deepEqual(m1!.labels, [{ remoteId: "Label_1", name: "Clients" }]);
     assert.equal(m1!.outgoing, false);
-    assert.equal(m2!.folders.sent, true);
-    assert.equal(m2!.outgoing, true);
-    assert.equal(m2!.unread, false);
-    assert.deepEqual(m3!.folders, { inbox: false, sent: false, trash: true, spam: false });
-    assert.equal(m3!.starred, true);
-    assert.equal(m4!.folders.spam, true);
 
     const second = await gmail.sync(first.cursor);
     assert.equal(second.done, true);
-    assert.deepEqual(second.messages.map((m) => m.remoteId), ["m7"]);
+    assert.deepEqual(second.messages.map((m) => m.remoteId), ["m7"], "a draft and a chat are skipped");
     assert.deepEqual(second.messages[0]!.folders, { inbox: false, sent: false, trash: false, spam: false });
+    assert.deepEqual(second.progress, { stage: "history", total: 7, count: 3, last: true });
     assert.deepEqual(JSON.parse(second.cursor!), { phase: "incremental", historyId: "100" });
     // The profile is read once, before listing.
-    assert.equal(stub.callsTo("GET", `${BASE}/profile`).length, 1);
+    assert.equal(stub!.callsTo("GET", `${BASE}/profile`).length, 1);
     // Labels are only listed when a message carries a custom one, and then once per sync call.
-    assert.equal(stub.callsTo("GET", `${BASE}/labels`).length, 1);
+    assert.equal(stub!.callsTo("GET", `${BASE}/labels`).length, 1);
+  });
+
+  it("fetches summaries only: a field-masked format=full, never a raw message", async () => {
+    listing(sevenMessages());
+    const { gmail } = newProvider();
+    let page = await gmail.sync(null);
+    for (let i = 0; i < 10 && !page.done; i++) page = await gmail.sync(page.cursor);
+    const fetches = stub!.calls.filter((c) => /\/messages\/[^/]+$/.test(c.url.pathname) && c.method === "GET");
+    assert.ok(fetches.length >= 6);
+    for (const c of fetches) {
+      assert.equal(c.url.searchParams.get("format"), "full");
+      assert.ok(!/data/.test(c.url.searchParams.get("fields")!), "the mask names no body data");
+    }
+  });
+
+  it("builds a summary from headers, the snippet and the part tree", async () => {
+    const raw = Buffer.from(
+      [
+        "From: =?utf-8?B?SsOpcsO0bWU=?= <jerome@example.org>",
+        "To: me@example.com",
+        "Cc: Pat <pat@example.org>",
+        "Subject: Statement",
+        "Message-ID: <s1@x>",
+        "In-Reply-To: <s0@x>",
+        "References: <s-1@x> <s0@x>",
+        "List-Unsubscribe: <https://news.example.org/u/9>, <mailto:u@news.example.org>",
+        "List-Id: <news.example.org>",
+        "MIME-Version: 1.0",
+        'Content-Type: multipart/mixed; boundary="b"',
+        "",
+        "--b",
+        "Content-Type: multipart/alternative; boundary=\"c\"",
+        "",
+        "--c",
+        "Content-Type: text/plain",
+        "",
+        "Your statement is attached. The code is 482913.",
+        "--c",
+        "Content-Type: text/html",
+        "",
+        "<p>Your statement</p>",
+        "--c--",
+        "--b",
+        'Content-Type: application/pdf; name="statement.pdf"',
+        'Content-Disposition: attachment; filename="statement.pdf"',
+        "Content-Transfer-Encoding: base64",
+        "",
+        "AAAA",
+        "--b",
+        "Content-Type: image/png",
+        'Content-Disposition: inline; filename="logo.png"',
+        "Content-ID: <logo@x>",
+        "",
+        "PNG",
+        "--b--",
+        "",
+      ].join("\r\n"),
+    );
+    listing({ m1: { threadId: "t1", labelIds: ["INBOX"], raw, snippet: "Don&#39;t miss it &amp; more" } });
+    const { gmail } = newProvider();
+    const [m] = (await gmail.sync(null)).messages;
+    assert.equal(m!.from.name, "Jérôme");
+    assert.deepEqual(m!.cc, [{ name: "Pat", email: "pat@example.org" }]);
+    assert.equal(m!.inReplyTo, "<s0@x>");
+    assert.deepEqual(m!.references, ["<s-1@x>", "<s0@x>"]);
+    assert.equal(m!.listUnsubscribe, "https://news.example.org/u/9, mailto:u@news.example.org");
+    assert.equal(m!.bulk, true);
+    assert.equal(m!.bodyComplete, false);
+    assert.equal(m!.bodyText, "Don't miss it & more", "the snippet stands in for the body, entities decoded");
+    assert.equal(m!.bodyHtml, undefined);
+    assert.equal(m!.size, raw.length);
+    assert.equal(m!.sentAt, 1791277200000, "no Date header: Gmail's own internal date");
+    assert.deepEqual(
+      m!.attachments.map((a) => ({ filename: a.filename, mimeType: a.mimeType, inline: a.inline, contentId: a.contentId, remoteId: a.remoteId })),
+      [
+        { filename: "statement.pdf", mimeType: "application/pdf", inline: false, contentId: undefined, remoteId: "part:2" },
+        { filename: "logo.png", mimeType: "image/png", inline: true, contentId: "logo@x", remoteId: "part:3" },
+      ],
+    );
+    assert.ok(m!.attachments.every((a) => a.content === undefined), "no attachment bytes");
+  });
+
+  it("brings the whole message when asked for it", async () => {
+    const raw = Buffer.from(
+      [
+        "From: Ann <ann@example.org>",
+        "To: me@example.com",
+        "Subject: Full",
+        "Message-ID: <f1@x>",
+        "MIME-Version: 1.0",
+        'Content-Type: multipart/mixed; boundary="b"',
+        "",
+        "--b",
+        "Content-Type: text/html; charset=utf-8",
+        "",
+        "<p>The <b>whole</b> thing</p>",
+        "--b",
+        "Content-Type: image/png",
+        'Content-Disposition: inline; filename="logo.png"',
+        "Content-ID: <logo@x>",
+        "Content-Transfer-Encoding: base64",
+        "",
+        Buffer.from("PNGBYTES").toString("base64"),
+        "--b",
+        'Content-Type: application/pdf; name="a.pdf"',
+        'Content-Disposition: attachment; filename="a.pdf"',
+        "Content-Transfer-Encoding: base64",
+        "",
+        Buffer.from("PDFBYTES").toString("base64"),
+        "--b--",
+        "",
+      ].join("\r\n"),
+    );
+    stub = mailbox({ m1: { threadId: "t1", labelIds: ["INBOX"], raw } });
+    const { gmail } = newProvider();
+    const body = await gmail.fetchBody("m1");
+    assert.deepEqual(formats(stub, "m1"), ["raw"]);
+    assert.match(body.html!, /The <b>whole<\/b> thing/);
+    assert.deepEqual(body.attachments.map((a) => [a.filename, a.remoteId, a.inline, a.content?.toString()]), [
+      ["logo.png", "idx:0", true, "PNGBYTES"],
+      ["a.pdf", "idx:1", false, undefined],
+    ]);
   });
 });
 
@@ -166,8 +347,8 @@ describe("Gmail incremental sync", () => {
         labels: [{ remoteId: "Label_1", name: "Clients" }],
       },
     ]);
-    // New messages are fetched raw once; label-only changes use the minimal format.
-    assert.deepEqual(stub.callsTo("GET", `${BASE}/messages/m5`).map((c) => c.url.searchParams.get("format")), ["raw"]);
+    // New messages are fetched as summaries once; label-only changes use the minimal format.
+    assert.deepEqual(stub.callsTo("GET", `${BASE}/messages/m5`).map((c) => c.url.searchParams.get("format")), ["full"]);
     assert.deepEqual(stub.callsTo("GET", `${BASE}/messages/m1`).map((c) => c.url.searchParams.get("format")), ["minimal"]);
   });
 
@@ -189,9 +370,10 @@ describe("Gmail incremental sync", () => {
     stub.on("GET", `${BASE}/messages`, { messages: [{ id: "m1", threadId: "t1" }] });
     const { gmail } = newProvider();
     const page = await gmail.sync(JSON.stringify({ phase: "incremental", historyId: "5" }));
+    // A fresh snapshot opens with the newest inbox mail, like any first sync.
     assert.deepEqual(page.messages.map((m) => m.remoteId), ["m1"]);
-    assert.deepEqual(JSON.parse(page.cursor!), { phase: "incremental", historyId: "900" });
-    assert.equal(page.done, true);
+    assert.deepEqual(JSON.parse(page.cursor!), { phase: "initial", historyId: "900", top: true });
+    assert.equal(page.done, false);
   });
 
   it("starts an initial sync from an unreadable cursor", async () => {
@@ -200,7 +382,8 @@ describe("Gmail incremental sync", () => {
     stub.on("GET", `${BASE}/messages`, {});
     const { gmail } = newProvider();
     const page = await gmail.sync("not json");
-    assert.deepEqual(JSON.parse(page.cursor!), { phase: "incremental", historyId: "7" });
+    assert.deepEqual(JSON.parse(page.cursor!), { phase: "initial", historyId: "7", top: true });
+    assert.deepEqual(page.progress, { stage: "inbox", total: 0, count: 0, last: true });
   });
 });
 
@@ -468,9 +651,15 @@ describe("Gmail into the store", () => {
       const account = db.get<AccountRow>("SELECT * FROM accounts WHERE id = 'acc1'")!;
       const store = new MailStore(db, dir);
 
-      const page = await gmail.sync(null);
-      const touched = store.ingest(account, page);
-      assert.equal(touched.length, 2);
+      let page = await gmail.sync(null);
+      const touched = new Set(store.ingest(account, page));
+      while (!page.done) {
+        page = await gmail.sync(page.cursor);
+        for (const t of store.ingest(account, page)) touched.add(t);
+      }
+      assert.equal(touched.size, 2);
+      // Everything arrived as a summary: the preview stands in for the body until the message is opened.
+      assert.deepEqual(db.all<{ body_state: string }>("SELECT DISTINCT body_state FROM messages").map((r) => r.body_state), ["none"]);
 
       const threads = db.all<{ remote_id: string; message_count: number; in_inbox: number; unread_count: number; in_sent: number }>(
         "SELECT remote_id, message_count, in_inbox, unread_count, in_sent FROM threads ORDER BY remote_id",

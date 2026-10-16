@@ -1,17 +1,28 @@
-import { ImapFlow, type FetchMessageObject, type FetchQueryObject, type ListResponse, type MailboxObject, type SearchObject } from "imapflow";
+import {
+  ImapFlow,
+  type FetchMessageObject,
+  type FetchQueryObject,
+  type ListResponse,
+  type MailboxObject,
+  type MessageStructureObject,
+  type SearchObject,
+} from "imapflow";
 import nodemailer, { type Transporter } from "nodemailer";
-import { extractAttachment, parseRaw } from "../mail/mime.ts";
+import { extractAttachment, parseHeaderBlock, parseRaw, previewFromPart } from "../mail/mime.ts";
 import {
   PermanentProviderError,
   ProviderAuthError,
   type FlagUpdate,
   type Folders,
+  type FullBody,
+  type IncomingAttachment,
   type IncomingMessage,
   type MailProvider,
   type OutgoingMessage,
   type ProviderContext,
   type RemoteAction,
   type SyncPage,
+  type SyncStageProgress,
   type ThreadRef,
 } from "../mail/types.ts";
 
@@ -177,7 +188,7 @@ export interface ImapDeps {
   createTransport?: (settings: ImapSettings) => SmtpTransport;
 }
 
-function createImapFlow(s: ImapSettings): ImapFlow {
+export function createImapFlow(s: ImapSettings): ImapFlow {
   return new ImapFlow({
     host: s.imapHost,
     port: s.imapPort,
@@ -298,8 +309,18 @@ export function syncTargets(map: MailboxMap, gmail: boolean): SyncTarget[] {
 /* ---------------------------------------------------------------- cursor */
 
 const WINDOW = 500;
-const BATCH = 50;
+/** Messages per page of summaries. */
+const BATCH = 100;
+/** The newest inbox mail is its own first page: what the dashboard needs to open. */
+const INBOX_PAGE = 100;
 const DAY_MS = 86_400_000;
+/** How much of a message's text part a summary reads for its preview. */
+const PREVIEW_BYTES = 2048;
+/** The headers a summary needs; the rest of the header block (Received, DKIM) is never downloaded. */
+const HEADER_FIELDS = [
+  "From", "To", "Cc", "Bcc", "Reply-To", "Subject", "Date", "Message-ID", "In-Reply-To", "References",
+  "List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted",
+];
 
 interface BoxState {
   /** bigint, as a string: JSON can't carry bigints. */
@@ -309,8 +330,11 @@ interface BoxState {
   highestModseq?: string;
   /** UIDs of the newest messages as of the last change check, as "1:5,7"; the next check diffs against it to find expunges. */
   window?: string;
-  /** Set while the first sync of this mailbox is still working through its backlog. */
-  initial?: { since: number; ceiling: number | null };
+  /**
+   * Set while the first sync of this mailbox is still working through its window, newest first.
+   * `low`: every window UID at or above it has been handed to the store. `top`: the inbox page has gone.
+   */
+  initial?: { since: number; ceiling: number | null; low?: number; top?: true };
 }
 
 interface Cursor {
@@ -343,9 +367,7 @@ export function finishBatch(st: BoxState, lastInBatch: number | undefined, remai
     st.lastUid = lastInBatch ?? st.lastUid;
     return;
   }
-  // Nothing left: the first sync is complete up to the UIDNEXT it started from, later ones up to the newest UID seen.
-  st.lastUid = Math.max(st.lastUid, lastInBatch ?? 0, st.initial?.ceiling ?? 0);
-  delete st.initial;
+  st.lastUid = Math.max(st.lastUid, lastInBatch ?? 0);
 }
 
 /** "1:5,7,9:12" for a sorted list of UIDs. */
@@ -444,16 +466,54 @@ function stateOf(fm: FetchMessageObject, target: SyncTarget, gmail: boolean) {
   };
 }
 
-async function toIncoming(
+/** What a message's MIME structure says without downloading it: which part is the text, and the attachments. */
+export function describeStructure(root: MessageStructureObject | undefined): {
+  text?: { key: string; type: string; encoding?: string; charset?: string };
+  attachments: IncomingAttachment[];
+} {
+  if (!root) return { attachments: [] };
+  const leaves: MessageStructureObject[] = [];
+  const walk = (n: MessageStructureObject) => {
+    // An attached message is one attachment, not a place to look for text.
+    if (n.childNodes?.length && n.type !== "message/rfc822") n.childNodes.forEach(walk);
+    else leaves.push(n);
+  };
+  walk(root);
+  const named = (n: MessageStructureObject) => n.dispositionParameters?.filename ?? n.parameters?.name;
+  const isBody = (n: MessageStructureObject) => /^text\/(plain|html)$/.test(n.type) && n.disposition !== "attachment" && !named(n);
+  const chosen = leaves.find((n) => n.type === "text/plain" && isBody(n)) ?? leaves.find((n) => n.type === "text/html" && isBody(n));
+  const attachments = leaves
+    .filter((n) => !isBody(n))
+    .map((n): IncomingAttachment => {
+      const contentId = n.id?.replace(/^<|>$/g, "").trim() || undefined;
+      const encoded = n.size ?? 0;
+      return {
+        remoteId: `part:${n.part ?? "1"}`,
+        filename: named(n) || (n.type === "message/rfc822" ? "message.eml" : "attachment"),
+        mimeType: n.type,
+        size: n.encoding === "base64" ? Math.floor((encoded * 3) / 4) : encoded,
+        contentId,
+        inline: n.disposition === "inline" && Boolean(contentId),
+      };
+    });
+  return {
+    text: chosen ? { key: chosen.part ?? "1", type: chosen.type, encoding: chosen.encoding, charset: chosen.parameters?.charset } : undefined,
+    attachments,
+  };
+}
+
+/** A summary: headers, the first lines of the text, the attachment list and the server's size; no body. */
+async function toSummary(
   fm: FetchMessageObject,
+  preview: Buffer | undefined,
   target: SyncTarget,
   validity: string,
   gmail: boolean,
   selfEmail: string,
 ): Promise<IncomingMessage | null> {
   const s = stateOf(fm, target, gmail);
-  if (s.skip || !fm.source) return null;
-  const { message } = await parseRaw(fm.source, {
+  if (s.skip) return null;
+  const message = await parseHeaderBlock(fm.headers ?? Buffer.alloc(0), {
     remoteId: remoteIdFor(target.path, validity, fm.uid),
     remoteThreadId: gmail ? fm.threadId : undefined,
     folders: s.folders,
@@ -463,8 +523,13 @@ async function toIncoming(
     selfEmail,
     receivedAt: fm.internalDate ? new Date(fm.internalDate).getTime() : undefined,
   });
+  const { text, attachments } = describeStructure(fm.bodyStructure);
   // Ours means "in the Sent folder" (aliases included), never "the From header says so": anyone can write a From.
   message.outgoing = Boolean(s.folders.sent);
+  message.bodyText = text && preview ? previewFromPart(preview, text) : "";
+  message.bodyComplete = false;
+  message.size = fm.size;
+  message.attachments = attachments;
   return message;
 }
 
@@ -519,9 +584,14 @@ interface StepResult {
   deleted: string[];
   /** More new mail is queued behind this batch. */
   more: boolean;
+  /** Set by pages of a first sync. */
+  progress?: SyncStageProgress;
 }
 
 const emptyStep = (): StepResult => ({ messages: [], flagUpdates: [], deleted: [], more: false });
+
+/** The mailbox whose newest mail is the "inbox" page: Gmail's All Mail (its inbox is a label), otherwise INBOX. */
+const isInboxTarget = (t: SyncTarget, gmail: boolean) => t.role === (gmail ? "all" : "inbox");
 
 interface Layout {
   gmail: boolean;
@@ -547,8 +617,13 @@ export class ImapProvider implements MailProvider {
   private client?: ImapClient;
   private connecting?: Promise<ImapClient>;
   private smtp?: SmtpTransport;
-  /** UIDs still to fetch, per mailbox: spares re-running a large SEARCH for every batch of the first sync. */
-  private queued = new Map<string, number[]>();
+  /**
+   * UIDs still to fetch, per mailbox: spares re-running a large SEARCH for every batch. The first sync's list is newest
+   * first, with the inbox page (the first `top` UIDs) at the front; later mail is oldest first.
+   */
+  private queued = new Map<string, { uids: number[]; top: number }>();
+  /** Messages the first sync's window holds beyond the inbox page, once every mailbox has been counted. */
+  private historyTotal?: number;
   /** Last flags sent per mailbox window, so an unchanged message isn't re-announced every round. */
   private signatures = new Map<string, Map<number, string>>();
   /** Gmail: remote ids of messages we moved out of a mailbox, to retire even if they're outside the change window. */
@@ -632,14 +707,19 @@ export class ImapProvider implements MailProvider {
     const layout = await this.run((c) => this.layout(c));
     const n = layout.targets.length;
     const total = n * 2;
+    if (Object.keys(cursor.boxes).length === 0) {
+      this.queued.clear();
+      this.historyTotal = undefined;
+    }
     while (cursor.step < total) {
       this.ctx.signal?.throwIfAborted();
       // Elsewhere the store drops a copy that arrives while its twin still exists, so deletions must come first.
       // Gmail threads by X-GM-THRID, which keeps a thread alive across a move, so there additions go first.
       const checking = (cursor.step < n) === !layout.gmail;
       const target = layout.targets[cursor.step % n]!;
+      if (!checking) await this.countWindow(layout, cursor);
       const res = await this.run((c) => (checking ? this.checkChanges(c, target, layout.gmail, cursor) : this.fetchNew(c, target, layout.gmail, cursor)));
-      const content = res.messages.length > 0 || res.flagUpdates.length > 0 || res.deleted.length > 0;
+      const content = res.messages.length > 0 || res.flagUpdates.length > 0 || res.deleted.length > 0 || res.progress !== undefined;
       if (content || res.more) {
         if (!res.more) cursor.step += 1;
         const done = cursor.step >= total;
@@ -650,12 +730,33 @@ export class ImapProvider implements MailProvider {
           deletedRemoteIds: res.deleted.length ? res.deleted : undefined,
           cursor: serializeCursor(cursor),
           done,
+          progress: res.progress?.stage === "history" ? { ...res.progress, last: done } : res.progress,
         };
       }
       cursor.step += 1;
     }
     cursor.step = 0;
     return { messages: [], cursor: serializeCursor(cursor), done: true };
+  }
+
+  /**
+   * Once the inbox page has gone out, count the rest of the first sync's window in every mailbox, so the history stage can
+   * report an exact total. Each mailbox is searched once and its list kept for the batches that follow.
+   */
+  private async countWindow(layout: Layout, cursor: Cursor): Promise<void> {
+    if (this.historyTotal !== undefined) return;
+    const inbox = layout.targets.find((t) => isInboxTarget(t, layout.gmail));
+    const inboxBox = inbox && cursor.boxes[inbox.path];
+    if (!inboxBox || (inboxBox.initial && !inboxBox.initial.top)) return;
+    const pending = layout.targets.filter((t) => cursor.boxes[t.path]?.initial !== undefined || !cursor.boxes[t.path]);
+    if (pending.length === 0) return;
+    for (const t of pending) {
+      await this.run((c) => withMailbox(c, t.path, true, (mb) => this.listWindow(c, mb, t, layout.gmail, cursor)));
+    }
+    this.historyTotal = pending.reduce((sum, t) => {
+      const q = this.queued.get(t.path);
+      return sum + (q ? q.uids.length - q.top : 0);
+    }, 0);
   }
 
   /** Flag changes and expunges in mailboxes we already follow. */
@@ -716,64 +817,144 @@ export class ImapProvider implements MailProvider {
     });
   }
 
-  /** One batch of mail the store hasn't seen: the first sync (recent mail only) or anything past lastUid. */
+  /**
+   * Opens the first sync of a mailbox if it hasn't started (or the server renumbered it) and lists the window's UIDs
+   * newest first, with the inbox page in front. A list already made in this run is kept.
+   */
+  private async listWindow(c: ImapClient, mb: MailboxObject, target: SyncTarget, gmail: boolean, cursor: Cursor): Promise<BoxState> {
+    const validity = String(mb.uidValidity);
+    let st = cursor.boxes[target.path];
+    if (!st || st.uidValidity !== validity) {
+      st = {
+        uidValidity: validity,
+        lastUid: 0,
+        highestModseq: typeof mb.highestModseq === "bigint" && !mb.noModseq ? String(mb.highestModseq) : undefined,
+        initial: { since: Date.now() - this.ctx.initialSyncDays * DAY_MS, ceiling: mb.uidNext > 0 ? mb.uidNext - 1 : null },
+      };
+      cursor.boxes[target.path] = st;
+      this.queued.delete(target.path);
+    }
+    const init = st.initial;
+    if (!init || this.queued.has(target.path)) return st;
+
+    // UIDs not yet handed over: below `low` once a batch has gone, otherwise up to the UIDNEXT this sync started from.
+    const upper = init.low !== undefined ? init.low - 1 : init.ceiling;
+    const since = new Date(init.since);
+    const search = async (extra: SearchObject) => {
+      if (upper !== null && upper < 1) return [];
+      const found = (await c.search({ ...extra, uid: `1:${upper ?? "*"}`, since }, { uid: true })) || [];
+      return found.filter((u) => upper === null || u <= upper).sort((a, b) => b - a);
+    };
+    let uids = await search({});
+    let top = 0;
+    if (!init.top && isInboxTarget(target, gmail)) {
+      if (gmail) {
+        // Gmail's inbox is a label on All Mail, so its newest inbox mail is found with Gmail's own search.
+        const first = (await search({ gmraw: "in:inbox" })).slice(0, INBOX_PAGE);
+        const picked = new Set(first);
+        uids = [...first, ...uids.filter((u) => !picked.has(u))];
+        top = first.length;
+      } else {
+        top = Math.min(INBOX_PAGE, uids.length);
+      }
+    }
+    this.queued.set(target.path, { uids, top });
+    return st;
+  }
+
+  /** One page of mail the store hasn't seen: the first sync's window (newest first) or anything past lastUid. */
   private async fetchNew(c: ImapClient, target: SyncTarget, gmail: boolean, cursor: Cursor): Promise<StepResult> {
     return withMailbox(c, target.path, true, async (mb) => {
+      const st = await this.listWindow(c, mb, target, gmail, cursor);
       const validity = String(mb.uidValidity);
-      let st = cursor.boxes[target.path];
-      if (!st || st.uidValidity !== validity) {
-        st = {
-          uidValidity: validity,
-          lastUid: 0,
-          highestModseq: typeof mb.highestModseq === "bigint" && !mb.noModseq ? String(mb.highestModseq) : undefined,
-          initial: { since: Date.now() - this.ctx.initialSyncDays * DAY_MS, ceiling: mb.uidNext > 0 ? mb.uidNext - 1 : null },
-        };
-        cursor.boxes[target.path] = st;
-        this.queued.delete(target.path);
+      const res = emptyStep();
+
+      if (st.initial) {
+        const init = st.initial;
+        const queue = this.queued.get(target.path) ?? { uids: [], top: 0 };
+        const inboxPage = !init.top && isInboxTarget(target, gmail);
+        const size = inboxPage ? queue.top : BATCH;
+        const batch = queue.uids.slice(0, size);
+        const rest = queue.uids.slice(size);
+        await this.summarize(c, batch, target, gmail, validity, res);
+        // A page of newest mail is a block at the top of the window; Gmail's inbox page is scattered through it.
+        if (batch.length && !(inboxPage && gmail)) init.low = Math.min(...batch);
+        if (inboxPage) {
+          init.top = true;
+          res.progress = { stage: "inbox", total: queue.top, count: batch.length, last: true };
+        } else if (batch.length) {
+          res.progress = { stage: "history", total: this.historyTotal ?? null, count: batch.length };
+        }
+        if (rest.length) this.queued.set(target.path, { uids: rest, top: 0 });
+        else {
+          // The window is done. Mail past the UIDNEXT it started from comes in as new mail next round.
+          this.queued.delete(target.path);
+          st.lastUid = Math.max(st.lastUid, init.ceiling ?? 0);
+          delete st.initial;
+        }
+        res.more = rest.length > 0;
+        return res;
       }
+
       const after = st.lastUid;
-      const ceiling = st.initial?.ceiling ?? null;
-      let uids = this.queued.get(target.path)?.filter((u) => u > after);
+      let uids = this.queued.get(target.path)?.uids.filter((u) => u > after);
       if (!uids) {
         // "N:*" always includes the newest message even when it is older than N, hence the filter.
-        const query: SearchObject = { uid: `${after + 1}:${ceiling ?? "*"}` };
-        if (st.initial) query.since = new Date(st.initial.since);
-        const found = ceiling !== null && after + 1 > ceiling ? [] : ((await c.search(query, { uid: true })) || []);
-        uids = found.filter((u) => u > after && (ceiling === null || u <= ceiling)).sort((a, b) => a - b);
+        const found = (await c.search({ uid: `${after + 1}:*` }, { uid: true })) || [];
+        uids = found.filter((u) => u > after).sort((a, b) => a - b);
       }
       const batch = uids.slice(0, BATCH);
       const rest = uids.slice(BATCH);
-
-      const res = emptyStep();
-      if (batch.length) {
-        const query: FetchQueryObject = { uid: true, flags: true, internalDate: true, source: true };
-        if (gmail) {
-          query.labels = true;
-          query.threadId = true;
-        }
-        const fetched = (await c.fetchAll(batch, query, { uid: true })).sort((a, b) => a.uid - b.uid);
-        const sigs = this.signatures.get(target.path) ?? new Map<number, string>();
-        this.signatures.set(target.path, sigs);
-        for (const fm of fetched) {
-          try {
-            const m = await toIncoming(fm, target, validity, gmail, this.ctx.email);
-            if (!m) continue;
-            res.messages.push(m);
-            // The store has these flags now; the next change check shouldn't announce them again.
-            sigs.set(fm.uid, flagSignature(flagUpdateOf(fm, target, validity, gmail)));
-            if (sigs.size > WINDOW * 2) sigs.delete(sigs.keys().next().value!);
-          } catch (err) {
-            // One unreadable message shouldn't stop the mailbox from syncing.
-            console.warn(`[slipstream] imap ${target.path} uid ${fm.uid}: skipped, ${err instanceof Error ? err.message : err}`);
-          }
-        }
-      }
+      await this.summarize(c, batch, target, gmail, validity, res);
       finishBatch(st, batch.at(-1), rest.length);
-      if (rest.length) this.queued.set(target.path, rest);
+      if (rest.length) this.queued.set(target.path, { uids: rest, top: 0 });
       else this.queued.delete(target.path);
       res.more = rest.length > 0;
       return res;
     });
+  }
+
+  /**
+   * Summaries for a batch of UIDs in the open mailbox: one fetch for headers, structure, size and flags, then one per kind
+   * of text part for the first lines of each message. Nothing here downloads a whole message.
+   */
+  private async summarize(c: ImapClient, uids: number[], target: SyncTarget, gmail: boolean, validity: string, res: StepResult): Promise<void> {
+    if (uids.length === 0) return;
+    const query: FetchQueryObject = { uid: true, flags: true, internalDate: true, size: true, bodyStructure: true, headers: HEADER_FIELDS };
+    if (gmail) {
+      query.labels = true;
+      query.threadId = true;
+    }
+    const fetched = (await c.fetchAll(uids, query, { uid: true })).sort((a, b) => a.uid - b.uid);
+
+    const byPart = new Map<string, number[]>();
+    for (const fm of fetched) {
+      const key = describeStructure(fm.bodyStructure).text?.key;
+      if (key) byPart.set(key, [...(byPart.get(key) ?? []), fm.uid]);
+    }
+    const previews = new Map<number, Buffer>();
+    for (const [key, group] of byPart) {
+      for (const part of await c.fetchAll(group, { uid: true, bodyParts: [{ key, maxLength: PREVIEW_BYTES }] }, { uid: true })) {
+        const bytes = part.bodyParts?.get(key);
+        if (bytes) previews.set(part.uid, bytes);
+      }
+    }
+
+    const sigs = this.signatures.get(target.path) ?? new Map<number, string>();
+    this.signatures.set(target.path, sigs);
+    for (const fm of fetched) {
+      try {
+        const m = await toSummary(fm, previews.get(fm.uid), target, validity, gmail, this.ctx.email);
+        if (!m) continue;
+        res.messages.push(m);
+        // The store has these flags now; the next change check shouldn't announce them again.
+        sigs.set(fm.uid, flagSignature(flagUpdateOf(fm, target, validity, gmail)));
+        if (sigs.size > WINDOW * 2) sigs.delete(sigs.keys().next().value!);
+      } catch (err) {
+        // One unreadable message shouldn't stop the mailbox from syncing.
+        console.warn(`[slipstream] imap ${target.path} uid ${fm.uid}: skipped, ${err instanceof Error ? err.message : err}`);
+      }
+    }
   }
 
   /* -------- actions */
@@ -958,6 +1139,38 @@ export class ImapProvider implements MailProvider {
   }
 
   /* -------- attachments */
+
+  /**
+   * The whole message, for one that was synced as a summary. The id names a mailbox, its UIDVALIDITY and a UID; if the
+   * server has renumbered the mailbox or the message moved, it is found again by Message-ID.
+   */
+  async fetchBody(messageRemoteId: string, hint?: { messageIdHeader?: string | null }): Promise<FullBody> {
+    const ref = parseRemoteId(messageRemoteId);
+    if (!ref) throw new Error("Unrecognized message id");
+    const source = await this.run(async (c) => {
+      const fetchSource = async (uid: number) => ((await c.fetchOne(String(uid), { source: true }, { uid: true })) || undefined)?.source;
+      let exact: Buffer | undefined;
+      try {
+        exact = await withMailbox(c, ref.path, true, async (mb) => (String(mb.uidValidity) === ref.validity ? fetchSource(ref.uid) : undefined));
+      } catch (err) {
+        // A mailbox that is gone is the same as a message that moved out of it; anything else is a real failure.
+        if (!(hint?.messageIdHeader && (err as { mailboxMissing?: boolean }).mailboxMissing)) throw err;
+      }
+      if (exact) return exact;
+      if (!hint?.messageIdHeader) throw new Error("The message is no longer in that mailbox");
+      const thread: ThreadRef = { threadRemoteId: "", messages: [{ remoteId: messageRemoteId, messageIdHeader: hint.messageIdHeader }] };
+      for (const t of (await this.layout(c)).targets) {
+        const found = await withMailbox(c, t.path, true, async (mb) => {
+          const uid = (await this.locate(c, mb, thread))[0];
+          return uid === undefined ? undefined : fetchSource(uid);
+        });
+        if (found) return found;
+      }
+      throw new Error("The message is no longer in this mailbox");
+    });
+    const { message } = await parseRaw(source, { remoteId: messageRemoteId });
+    return { text: message.bodyText, html: message.bodyHtml, attachments: message.attachments };
+  }
 
   async fetchAttachment(messageRemoteId: string, attachmentRemoteId: string): Promise<Buffer> {
     const ref = parseRemoteId(messageRemoteId);

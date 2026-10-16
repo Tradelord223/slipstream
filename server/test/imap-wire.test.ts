@@ -99,16 +99,23 @@ describe("ImapProvider over a real IMAP connection", () => {
     const data = generic();
     for (let i = 0; i < 120; i++) data.deliver("INBOX", mail(`m${i}`), { flags: i === 5 ? ["\\Seen"] : [] });
     data.deliver("Sent", mail("out", { from: "Me <me@example.com>" }), { flags: ["\\Seen"] });
-    const { provider } = await start(data);
+    const { provider, mini } = await start(data);
 
     let st = await drain(provider, null);
     assert.equal(st.messages.length, 121);
-    assert.deepEqual(st.pages.filter((p) => p.messages.length).map((p) => p.messages.length), [50, 50, 20, 1]);
+    assert.deepEqual(st.pages.filter((p) => p.messages.length).map((p) => p.messages.length), [100, 20, 1], "the newest 100 inbox messages, the rest of the inbox, then Sent");
+    // What went over the wire: structure, size and chosen headers, then the first 2 KB of the text part. Never a whole message.
+    const items = mini.fetches.flat().map((i) => i.toUpperCase());
+    assert.ok(items.includes("BODYSTRUCTURE") && items.includes("RFC822.SIZE"));
+    assert.ok(items.some((i) => i.startsWith("BODY.PEEK[HEADER.FIELDS (FROM TO CC")));
+    assert.ok(items.includes("BODY.PEEK[1]<0.2048>"));
+    assert.ok(!items.some((i) => /^(BODY(\.PEEK)?\[\]|RFC822|RFC822\.TEXT|BODY(\.PEEK)?\[TEXT\])$/.test(i)), "no whole messages");
     const m5 = st.messages.find((m) => m.messageIdHeader === "<m5@example.com>")!;
     assert.equal(m5.remoteId, "INBOX:1:6");
     assert.equal(m5.unread, false);
     assert.equal(m5.subject, "Subject m5");
-    assert.equal(m5.bodyText.trim(), "Body of m5");
+    assert.equal(m5.bodyText.trim(), "Body of m5", "the preview");
+    assert.equal(m5.bodyComplete, false);
     assert.equal(st.messages.at(-1)!.outgoing, true);
 
     st = await drain(provider, st.cursor); // seed
@@ -233,7 +240,11 @@ describe("ImapProvider over a real IMAP connection", () => {
     const { provider } = await start(data);
     const st = await drain(provider, null);
     assert.equal(st.messages[0]!.attachments[0]!.filename, "invoice.pdf");
-    const bytes = await provider.fetchAttachment(st.messages[0]!.remoteId, st.messages[0]!.attachments[0]!.remoteId!);
+    assert.equal(st.messages[0]!.attachments[0]!.remoteId, "part:2");
+    // Opening the message is what downloads it; its attachment handles then work for downloads.
+    const full = await provider.fetchBody(st.messages[0]!.remoteId);
+    assert.equal(full.attachments[0]!.filename, "invoice.pdf");
+    const bytes = await provider.fetchAttachment(st.messages[0]!.remoteId, full.attachments[0]!.remoteId!);
     assert.ok(bytes.equals(PDF));
   });
 

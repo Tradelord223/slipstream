@@ -10,6 +10,7 @@ import { LabelChip } from "../components/labels/LabelChip.tsx";
 import { MessageCard } from "../components/MessageCard.tsx";
 import { useDismiss, useViewport } from "../lib/hooks.ts";
 import { act } from "../store/actions.ts";
+import { ensureBodies } from "../store/bodies.ts";
 import { openDraft, startReply, useCompose } from "../store/compose.ts";
 import { list, useList } from "../store/list.ts";
 import { closeThread, unsubscribeFrom } from "../store/nav.ts";
@@ -38,6 +39,12 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
   const logos = logosFor(logoPolicy, accounts.find((a) => a.id === detail?.thread.accountId));
   const codeId = codeMessage(messages)?.id;
   const ids = messages.map((m) => m.id).join();
+  // Messages that only have a preview are fetched whole once they are open.
+  const opening = messages.filter((m) => m.bodyState === "none" && expanded.has(m.id)).map((m) => m.id).join();
+
+  useEffect(() => {
+    if (opening) void ensureBodies(id, opening.split(","));
+  }, [id, opening]);
 
   useEffect(() => {
     if (detail) enterThread(id, detail.messages.map((m) => m.id));
@@ -120,6 +127,7 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
                   codeShortcut={m.id === codeId}
                   onToggle={() => toggleMessage(m.id)}
                   onReply={startReplying}
+                  onRetry={() => void ensureBodies(id, [m.id])}
                 />
               ))}
               <ReplyDock detail={detail} onReply={startReplying} />

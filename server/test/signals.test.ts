@@ -362,10 +362,10 @@ describe("signals in the store", () => {
     assert.match(person.messages[0]!.text, /618204/);
   });
 
-  test("a shared conversation never carries the code", () => {
+  test("a shared conversation never carries the code", async () => {
     // Teams are a server feature; exercising the snapshot builder directly keeps this in local mode.
     env.ctx.users.createWorkspace(LOCAL_USER_ID, "Team");
-    const shared = shareThread(env.ctx, LOCAL_USER_ID, tid("code1"));
+    const shared = await shareThread(env.ctx, LOCAL_USER_ID, tid("code1"));
     const snap = row<{ snapshot: string }>("SELECT snapshot FROM shared_threads WHERE id = ?", shared.id).snapshot;
     assert.ok(!snap.includes("618204"));
     assert.match(snap, /••••••/);

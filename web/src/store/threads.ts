@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { api } from "../api.ts";
-import type { Thread, ThreadDetail } from "../types.ts";
+import type { MessageBodies, Thread, ThreadDetail } from "../types.ts";
 
 interface Entry {
   detail: ThreadDetail | null;
@@ -72,6 +72,19 @@ export function patchCachedThread(ids: string[], change: Partial<Thread>) {
     changed = true;
   }
   if (changed) notify();
+}
+
+/** Swap fetched full text into a cached conversation, so every view of it shows the whole message. */
+export function patchCachedBodies(id: string, bodies: MessageBodies["messages"]) {
+  const e = cache.get(id);
+  if (!e?.detail || bodies.length === 0) return;
+  const byId = new Map(bodies.map((b) => [b.id, b]));
+  const messages = e.detail.messages.map((m) => {
+    const b = byId.get(m.id);
+    return b ? { ...m, text: b.text, html: b.html, attachments: b.attachments, bodyState: "cached" as const } : m;
+  });
+  cache.set(id, { ...e, detail: { ...e.detail, messages } });
+  notify();
 }
 
 export function cachedThread(id: string): ThreadDetail | null {

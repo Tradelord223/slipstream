@@ -1,4 +1,4 @@
-import type { Address, IncomingMessage, MailProvider, ProviderContext, RemoteAction, SyncPage } from "../mail/types.ts";
+import type { Address, FullBody, IncomingMessage, MailProvider, ProviderContext, RemoteAction, SyncPage } from "../mail/types.ts";
 import { textToHtml } from "../lib/text.ts";
 
 /**
@@ -514,6 +514,8 @@ export class DemoProvider implements MailProvider {
   readonly kind = "demo" as const;
   private queued: IncomingMessage[] = [];
   private counter = 0;
+  /** Every message handed out, whole, for fetchBody. Demo mail is always stored complete, so this is only asked in tests. */
+  private whole = new Map<string, FullBody>();
 
   private ctx: ProviderContext;
 
@@ -522,11 +524,22 @@ export class DemoProvider implements MailProvider {
   }
 
   async sync(cursor: string | null): Promise<SyncPage> {
-    if (cursor === null) return { messages: this.initial(), cursor: "1", done: true };
+    if (cursor === null) return { messages: this.keep(this.initial()), cursor: "1", done: true };
     const now = Date.now();
     const due = this.queued.filter((m) => m.sentAt <= now);
     this.queued = this.queued.filter((m) => m.sentAt > now);
-    return { messages: due, cursor: String(Number(cursor) + 1), done: true };
+    return { messages: this.keep(due), cursor: String(Number(cursor) + 1), done: true };
+  }
+
+  private keep(messages: IncomingMessage[]): IncomingMessage[] {
+    for (const m of messages) this.whole.set(m.remoteId, { text: m.bodyText, html: m.bodyHtml, attachments: m.attachments });
+    return messages;
+  }
+
+  async fetchBody(messageRemoteId: string): Promise<FullBody> {
+    const body = this.whole.get(messageRemoteId);
+    if (!body) throw new Error("This demo message isn't here anymore");
+    return body;
   }
 
   async apply(action: RemoteAction): Promise<{ remoteId?: string } | void> {

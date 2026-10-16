@@ -210,9 +210,10 @@ export function getThread(ctx: AppContext, userId: string, id: string, opts: { h
       message_id_header: string | null;
       is_bulk: number;
       signals: string | null;
+      body_state: string;
     }>(
       `SELECT id, from_name, from_email, to_json, cc_json, bcc_json, reply_to, subject, sent_at, snippet, body_text, body_html,
-              unread, outgoing, list_unsubscribe, message_id_header, is_bulk, signals
+              unread, outgoing, list_unsubscribe, message_id_header, is_bulk, signals, body_state
        FROM messages WHERE thread_id = ? ORDER BY sent_at`,
       id,
     )
@@ -226,20 +227,17 @@ export function getThread(ctx: AppContext, userId: string, id: string, opts: { h
       subject: m.subject,
       sentAt: m.sent_at,
       snippet: m.snippet,
+      // For a message synced as a summary (bodyState "none") the text is its preview and there is no html.
       text: m.body_text,
       html: m.body_html,
+      bodyState: m.body_state === "none" ? ("none" as const) : ("cached" as const),
       unread: Boolean(m.unread),
       outgoing: Boolean(m.outgoing),
       canUnsubscribe: Boolean(m.list_unsubscribe),
       isBulk: Boolean(m.is_bulk),
       logoDomain: m.is_bulk && !m.outgoing ? logoDomain(m.from_email) : null,
       signals: m.signals ? (JSON.parse(m.signals) as Signal[]) : [],
-      attachments: db
-        .all<{ id: string; filename: string; mime_type: string; size: number; content_id: string | null; inline: number }>(
-          "SELECT id, filename, mime_type, size, content_id, inline FROM attachments WHERE message_id = ?",
-          m.id,
-        )
-        .map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mime_type, size: a.size, contentId: a.content_id, inline: Boolean(a.inline) })),
+      attachments: messageAttachments(ctx, m.id),
     }))
     .map((m) => (opts.hideCodes ? maskCodes(m) : m));
   const draft = db.get<{ id: string }>(
@@ -249,4 +247,35 @@ export function getThread(ctx: AppContext, userId: string, id: string, opts: { h
   );
   const shared = db.get<{ id: string }>("SELECT id FROM shared_threads WHERE source_thread_id = ?", id);
   return { thread: opts.hideCodes ? hideRowCodes(shapeRow(row)) : shapeRow(row), messages, draftId: draft?.id ?? null, sharedId: shared?.id ?? null };
+}
+
+/** A message's attachments as the dashboard lists them. */
+export function messageAttachments(ctx: AppContext, messageId: string) {
+  return ctx.db
+    .all<{ id: string; filename: string; mime_type: string; size: number; content_id: string | null; inline: number }>(
+      "SELECT id, filename, mime_type, size, content_id, inline FROM attachments WHERE message_id = ?",
+      messageId,
+    )
+    .map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mime_type, size: a.size, contentId: a.content_id, inline: Boolean(a.inline) }));
+}
+
+/** Note that a conversation was just read, so its cached bodies stay on hand longer than ones nobody opens. */
+export function touchThread(ctx: AppContext, threadId: string, now = Date.now()): void {
+  ctx.db.run("UPDATE messages SET last_viewed_at = ? WHERE thread_id = ? AND body_state = 'cached'", now, threadId);
+}
+
+/**
+ * getThread for readers that need the whole text (agents, summaries, shares): messages that only have a preview are
+ * fetched from the provider first. A message the provider can't return stays a preview, flagged by its bodyState.
+ */
+export async function getThreadWithBodies(ctx: AppContext, userId: string, id: string, opts: { hideCodes?: boolean } = {}) {
+  const first = getThread(ctx, userId, id, opts);
+  const missing = first.messages.filter((m) => m.bodyState === "none").map((m) => m.id);
+  if (missing.length === 0) {
+    touchThread(ctx, id);
+    return first;
+  }
+  await ctx.sync.bodies.load(missing);
+  touchThread(ctx, id);
+  return getThread(ctx, userId, id, opts);
 }

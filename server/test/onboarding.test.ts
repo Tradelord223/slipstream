@@ -569,10 +569,11 @@ describe("first-sync progress", () => {
 
     const syncing = events.filter((e) => e.type === "sync" && e.status === "syncing");
     assert.deepEqual(
-      syncing.map((e) => (e.type === "sync" ? e.fetched : undefined)),
-      [undefined, 3, 5],
-      "the opening 'syncing' has no count; then 3, then 5 so far",
+      syncing.flatMap((e) => (e.type === "sync" && e.fetched !== undefined ? [e.fetched] : [])),
+      [3, 5],
+      "then 3, then 5 so far",
     );
+    assert.ok(syncing.some((e) => e.type === "sync" && e.fetched === undefined && !e.progress), "the opening 'syncing' has no count");
     const last = events.filter((e) => e.type === "sync").at(-1);
     assert.ok(last && last.type === "sync" && last.status === "idle");
   });
