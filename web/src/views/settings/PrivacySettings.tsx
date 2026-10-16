@@ -3,7 +3,7 @@ import { api } from "../../api.ts";
 import { Icon, type IconName } from "../../components/Icon.tsx";
 import { Link } from "../../components/Link.tsx";
 import { useSession } from "../../store/session.ts";
-import { safetyFacts as SAFETY_FACTS } from "./safetyFacts.pending.ts";
+import { safetyFacts as SAFETY_FACTS } from "../../lib/safetyFacts.ts";
 
 /** Settings → Privacy & safety: what Slipstream does and doesn't do with your mail, and what is switched on right now. */
 export function PrivacySettings() {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { frameDocument, prepareBody } from "../lib/emailHtml.ts";
 import type { Message } from "../types.ts";
 import { useSession } from "../store/session.ts";
+import { Link } from "./Link.tsx";
 
 const KEY = "ss-image-senders";
 
@@ -50,6 +51,10 @@ export function EmailBody({ message }: { message: Message }) {
             >
               Always for this sender
             </button>
+            <span aria-hidden="true">·</span>
+            <Link to="/settings/privacy" className="link-btn">
+              How this works
+            </Link>
           </span>
         </div>
       )}
