@@ -73,6 +73,23 @@ Cloudflare Workers and Containers aren't a fit. Their disks are ephemeral and in
 | `ANTHROPIC_API_KEY` | none | A server-wide AI key. People can also add their own. |
 | `LITESTREAM_REPLICA_URL` + `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | none | Continuous backups of the database to S3-compatible storage. |
 
+## Check your setup
+
+`slipstream doctor` checks an install without changing anything and says what to fix, in plain words:
+- **Basics:** the Node.js version, the data folder's permissions, free disk space, and that the database opens and isn't damaged.
+- **Encryption key:** that the key still opens the saved sign-ins.
+- **Running:** whether Slipstream is running, or another program has its port.
+- **Accounts:** each mail account's sync, and changes or sends that didn't go through.
+- **Team servers only:** that the public address is https, and that backups and `SLIPSTREAM_SECRET` are set.
+
+```bash
+slipstream doctor                                # on your own computer
+fly ssh console -C "node /app/dist/cli.js doctor" # on Fly.io
+docker compose exec slipstream node /app/dist/cli.js doctor
+```
+
+Add `--json` for scripts and agents. It exits with status 1 when something needs fixing.
+
 ## Backups and restore
 
 - **What Litestream covers.** It streams every database change to your bucket. On a fresh volume, the container restores from the bucket before it starts.

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `slipstream doctor` checks an install without changing anything and explains each problem in plain words: Node.js, data folder permissions, disk space, database health and version, whether the encryption key still opens saved sign-ins, whether Slipstream or another program holds its port, each mail account's sync, and changes or sends that didn't go through. On team servers it also checks the https public address, backups and `SLIPSTREAM_SECRET`. `--json` for scripts and agents; exit code 1 when something needs fixing.
+
 ## 0.2.0 (2026-10-16)
 
 **Everyday helpers, with no AI needed**

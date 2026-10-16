@@ -7,6 +7,7 @@ import { Agents, type Scope } from "./agents/agents.ts";
 import { LOCAL_USER_ID, Users } from "./auth/users.ts";
 import { loadConfig } from "./config.ts";
 import { Db } from "./db/index.ts";
+import { formatReport, runDoctor } from "./doctor.ts";
 
 /**
  * The command line and the stdio MCP bridge. Both talk to a running Slipstream over its agent API,
@@ -15,6 +16,7 @@ import { Db } from "./db/index.ts";
  *   slipstream mail.search --query "from:priya has:attachment"
  *   slipstream triage.done --threadIds '["thr_…"]'
  *   slipstream mcp            # stdio MCP for Claude Desktop/Code, Cursor, …
+ *   slipstream doctor         # check this install (add --json for scripts and agents)
  *
  * Connection: SLIPSTREAM_URL (default http://127.0.0.1:4380) and SLIPSTREAM_TOKEN. In local mode
  * a token is created on first use and kept in the data directory.
@@ -105,7 +107,7 @@ async function runCommand(argv: string[]) {
     const list = (json as { commands: { name: string; title: string; scope: string }[] }).commands;
     console.log("Usage: slipstream <command> [--name value …]\n");
     for (const c of list) console.log(`  ${c.name.padEnd(24)} ${c.title}  (${c.scope})`);
-    console.log("\n  slipstream mcp           Run as a stdio MCP server\n  slipstream <command> --help   Show a command's inputs");
+    console.log("\n  slipstream mcp           Run as a stdio MCP server\n  slipstream doctor        Check this install (--json for scripts)\n  slipstream <command> --help   Show a command's inputs");
     return;
   }
   if (rest.includes("--help")) {
@@ -120,9 +122,16 @@ async function runCommand(argv: string[]) {
   if (status >= 400) process.exitCode = 1;
 }
 
+async function runDoctorCommand(args: string[]) {
+  const report = await runDoctor(loadConfig());
+  console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatReport(report, Boolean(process.stdout.isTTY) && !process.env.NO_COLOR));
+  if (report.summary.fail > 0) process.exitCode = 1;
+}
+
 export async function cli(argv = process.argv.slice(2)) {
   try {
     if (argv[0] === "mcp") await runMcpBridge();
+    else if (argv[0] === "doctor") await runDoctorCommand(argv.slice(1));
     else await runCommand(argv);
   } catch (err) {
     console.error(err instanceof Error ? err.message : err);

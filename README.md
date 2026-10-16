@@ -35,7 +35,7 @@ Slipstream is an open-source, keyboard-first email client. It works with Gmail, 
 npx slipstream-mail
 ```
 
-Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. It needs Node.js 22.18 or newer. To keep the `slipstream` command around for the CLI and MCP bridge, install it once with `npm install -g slipstream-mail`.
+Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. It needs Node.js 22.18 or newer. To keep the `slipstream` command around for the CLI and MCP bridge, install it once with `npm install -g slipstream-mail`. If anything seems off, `slipstream doctor` checks the install and tells you what to fix.
 
 ## Why Slipstream
 
@@ -138,7 +138,7 @@ fly secrets set SLIPSTREAM_SECRET="$(openssl rand -base64 32)"
 fly deploy
 ```
 
-Fly.io is the recommended host: one always-on machine with a volume, about $4 a month at October 2026 prices. Docker Compose works on any server (the compose file is 19 lines), and Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](https://github.com/Tradelord223/slipstream/blob/main/docs/self-hosting.md).
+Fly.io is the recommended host: one always-on machine with a volume, about $4 a month at October 2026 prices. Docker Compose works on any server (the compose file is 19 lines), and Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream, and `slipstream doctor` checks the whole setup in one go. See [docs/self-hosting.md](https://github.com/Tradelord223/slipstream/blob/main/docs/self-hosting.md).
 
 ## Fast, measured
 

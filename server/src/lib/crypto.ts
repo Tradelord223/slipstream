@@ -26,8 +26,8 @@ export function sha256(input: string | Buffer): string {
 export class SecretBox {
   private key: Buffer;
 
-  constructor(dataDir: string) {
-    const fromEnv = process.env.SLIPSTREAM_SECRET;
+  constructor(dataDir: string, secret = process.env.SLIPSTREAM_SECRET) {
+    const fromEnv = secret;
     if (fromEnv) {
       this.key = createHash("sha256").update(fromEnv).digest();
       return;
