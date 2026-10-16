@@ -38,3 +38,5 @@
 - The cloud agent against the live Managed Agents API. Tests use a local stand-in.
 - Every engine against its live provider: ChatGPT sign-in, the four API keys, and real Claude Code and Codex runs. Tests use stand-ins for each API and scripted CLIs that call Slipstream's real MCP endpoint.
 - Autopilot's decision quality on a real model. `scripts/eval-autopilot.ts` measures it; it hasn't been run against a paid model yet.
+- Everyday helpers on real inboxes. The code, delivery, sign-in and urgent rules are tested on about a hundred written examples, including look-alikes that must not match, but not yet on years of real mail.
+- Company logos against real company sites. The fetcher is tested against local stand-ins only.

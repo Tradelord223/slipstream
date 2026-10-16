@@ -22,9 +22,10 @@ Slipstream keeps the speed and drops the rest.
 | Where your mail lives | A SQLite file on your disk (or your team's server) |
 | Credentials | Encrypted locally with AES-256-GCM |
 | Inboxes | One unified inbox across every account, or one at a time |
-| Tracking | None. Remote images are blocked until you choose to see them |
+| Tracking | None. Remote images and tracking pixels are held back until you choose to see them |
+| Hostile email | Cleaned, then shown in a frame that can't run scripts. `npm run test:render` renders 19 hostile emails and fails if any reach the network |
 | Shortcuts | Every one remappable |
-| AI | Optional. Agents and Autopilot run on your ChatGPT plan, your own Claude Code or Codex, or your key for Claude, OpenAI, Gemini or OpenRouter. Quick summaries use a Claude key |
+| AI | Off until you turn it on. Bring your own agent over MCP or the CLI, or let agents and Autopilot run on your ChatGPT plan, your own Claude Code or Codex, or your key for Claude, OpenAI, Gemini or OpenRouter. Quick summaries use a Claude key |
 | Agents | MCP, HTTP API, CLI and webhooks, with scoped tokens, approvals, attribution and undo |
 | Price | Free, AGPL-3.0 |
 
@@ -36,12 +37,15 @@ Slipstream keeps the speed and drops the rest.
 - **Send Later, Undo Send, follow-up reminders.** Schedule mail, take it back within ten seconds, and get nudged if nobody replies in three days.
 - **Snippets with variables.** Type `;` in a draft to insert one; `{first_name}` fills itself in. Share them with your team.
 - **Instant Intro.** On an introduction, `Cmd+Shift+I` thanks the introducer and moves them to Bcc.
-- **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `after:`, `label:` and more, over everything you've synced or imported.
+- **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `is:code`, `is:delivery`, `after:`, `label:` and more, over everything you've synced or imported.
+- **Everyday helpers, no AI needed.** Sign-in codes get a Copy chip right in the list (`Shift+C`), so you never open the email. Package updates show their status, and when a newer update arrives the older ones step out of your inbox (undoable). Sign-in alerts and urgent mail from people, like legal notices, overdue bills and deadlines, get flagged so they don't drown. Turn each one on or off in Settings → Helpers.
+- **Send from any of your addresses.** Gmail aliases appear on their own; add custom-domain and Outlook or IMAP addresses by hand, each with its own name, reply-to and signature. Replies go out from the address the email was sent to.
+- **Company logos, if you want them.** Off by default. When on, Slipstream fetches each company's logo itself, at a random time about once a month, never from your browser and never tied to a message.
 - **Get Me To Zero.** Clear the whole backlog, or everything older than a week or a month, in one undoable step.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
 - **Labels.** Colors, nesting ("Clients/Kettleby"), and auto-label rules that file new mail as it arrives. Labels you apply sync to Gmail labels, Outlook categories and IMAP keywords; renames and deletes sync to Gmail.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
-- **AI, if you want it.** One-key summaries and reply suggestions with your own Anthropic key.
+- **AI only if you want it.** Slipstream works fully without AI, and the assistant stays hidden until you turn it on. Then you get one-key summaries and reply suggestions, the assistant sidebar and Autopilot. **Settings → Privacy & safety** says in plain words what is stored where and what any model sees.
 - **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agent-api.md](docs/agent-api.md).
 - **Autopilot.** New mail is sorted as it arrives: what needs you stays, receipts and notices are labelled and cleared, later things come back when they matter, and replies are drafted in your voice for you to send. Every decision shows its reason and can be undone, and it learns from what you change. It can't send. See [docs/autopilot.md](docs/autopilot.md).
 - **Any model you already have.** Sign in with ChatGPT, use your own Claude Code or Codex, or paste a Claude, OpenAI, Gemini or OpenRouter key. Pick per conversation; every model works through the same commands, approvals and undo. See [docs/models.md](docs/models.md).
@@ -52,12 +56,14 @@ Slipstream keeps the speed and drops the rest.
 
 | | |
 |---|---|
+| ![Everyday helpers: copy a sign-in code, see a package's status, spot sign-in alerts](docs/screenshots/helpers-dark.png) | ![A one-time code, ready to copy with Shift+C](docs/screenshots/code-dark.png) |
 | ![Autopilot: every new conversation sorted, with its reason](docs/screenshots/autopilot-dark.png) | ![Models & accounts: ChatGPT, Claude Code, Codex or your own keys](docs/screenshots/models-dark.png) |
 | ![The assistant in the sidebar, working on the open conversation](docs/screenshots/assistant-dark.png) | ![Review: approve or reject what agents want to do](docs/screenshots/review-dark.png) |
 | ![The cloud agent: chats, routines and budget](docs/screenshots/agent-dark.png) | ![Labels with colors, nesting and auto-label rules](docs/screenshots/labels-dark.png) |
 | ![Conversation](docs/screenshots/thread-dark.png) | ![Compose with snippets](docs/screenshots/compose-dark.png) |
 | ![Remind me](docs/screenshots/remind-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |
 | ![Connect an assistant over MCP](docs/screenshots/connect-dark.png) | ![Light theme](docs/screenshots/inbox-light.png) |
+| ![Privacy & safety: what's stored where and what any model sees](docs/screenshots/privacy-dark.png) | ![Send from your aliases and custom domains](docs/screenshots/settings-accounts-dark.png) |
 
 ## Connect your mail
 

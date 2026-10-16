@@ -150,6 +150,9 @@ try {
   await call("POST", "/api/snippets", { name: "Thanks", bodyHtml: "<p>Thanks {first_name}, much appreciated.</p>", shared: false });
   await call("POST", "/api/snippets", { name: "Pricing", bodyHtml: "<p>Our plans start at {price} a month.</p>", shared: false });
   await seedLabels();
+  // A custom-domain address beside the demo account, for the From picker and Settings → Accounts.
+  const demo = (await call("GET", "/api/bootstrap")).accounts[0];
+  await call("POST", `/api/accounts/${demo.id}/identities`, { email: "jordan@studio.fernpoint.co", name: "Jordan Reyes · Studio" });
 
   const browser = await chromium.launch({ headless: true, executablePath: chromePath() });
   const shot = (page, name) => page.screenshot({ path: join(out, `${name}.png`) });
@@ -211,6 +214,23 @@ try {
   await page.waitForSelector(".account-row");
   await sleep(600);
   await shot(page, "settings-accounts-dark");
+
+  // Everyday helpers: the Other split with its code, delivery and sign-in chips, then the code card.
+  await page.goto(base + "/");
+  await page.waitForSelector(".row");
+  await page.getByRole("tab", { name: /^Other/ }).click();
+  await page.waitForSelector(".row .sig");
+  await sleep(700);
+  await shot(page, "helpers-dark");
+  await page.locator(".row", { hasText: "sign-in code" }).first().click();
+  await page.waitForSelector(".thread-subject");
+  await sleep(900);
+  await shot(page, "code-dark");
+
+  await page.goto(base + "/settings/privacy");
+  await page.waitForSelector(".settings-content h2");
+  await sleep(600);
+  await shot(page, "privacy-dark");
 
   await page.goto(base + "/");
   await page.waitForSelector(".row");
