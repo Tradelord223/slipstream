@@ -35,7 +35,7 @@ Slipstream is an open-source, keyboard-first email client. It works with Gmail, 
 npx slipstream-mail
 ```
 
-Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. It needs Node.js 22.18 or newer. To keep the `slipstream` command around for the CLI and MCP bridge, install it once with `npm install -g slipstream-mail`. If anything seems off, `slipstream doctor` checks the install and tells you what to fix.
+Slipstream opens at <http://127.0.0.1:4380> with a short setup: enter your email, follow the steps for your provider, and your inbox opens while the rest of your mail arrives. It needs Node.js 22.18 or newer. To keep the `slipstream` command around for the CLI and MCP bridge, install it once with `npm install -g slipstream-mail`. If anything seems off, `slipstream doctor` checks the install and tells you what to fix.
 
 ## Why Slipstream
 
@@ -116,6 +116,7 @@ slipstream mail.search --query "is:unread from:@client.com" --limit 5
 
 | | |
 |---|---|
+| ![First run: connect your email before anything else](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/onboarding-dark.png) | ![Gmail in three guided steps with an app password](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/onboarding-gmail-dark.png) |
 | ![Everyday helpers: copy a sign-in code, see a package's status, spot sign-in alerts](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/helpers-dark.png) | ![A one-time code, ready to copy with Shift+C](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/code-dark.png) |
 | ![Autopilot: every new conversation sorted, with its reason](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/autopilot-dark.png) | ![Models & accounts: ChatGPT, Claude Code, Codex or your own keys](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/models-dark.png) |
 | ![The assistant in the sidebar, working on the open conversation](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/assistant-dark.png) | ![Review: approve or reject what agents want to do](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/review-dark.png) |
@@ -186,7 +187,7 @@ Provider round-trips never block you: actions apply locally first and reach Gmai
 ```bash
 git clone https://github.com/Tradelord223/slipstream && cd slipstream
 npm install
-npm run dev             # server on :4392 with a demo inbox + web app on :5180
+npm run dev             # server on :4392 with an invented demo mailbox + web app on :5180 (SLIPSTREAM_DEMO=1 or `slipstream --demo` elsewhere)
 npm test                # server tests (node:test)
 npm run test:contract   # black-box API + MCP contract suite against a live server
 npm run test:render     # shows hostile email in headless Chrome and proves nothing runs or leaks

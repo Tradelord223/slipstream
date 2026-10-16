@@ -36,26 +36,27 @@ const elapsed = (fn: () => unknown) => {
   return performance.now() - start;
 };
 
+// Before the fix these inputs took 7 to 25 seconds; 250 ms leaves room for a busy CI machine and still catches that.
 describe("hostile input can't stall the server", () => {
   for (const [name, subject, text] of bodies)
     for (const bulk of [false, true])
-      test(`${name} (${bulk ? "bulk sender" : "person"}) is read in under 50 ms`, () => {
+      test(`${name} (${bulk ? "bulk sender" : "person"}) is read in under 250 ms`, () => {
         const ms = elapsed(() => {
           detect(subject, text, bulk);
           extractCode(subject, text);
           maskCodes({ subject, text });
         });
-        assert.ok(ms < 50, `took ${ms.toFixed(1)} ms`);
+        assert.ok(ms < 250, `took ${ms.toFixed(1)} ms`);
       });
 
   for (const [name, subject] of subjects)
-    test(`${name} is read in under 50 ms`, () => {
+    test(`${name} is read in under 250 ms`, () => {
       const ms = elapsed(() => {
         detect(subject, "Hi", false);
         extractCode(subject, "Hi");
         maskCodes({ subject });
       });
-      assert.ok(ms < 50, `took ${ms.toFixed(1)} ms`);
+      assert.ok(ms < 250, `took ${ms.toFixed(1)} ms`);
     });
 
   test("ingesting each of them takes under 200 ms", () => {

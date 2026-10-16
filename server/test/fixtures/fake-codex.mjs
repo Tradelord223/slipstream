@@ -3,6 +3,8 @@
 // overrides and SLIPSTREAM_TOKEN, calls the MCP server like the real CLI would, and streams `exec --json`
 // events. Test controls via env: FAKE_LOG, FAKE_LOGGED_IN=0, FAKE_MODE=normal|hang|stubborn|fail|limit|error|toolerror.
 import { appendFileSync, readdirSync } from "node:fs";
+// Ignore SIGTERM before anything else, so the test can never stop us before we're stubborn.
+if (process.env.FAKE_MODE === "stubborn") process.on("SIGTERM", () => {});
 
 const argv = process.argv.slice(2);
 const log = (rec) => process.env.FAKE_LOG && appendFileSync(process.env.FAKE_LOG, JSON.stringify(rec) + "\n");
@@ -47,7 +49,6 @@ if (mode === "fail") {
   process.exit(1);
 }
 if (mode === "hang" || mode === "stubborn") {
-  if (mode === "stubborn") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 } else if (mode === "error" || mode === "limit") {
   out({ type: "error", message: "Reconnecting... 1/5" });

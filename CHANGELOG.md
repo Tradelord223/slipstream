@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **A real first run.** A new install opens a short setup instead of an invented mailbox. You enter your email, and Slipstream works out where it lives from the domain's own DNS, so Google Workspace and Microsoft 365 addresses on custom domains are recognised. It then walks you through the right sign-in: guided app-password steps for Gmail, iCloud, Yahoo and Fastmail, Microsoft sign-in for Outlook, or server settings only when you need them. A live count shows mail arriving, and your inbox opens as soon as the first messages land. An optional last step adds another account or chooses AI: none, your own agent, or the built-in assistant.
+- **Settings → Accounts** is simpler: your accounts and one Add account button that opens the same steps.
+- **The invented demo mailbox is for developers only:** `npm run dev`, `SLIPSTREAM_DEMO=1` or `slipstream --demo`. It is removed when you connect a real account.
+- **Fixed:** removing an account that had synced mail failed with an error.
 - `slipstream doctor` checks an install without changing anything and explains each problem in plain words: Node.js, data folder permissions, disk space, database health and version, whether the encryption key still opens saved sign-ins, whether Slipstream or another program holds its port, each mail account's sync, and changes or sends that didn't go through. On team servers it also checks the https public address, backups and `SLIPSTREAM_SECRET`. `--json` for scripts and agents; exit code 1 when something needs fixing.
 
 ## 0.2.0 (2026-10-16)
