@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
 import { DEMO_LOGOS } from "../src/mail/demo-logos.ts";
-import { bimiLocation, findIconLinks, logoDomain, mailFromDomain, SenderLogos, sniffImage } from "../src/mail/logos.ts";
-import { FetchError, guardedLookup, httpsTransport, isBlockedAddress, makeSafeFetch, type SafeFetch, type Transport, type TransportResponse } from "../src/mail/safe-fetch.ts";
+import { bimiLocation, findIconLinks, isPersonalMailDomain, logoDomain, mailFromDomain, registrableDomain, SenderLogos, sniffImage } from "../src/mail/logos.ts";
+import { FetchError, guardedLookup, httpsTransport, isBlockedAddress, makeSafeFetch, resolverLookup, type Resolver, type SafeFetch, type Transport, type TransportResponse } from "../src/mail/safe-fetch.ts";
+import { backfillSenderDomains } from "../src/mail/signal-jobs.ts";
 import { sanitizeSvg } from "../src/mail/svg.ts";
 import type { AccountRow } from "../src/mail/store.ts";
 import { addAccount, makeEnv, msg, type TestEnv } from "./helpers.ts";
@@ -82,6 +83,21 @@ describe("logoDomain", () => {
   }
 });
 
+describe("registrable domains", () => {
+  test("registrableDomain keeps personal providers, which logoDomain drops", () => {
+    assert.equal(registrableDomain("a@mail.brightfield.co.uk"), "brightfield.co.uk");
+    assert.equal(registrableDomain("a@gmail.com"), "gmail.com");
+    assert.equal(registrableDomain("a@mail.hotmail.fr"), "hotmail.fr");
+    assert.equal(logoDomain("a@gmail.com"), null);
+    for (const bad of ["a@127.0.0.1", "a@localhost", "a@co.uk", "nobody", "a@work.test"]) assert.equal(registrableDomain(bad), null, bad);
+  });
+
+  test("isPersonalMailDomain", () => {
+    for (const d of ["gmail.com", "mail.gmail.com", "hotmail.fr", "yahoo.co.uk", "outlook.com", "proton.me"]) assert.equal(isPersonalMailDomain(d), true, d);
+    for (const d of ["fernpoint.test", "brightfield.co.uk", "gmail.company.com", "work.test"]) assert.equal(isPersonalMailDomain(d), false, d);
+  });
+});
+
 describe("address blocklist", () => {
   const blocked = [
     "0.0.0.0", "0.255.255.255", "127.0.0.1", "127.255.255.254", "10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.255.255",
@@ -123,6 +139,24 @@ describe("guarded lookup", () => {
     assert.equal(one.address, PUBLIC_V4);
     const all = await ask(async () => [{ address: PUBLIC_V4, family: 4 }], { all: true });
     assert.deepEqual(all.address, [{ address: PUBLIC_V4, family: 4 }]);
+  });
+
+  test("the c-ares resolver path refuses private answers, from either record type", async () => {
+    const answers = (v4: string[] | Error, v6: string[] | Error): Resolver => ({
+      resolve4: async () => (v4 instanceof Error ? Promise.reject(v4) : v4),
+      resolve6: async () => (v6 instanceof Error ? Promise.reject(v6) : v6),
+    });
+    const lookup = (r: Resolver, options: object = {}) => ask(resolverLookup(() => r), options);
+    assert.equal((await lookup(answers(["10.0.0.5"], new Error("ENODATA")))).err?.code, "EBLOCKED");
+    assert.equal((await lookup(answers([PUBLIC_V4], ["::1"]), { all: true })).err?.code, "EBLOCKED", "one bad AAAA answer refuses the name");
+    assert.equal((await lookup(answers(["169.254.169.254"], ["2606:4700:4700::1111"]))).err?.code, "EBLOCKED");
+    const ok = await lookup(answers([PUBLIC_V4], new Error("ENODATA")));
+    assert.equal(ok.err, null);
+    assert.equal(ok.address, PUBLIC_V4);
+    const both = await lookup(answers([PUBLIC_V4], ["2606:4700:4700::1111"]), { all: true });
+    assert.deepEqual(both.address, [{ address: PUBLIC_V4, family: 4 }, { address: "2606:4700:4700::1111", family: 6 }]);
+    const gone = Object.assign(new Error("queryA ENOTFOUND"), { code: "ENOTFOUND" });
+    assert.equal((await lookup(answers(gone, gone))).err?.code, "ENOTFOUND", "a name that does not exist is a network failure, not a block");
   });
 
   test("the real transport never connects to a rebinding name", async () => {
@@ -308,6 +342,9 @@ describe("svg sanitizer", () => {
     ["fill with external url", `<svg><rect width="5" height="5" fill="url(https://track.invalid/a#g)"/></svg>`],
     ["animate setting an href", `<svg><a><animate attributeName="href" values="javascript:alert(1)"/></a><set attributeName="href" to="javascript:alert(1)"/><rect width="5" height="5"/></svg>`],
     ["doctype with entities", `<!DOCTYPE svg [<!ENTITY a "&#60;script&#62;alert(1)&#60;/script&#62;">]><svg><rect width="5" height="5"/></svg>`],
+    ["xml-stylesheet instruction", `<?xml-stylesheet href="https://track.invalid/a.css"?><svg><rect width="5" height="5"/></svg>`],
+    ["comment hiding a script", `<svg><!-- <script>alert(1)</script> https://track.invalid/x --><rect width="5" height="5"/></svg>`],
+    ["doctype subset carrying markup", `<!DOCTYPE svg [<rect onload="x()" width="9" href="https://track.invalid/"/>]><svg><rect width="5" height="5"/></svg>`],
     ["cdata script", `<svg><![CDATA[<script>alert(1)</script>]]><rect width="5" height="5"/></svg>`],
     ["text elements", `<svg><text>tracking words</text><rect width="5" height="5"/></svg>`],
   ];
@@ -335,6 +372,55 @@ describe("svg sanitizer", () => {
     assert.equal(sanitizeSvg("<html><body>hi</body></html>"), null);
     assert.equal(sanitizeSvg(""), null);
   });
+
+  test("keeps long path data, drops anything else in it, and refuses long ordinary values", () => {
+    const long = "M0 0" + " L1.5 2.5e-1".repeat(500);
+    const out = sanitizeSvg(`<svg viewBox="0 0 1 1"><path d="${long}"/><path d="M0 0 url(https://x.invalid)" fill="red"/></svg>`)!;
+    assert.ok(out.includes(long), "a 6 KB path survives");
+    assert.ok(!out.includes("x.invalid"));
+    assert.ok(!sanitizeSvg(`<svg><rect width="5" height="5" fill="red" id="${"a".repeat(3000)}"/></svg>`)!.includes("id="));
+  });
+
+  // Each of these used to hold the event loop for tens of seconds. The cap is BIMI's 32 KB, and anything
+  // bigger is refused before a pattern or the parser sees it. Budgets are loose enough for a busy CI box.
+  const BUDGET_MS = 200;
+  const within = (label: string, fn: () => unknown) => {
+    const t = performance.now();
+    fn();
+    const ms = performance.now() - t;
+    assert.ok(ms < BUDGET_MS, `${label} took ${ms.toFixed(0)} ms`);
+  };
+  const adversarial: [string, (n: number) => string][] = [
+    ["a long attribute value with no ://", (n) => `<svg a="${"a".repeat(n)}"><path d="M0 0"/></svg>`],
+    ["a long style value of letters", (n) => `<svg><rect width="1" height="1" style="${"a".repeat(n)}"/></svg>`],
+    ["an attribute full of unclosed url(", (n) => `<svg a="${"url(".repeat(n / 4)}"><path d="M0 0"/></svg>`],
+    ["an attribute of url( and spaces", (n) => `<svg a="${"url(  ".repeat(n / 6)}"><path d="M0 0"/></svg>`],
+    ["unterminated processing instructions", (n) => "<svg>" + "<?".repeat(n / 2)],
+    ["unterminated comments", (n) => "<svg>" + "<!--".repeat(n / 4)],
+    ["unterminated doctype subsets", (n) => "<svg>" + "<!DOCTYPE[".repeat(n / 10)],
+    ["unterminated CDATA", (n) => "<svg>" + "<![CDATA[".repeat(n / 9)],
+    ["many unclosed tags", (n) => "<svg>" + "<g".repeat(n / 2)],
+  ];
+  for (const [label, make] of adversarial) {
+    test(`stays fast on ${label}`, () => {
+      within(`${label} at 200 KB`, () => assert.equal(sanitizeSvg(make(200 * 1024)), null));
+      within(`${label} at 31 KB`, () => sanitizeSvg(make(31 * 1024)));
+      within(`${label} through sniffImage`, () => sniffImage(Buffer.from(make(200 * 1024))));
+    });
+  }
+
+  test("bytes that do not open like an svg never reach the sanitizer", () => {
+    within("200 KB of text", () => assert.equal(sniffImage(Buffer.from("hello " + "<?".repeat(100_000))), null));
+    within("200 KB of html", () => assert.equal(sniffImage(Buffer.from("<html>" + "<!--".repeat(50_000))), null));
+    assert.equal(sniffImage(Buffer.from("  \n<svg viewBox='0 0 1 1'><rect width='1' height='1'/></svg>"))?.contentType, "image/svg+xml", "leading whitespace is fine");
+    assert.equal(sniffImage(Buffer.from("<?xml version='1.0'?><svg viewBox='0 0 1 1'><rect width='1' height='1'/></svg>"))?.contentType, "image/svg+xml");
+  });
+
+  test("refuses logos over BIMI's 32 KB and accepts ones under it", () => {
+    const rect = '<rect width="1" height="1"/>';
+    assert.equal(sanitizeSvg(`<svg viewBox="0 0 1 1">${rect.repeat(1300)}</svg>`), null);
+    assert.ok(sanitizeSvg(`<svg viewBox="0 0 1 1">${rect.repeat(1000)}</svg>`));
+  });
 });
 
 describe("icon discovery", () => {
@@ -354,6 +440,32 @@ describe("icon discovery", () => {
       ["https://www.brightfield.com/apple.png", "https://cdn.brightfield-assets.net/96.png", "https://www.brightfield.com/favicon-16.png", "https://www.brightfield.com/shop/favicon.ico"],
     );
   });
+
+  test("decodes entities and reads attributes the way a browser would", () => {
+    const html = `<LINK REL="Icon" HREF="/a.png?x=1&amp;y=2"><link rel=icon href=/b.png><link rel="icon" href='/c.png' sizes='32x32 64x64'><link rel="icon" sizes="any" href="/d.svg">`;
+    assert.deepEqual(
+      findIconLinks(html, new URL("https://brightfield.com/")).map((l) => l.url.href),
+      ["https://brightfield.com/d.svg", "https://brightfield.com/c.png", "https://brightfield.com/a.png?x=1&y=2", "https://brightfield.com/b.png"],
+    );
+  });
+
+  // A 256 KB homepage is what the fetcher hands over; none of these may hold the event loop.
+  const adversarialPages: [string, (n: number) => string][] = [
+    ["one long link tag with no =", (n) => `<link rel="icon" ${"a".repeat(n)}>`],
+    ["one long unterminated link tag", (n) => `<link rel="icon" ${"a=b ".repeat(n / 4)}`],
+    ["many unclosed link tags", (n) => "<link".repeat(n / 5)],
+    ["a huge sizes attribute", (n) => `<link rel="icon" href="/i.png" sizes="${"1".repeat(n)}">`],
+    ["a huge rel attribute", (n) => `<link rel="${" ".repeat(n)}x" href="/i.png">`],
+    ["thousands of real link tags", (n) => '<link rel="icon" href="/i.png">'.repeat(n / 30)],
+  ];
+  for (const [label, make] of adversarialPages) {
+    test(`stays fast on ${label}`, () => {
+      const t = performance.now();
+      findIconLinks(make(256 * 1024), base);
+      const ms = performance.now() - t;
+      assert.ok(ms < 200, `took ${ms.toFixed(0)} ms`);
+    });
+  }
 
   test("BIMI records need an https logo location", () => {
     assert.equal(bimiLocation([["v=BIMI1; l=https://brightfield.com/logo.svg; a=https://brightfield.com/vmc.pem"]]), "https://brightfield.com/logo.svg");
@@ -535,6 +647,7 @@ describe("sender logo service", () => {
     const web = fakeWeb({ "https://keeper.com/": `<link rel="icon" href="/i.png">`, "https://keeper.com/i.png": PNG });
     const { logos } = makeService(env, web, { now: () => now });
     await logos.fetchNow("keeper.com");
+    assert.equal(logos.cached("keeper.com", LOCAL_USER_ID), null, "the person's first ask is never answered");
     now += 29 * 24 * 3_600_000;
     const fresh = makeService(env, web, { now: () => now });
     assert.ok(fresh.logos.cached("keeper.com", LOCAL_USER_ID));
@@ -557,7 +670,10 @@ describe("GET /api/logos/:domain", () => {
     env.ctx.db.run("DELETE FROM settings WHERE user_id = ? AND key = 'senderLogos'", LOCAL_USER_ID);
     if (value !== null) env.ctx.db.run("INSERT INTO settings (user_id, key, value) VALUES (?, 'senderLogos', ?)", LOCAL_USER_ID, JSON.stringify(value));
   };
-  const get = (domain: string, headers: Record<string, string> = {}) => env.api(`/api/logos/${domain}`, { headers });
+  // Like an <img> in the app: same-origin unless a test says otherwise. A missing header is refused.
+  const get = (domain: string, headers: Record<string, string> = { "sec-fetch-site": "same-origin" }) => env.api(`/api/logos/${domain}`, { headers });
+  let clock = 1_900_000_000_000;
+  const HOURS = 3_600_000;
 
   before(() => {
     env = makeEnv();
@@ -567,7 +683,7 @@ describe("GET /api/logos/:domain", () => {
       "https://svgco.com/": `<link rel="icon" href="/i.svg">`,
       "https://svgco.com/i.svg": `<svg viewBox="0 0 1 1" onload="x()"><script>x()</script><rect width="1" height="1"/></svg>`,
     });
-    const made = makeService(env, web);
+    const made = makeService(env, web, { now: () => clock });
     env.ctx.logos = made.logos;
     scheduled = made.scheduled;
     realAccount = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", addAccount(env.ctx, LOCAL_USER_ID, "me@work.test", "imap"))!;
@@ -634,11 +750,20 @@ describe("GET /api/logos/:domain", () => {
     assert.deepEqual(scheduled, []);
   });
 
-  test("cross-site loads are refused", async () => {
+  test("anything but a same-origin load is refused, including a request with no Sec-Fetch-Site at all", async () => {
     setLogos(true);
-    assert.equal((await get("saltmarrow.com", { "sec-fetch-site": "cross-site" })).status, 404);
-    assert.equal((await get("saltmarrow.com", { "sec-fetch-site": "same-site" })).status, 404);
-    assert.equal((await get("saltmarrow.com", { "sec-fetch-site": "same-origin" })).status, 200);
+    assert.equal((await get("saltmarrow.com", {})).status, 404, "header absent");
+    for (const site of ["cross-site", "same-site", "none", ""]) assert.equal((await get("saltmarrow.com", { "sec-fetch-site": site })).status, 404, site || "empty");
+    assert.equal((await get("saltmarrow.com", { "sec-fetch-site": "same-origin" })).status, 200, "same-origin takes the normal path");
+  });
+
+  test("a 404 may be cached for an hour; a logo for a week", async () => {
+    setLogos(true);
+    const miss = await get("never-heard.com");
+    assert.equal(miss.status, 404);
+    assert.equal(miss.headers.get("cache-control"), "private, max-age=3600");
+    assert.equal((await get("saltmarrow.com", {})).headers.get("cache-control"), "private, max-age=3600", "a refused cross-site load too");
+    assert.equal((await get("saltmarrow.com")).headers.get("cache-control"), "private, max-age=604800");
   });
 
   test("an agent token cannot use it, like the other browser-only read routes", async () => {
@@ -690,6 +815,11 @@ describe("GET /api/logos/:domain", () => {
     await env.ctx.logos.fetchNow("brightfield.com"); // joins the fetch the timer started
     assert.equal(web.calls.filter((c) => c === "https://brightfield.com/").length, 1);
 
+    // Cached now, but this person's own delay (counted from their first ask) is still running.
+    assert.equal((await get("brightfield.com")).status, 404);
+    clock += 2 * HOURS - 1;
+    assert.equal((await get("brightfield.com")).status, 404, "one millisecond early");
+    clock += 1;
     const res = await get("brightfield.com");
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("content-type"), "image/png");
@@ -716,11 +846,113 @@ describe("GET /api/logos/:domain", () => {
     setLogos(true);
     assert.equal((await get("svgco.com")).status, 404);
     await env.ctx.logos.fetchNow("svgco.com");
+    clock += 3 * HOURS;
     const res = await get("svgco.com");
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("content-type"), "image/svg+xml");
     assert.equal(res.headers.get("content-security-policy"), "default-src 'none'; style-src 'unsafe-inline'; sandbox");
     const body = await res.text();
     assert.ok(body.includes("<rect") && !/script|onload/.test(body));
+  });
+});
+
+describe("logos on a shared server", () => {
+  const HOURS = 3_600_000;
+  let env: TestEnv;
+  let clock = 1_900_000_000_000;
+  let cookies: { ana: string; ben: string };
+  const cookieFrom = (r: Response) => r.headers.get("set-cookie")!.split(";")[0]!;
+  const get = (who: keyof typeof cookies, domain: string) => env.api(`/api/logos/${domain}`, { headers: { "sec-fetch-site": "same-origin" }, cookie: cookies[who] });
+
+  before(async () => {
+    env = makeEnv({ mode: "team", senderLogos: true });
+    const ana = await env.api("/api/auth/signup", { method: "POST", json: { email: "ana@team.test", name: "Ana", password: "correct horse battery", workspaceName: "Fernpoint" } });
+    const ownerCookie = cookieFrom(ana);
+    const invite = await (await env.api("/api/team/invites", { method: "POST", json: { email: "ben@team.test" }, cookie: ownerCookie })).json();
+    const ben = await env.api("/api/auth/signup", {
+      method: "POST",
+      json: { email: "ben@team.test", name: "Ben", password: "another long password", invite: new URL(invite.url).searchParams.get("invite")! },
+    });
+    cookies = { ana: ownerCookie, ben: cookieFrom(ben) };
+
+    const web = fakeWeb({ "https://brightfield.com/": `<link rel="icon" href="/i.png">`, "https://brightfield.com/i.png": PNG });
+    env.ctx.logos = makeService(env, web, { now: () => clock }).logos;
+    for (const email of ["ana@team.test", "ben@team.test"]) {
+      const user = env.ctx.db.get<{ id: string }>("SELECT id FROM users WHERE email = ?", email)!;
+      env.ctx.db.run("INSERT INTO settings (user_id, key, value) VALUES (?, 'senderLogos', 'true')", user.id);
+      const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", addAccount(env.ctx, user.id, email, "imap"))!;
+      env.ctx.store.ingest(account, { messages: [msg({ from: { name: "Bright", email: "news@brightfield.com" }, remoteThreadId: "r1" })], cursor: null, done: true });
+    }
+  });
+  after(() => env.cleanup());
+
+  test("a logo another person caused to be fetched is not served on your first ask", async () => {
+    assert.equal((await get("ana", "brightfield.com")).status, 404);
+    await env.ctx.logos.fetchNow("brightfield.com");
+    clock += 7 * HOURS;
+    assert.equal((await get("ana", "brightfield.com")).status, 200, "Ana's own delay is over");
+
+    // The cache row is 'found' and Ana is being served, yet Ben has not asked before.
+    assert.equal(env.ctx.db.get<{ status: string }>("SELECT status FROM sender_logos WHERE domain = 'brightfield.com'")!.status, "found");
+    assert.equal((await get("ben", "brightfield.com")).status, 404, "a first ask never answers 200");
+    assert.equal((await get("ben", "brightfield.com")).status, 404);
+    clock += 2 * HOURS - 1;
+    assert.equal((await get("ben", "brightfield.com")).status, 404, "his delay is counted from his own first ask");
+    clock += 1;
+    const res = await get("ben", "brightfield.com");
+    assert.equal(res.status, 200);
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), PNG);
+  });
+
+  test("each person's delay is drawn on their own first ask and kept", () => {
+    const rows = env.ctx.db.all<{ user_id: string; first_requested_at: number; serve_after: number }>("SELECT * FROM logo_requests WHERE domain = 'brightfield.com'");
+    assert.equal(rows.length, 2);
+    for (const r of rows) assert.equal(r.serve_after - r.first_requested_at, 2 * HOURS);
+  });
+});
+
+describe("sender_domain", () => {
+  let env: TestEnv;
+  before(() => {
+    env = makeEnv();
+  });
+  after(() => env.cleanup());
+
+  test("is stored with each message, and the backfill fills in older rows once", async () => {
+    const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", addAccount(env.ctx, LOCAL_USER_ID, "me@work.test", "imap"))!;
+    env.ctx.store.ingest(account, {
+      messages: [
+        msg({ from: { name: "A", email: "News@Mail.Brightfield.co.uk" }, remoteThreadId: "a" }),
+        msg({ from: { name: "B", email: "pal@gmail.com" }, remoteThreadId: "b" }),
+        msg({ from: { name: "C", email: "root@localhost" }, remoteThreadId: "c" }),
+      ],
+      cursor: null,
+      done: true,
+    });
+    const domains = () => env.ctx.db.all<{ from_email: string; sender_domain: string | null }>("SELECT from_email, sender_domain FROM messages ORDER BY from_email").map((r) => ({ ...r }));
+    assert.deepEqual(domains(), [
+      { from_email: "news@mail.brightfield.co.uk", sender_domain: "brightfield.co.uk" },
+      { from_email: "pal@gmail.com", sender_domain: "gmail.com" },
+      { from_email: "root@localhost", sender_domain: "" },
+    ]);
+
+    env.ctx.db.run("UPDATE messages SET sender_domain = NULL");
+    assert.equal(await backfillSenderDomains(env.ctx, { batch: 2 }), 3, "two batches");
+    assert.equal(domains()[0]!.sender_domain, "brightfield.co.uk");
+    assert.equal(domains()[2]!.sender_domain, "");
+    assert.equal(await backfillSenderDomains(env.ctx), 0, "nothing left to do");
+    assert.deepEqual(mailFromDomain(env.ctx.db, LOCAL_USER_ID, "brightfield.co.uk"), { any: true, allDemo: false });
+  });
+
+  test("the ownership lookup is an index search, not a scan of the mailbox", () => {
+    const plan = env.ctx.db
+      .all<{ detail: string }>(
+        "EXPLAIN QUERY PLAN SELECT 1 FROM messages m JOIN accounts a ON a.id = m.account_id WHERE a.user_id = ? AND a.provider != 'demo' AND m.sender_domain = ? LIMIT 1",
+        LOCAL_USER_ID,
+        "brightfield.com",
+      )
+      .map((r) => r.detail)
+      .join("\n");
+    assert.match(plan, /messages_sender_domain/);
   });
 });

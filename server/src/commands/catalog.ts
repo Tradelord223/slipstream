@@ -8,6 +8,7 @@ import type { TriageKind } from "../mail/actions.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
 import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, sendDraft, updateDraft } from "../mail/drafts.ts";
 import { listIdentities, ownAddresses, replyIdentity, resolveFrom } from "../mail/identities.ts";
+import { isPersonalMailDomain } from "../mail/logos.ts";
 import { counts, getThread, listThreads } from "../mail/views.ts";
 import { createSnippet, createSplit, deleteSplit, listSnippets, listSplits } from "../prefs.ts";
 import { createLabel, createRule, deleteLabel, deleteRule, listLabels, listRules, ruleMatches, updateLabel, updateRule } from "../mail/labels.ts";
@@ -549,7 +550,8 @@ export function buildCatalog(): Command[] {
           const last = [...t.messages].reverse().find((m) => !m.outgoing) ?? t.messages.at(-1);
           const own = ownAddresses(ctx.db, accountId);
           const addressed = last ? [...(last.to as { name: string; email: string }[]), ...(last.cc as { name: string; email: string }[])] : [];
-          // The server picks the From for a reply: the address the original was sent to. The model never does.
+          // Without a fromEmail the server picks the From for a reply: the address the original was sent to.
+          // An explicit fromEmail from the agent wins; createDraft still checks it with resolveFrom.
           if (fromEmail === undefined) fromEmail = replyIdentity(ctx.db, accountId, addressed.map((a) => a.email)) ?? undefined;
           if (to.length === 0 && last) to = [last.from];
           if (i.replyAll && last && cc.length === 0)
@@ -621,10 +623,15 @@ export function buildCatalog(): Command[] {
         const policy = actor.agent.policy.send;
         if (policy === "never") return null;
         if (policy === "always") return "Sending email on your behalf";
-        const { from, emails } = draftRecipients(ctx, actor.user.id, i.draftId);
-        const domain = from.split("@")[1]?.toLowerCase();
-        const outside = emails.filter((e) => e.split("@")[1]?.toLowerCase() !== domain);
-        return outside.length ? `Sending to people outside ${domain}: ${outside.slice(0, 3).join(", ")}${outside.length > 3 ? "…" : ""}` : null;
+        const { from, accountEmail, emails } = draftRecipients(ctx, actor.user.id, i.draftId);
+        // "Inside" is the account's own domain, never the From: an agent may pick any alias, including one on the
+        // recipient's domain. On a personal-mail domain (gmail.com ...) nobody is inside, so every recipient counts.
+        const home = accountEmail.split("@")[1]?.toLowerCase();
+        const inside = home && !isPersonalMailDomain(home) ? home : null;
+        const outside = emails.filter((e) => e.split("@")[1]?.toLowerCase() !== inside);
+        if (!outside.length) return null;
+        const who = `${outside.slice(0, 3).join(", ")}${outside.length > 3 ? "…" : ""}`;
+        return inside ? `Sending as ${from} to people outside ${inside}: ${who}` : `Sending as ${from} to ${who}`;
       },
       preview: (ctx, actor, i) => {
         const d = getDraft(ctx, actor.user.id, i.draftId);
@@ -632,15 +639,15 @@ export function buildCatalog(): Command[] {
         const from = resolveFrom(ctx.db, d.accountId, d.fromEmail);
         return [
           `From: ${from.name ? `${from.name} <${from.email}>` : from.email}`,
+          from.replyTo ? `Reply-To: ${from.replyTo}` : "",
           `To: ${list(d.to)}`,
           d.cc.length ? `Cc: ${list(d.cc)}` : "",
           d.bcc.length ? `Bcc: ${list(d.bcc)}` : "",
           `Subject: ${d.subject || "(no subject)"}`,
           i.sendAt ? `Send at: ${new Date(i.sendAt).toISOString()}` : "",
-          "",
-          htmlToReviewText(sanitizeOutgoingHtml(d.bodyHtml)),
         ]
-          .filter((l, idx) => l !== "" || idx === 6)
+          .filter(Boolean)
+          .concat("", htmlToReviewText(sanitizeOutgoingHtml(d.bodyHtml)))
           .join("\n");
       },
       run: (ctx, actor, i) => {

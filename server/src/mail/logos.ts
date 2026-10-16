@@ -1,8 +1,8 @@
-import dns from "node:dns";
 import { domainToASCII } from "node:url";
+import sanitizeHtml from "sanitize-html";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/index.ts";
-import { FetchError, httpsTransport, isPublicHostname, makeSafeFetch, type SafeFetch } from "./safe-fetch.ts";
+import { dnsResolver, FetchError, httpsTransport, isPublicHostname, makeSafeFetch, type SafeFetch } from "./safe-fetch.ts";
 import { sanitizeSvg } from "./svg.ts";
 import type { MailStore } from "./store.ts";
 
@@ -34,22 +34,38 @@ const PERSONAL_PROVIDERS = new Set([
 /** Personal-mail brands that exist under many country endings (hotmail.fr, yahoo.co.uk, gmx.de ...). */
 const PERSONAL_BRANDS = new Set(["hotmail", "yahoo", "gmx", "yandex", "outlook", "live", "ymail", "rocketmail"]);
 
+/** The registrable part of a host name (mail.brand.co.uk -> brand.co.uk), or null when it has too few labels. No other checks. */
+function registrableOf(host: string): string | null {
+  const labels = host.split(".");
+  const take = MULTI_PART_SUFFIXES.has(labels.slice(-2).join(".")) ? 3 : 2;
+  return labels.length < take ? null : labels.slice(-take).join(".");
+}
+
+/** Providers that give people personal mailboxes (including their country variants), whatever the host in front of the name. */
+export function isPersonalMailDomain(host: string): boolean {
+  const registrable = registrableOf(domainToASCII(host.trim().toLowerCase()));
+  return registrable !== null && (PERSONAL_PROVIDERS.has(registrable) || PERSONAL_BRANDS.has(registrable.split(".")[0]!));
+}
+
 /**
- * The registrable domain a sender's logo is looked up under (mail.brand.co.uk -> brand.co.uk), or null when
- * there is nothing sensible to fetch: personal providers, IP literals, single-label or private-use hosts.
+ * The registrable domain an address sits under (mail.brand.co.uk -> brand.co.uk), personal providers included,
+ * or null for IP literals and single-label or private-use hosts. Stored with each message so lookups can use an index.
  */
-export function logoDomain(email: string): string | null {
+export function registrableDomain(email: string): string | null {
   const address = email.trim().toLowerCase();
   const at = address.lastIndexOf("@");
   if (at < 1) return null;
   const host = domainToASCII(address.slice(at + 1));
-  if (!host || !isPublicHostname(host)) return null;
-  const labels = host.split(".");
-  const take = MULTI_PART_SUFFIXES.has(labels.slice(-2).join(".")) ? 3 : 2;
-  if (labels.length < take) return null;
-  const registrable = labels.slice(-take).join(".");
-  if (PERSONAL_PROVIDERS.has(registrable) || PERSONAL_BRANDS.has(labels[labels.length - take]!)) return null;
-  return registrable;
+  return host && isPublicHostname(host) ? registrableOf(host) : null;
+}
+
+/**
+ * The registrable domain a sender's logo is looked up under, or null when there is nothing sensible to
+ * fetch: personal providers, IP literals, single-label or private-use hosts.
+ */
+export function logoDomain(email: string): string | null {
+  const registrable = registrableDomain(email);
+  return registrable !== null && !isPersonalMailDomain(registrable) ? registrable : null;
 }
 
 // --- Telling real images from anything else ----------------------------------------------------
@@ -73,6 +89,9 @@ export function sniffImage(bytes: Buffer): LogoImage | null {
   }
   const head = bytes.subarray(0, 2048);
   if (head.includes(0)) return null;
+  // Only something that opens like an SVG document reaches the sanitizer (trimStart also drops a BOM).
+  const opening = head.toString("utf8").trimStart().slice(0, 5).toLowerCase();
+  if (opening !== "<?xml" && !opening.startsWith("<svg")) return null;
   const svg = sanitizeSvg(bytes.toString("utf8"));
   return svg ? { contentType: "image/svg+xml", bytes: Buffer.from(svg) } : null;
 }
@@ -84,28 +103,48 @@ interface IconLink {
   score: number;
 }
 
+/** Declared attribute text is cut to this before any pattern reads it. */
+const MAX_ATTR = 256;
+
+/**
+ * The attributes of every `<link>` tag in a page, read by sanitize-html's HTML tokenizer (htmlparser2, already a
+ * dependency through it) rather than by patterns. Nothing it outputs is used.
+ */
+function linkTags(html: string): Record<string, string>[] {
+  const links: Record<string, string>[] = [];
+  sanitizeHtml(html, {
+    allowedTags: ["link"],
+    allowedAttributes: {},
+    transformTags: {
+      link: (tagName, attribs) => {
+        if (links.length < 500) links.push(attribs);
+        return { tagName, attribs: {} };
+      },
+    },
+  });
+  return links;
+}
+
 /** `<link rel="icon">` and apple-touch-icon candidates from a page, best first: apple-touch-icon, then the largest declared size. */
 export function findIconLinks(html: string, base: URL): IconLink[] {
   const found = new Map<string, IconLink>();
-  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
-    const attrs: Record<string, string> = {};
-    for (const m of tag.matchAll(/([a-zA-Z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) {
-      attrs[m[1]!.toLowerCase()] = (m[2] ?? m[3] ?? m[4] ?? "").trim();
-    }
-    const rel = (attrs.rel ?? "").toLowerCase().split(/\s+/);
+  for (const attrs of linkTags(html)) {
+    const rel = (attrs.rel ?? "").slice(0, MAX_ATTR).toLowerCase().split(/\s+/);
     const apple = rel.includes("apple-touch-icon") || rel.includes("apple-touch-icon-precomposed");
     if (!apple && !rel.includes("icon")) continue;
-    if (!attrs.href) continue;
+    const href = attrs.href?.trim();
+    if (!href) continue;
     let url: URL;
     try {
-      url = new URL(attrs.href.replace(/&amp;/gi, "&"), base);
+      url = new URL(href, base);
     } catch {
       continue;
     }
     if (url.protocol !== "https:") continue;
+    const sizes = (attrs.sizes ?? "").slice(0, MAX_ATTR).toLowerCase();
     let area = 0;
-    for (const m of (attrs.sizes ?? "").toLowerCase().matchAll(/(\d+)x(\d+)/g)) area = Math.max(area, Number(m[1]) * Number(m[2]));
-    if (/\bany\b/i.test(attrs.sizes ?? "")) area = Math.max(area, 512 * 512);
+    for (const m of sizes.matchAll(/(\d{1,5})x(\d{1,5})/g)) area = Math.max(area, Number(m[1]) * Number(m[2]));
+    if (/\bany\b/.test(sizes)) area = Math.max(area, 512 * 512);
     const score = (apple ? 1_000_000_000 : 0) + area;
     const key = url.href;
     if (!found.has(key) || found.get(key)!.score < score) found.set(key, { url, score });
@@ -177,7 +216,7 @@ export class SenderLogos {
   constructor(ctx: { db: Db; store: MailStore; config: Config }, deps: LogoDeps = {}) {
     this.ctx = ctx;
     this.safeFetch = deps.safeFetch ?? makeSafeFetch(httpsTransport());
-    this.resolveTxt = deps.resolveTxt ?? ((name) => dns.promises.resolveTxt(name));
+    this.resolveTxt = deps.resolveTxt ?? ((name) => dnsResolver().resolveTxt(name));
     this.delayMs = deps.delayMs ?? (() => HOUR + Math.random() * 5 * HOUR);
     this.schedule =
       deps.schedule ??
@@ -216,6 +255,10 @@ export class SenderLogos {
    * What is cached for a domain, never touching the network. A domain with nothing usable cached (or
    * with a stale entry) is queued for a fetch at a random time hours from now, so the fetch can't be lined
    * up with the arrival of a message. The caller gets 404-equivalent `null` until then.
+   *
+   * The cache is shared by everyone on the server, so a logo is also withheld from each person until their
+   * own random delay (counted from their first ask) has passed. Otherwise an instant answer would show that
+   * someone else already receives mail from that domain.
    */
   cached(domain: string, userId: string): LogoImage | null {
     const row = this.ctx.db.get<Row>("SELECT status, content_type, blob_sha256, fetched_at FROM sender_logos WHERE domain = ?", domain);
@@ -223,7 +266,22 @@ export class SenderLogos {
     const image = row?.status === "found" && row.blob_sha256 && row.content_type ? this.readImage(row) : null;
     const fresh = row ? (row.status === "found" ? image !== null && age < FOUND_TTL : age < NONE_TTL) : false;
     if (!fresh) this.queueFetch(domain, userId);
-    return image;
+    return this.delayPassed(domain, userId) ? image : null;
+  }
+
+  /** Records a person's first request for a domain, and says whether their own delay since then is over. The first request never is. */
+  private delayPassed(domain: string, userId: string): boolean {
+    const now = this.now();
+    const row = this.ctx.db.get<{ serve_after: number }>("SELECT serve_after FROM logo_requests WHERE user_id = ? AND domain = ?", userId, domain);
+    if (row) return now >= row.serve_after;
+    this.ctx.db.run(
+      "INSERT OR IGNORE INTO logo_requests (user_id, domain, first_requested_at, serve_after) VALUES (?,?,?,?)",
+      userId,
+      domain,
+      now,
+      now + Math.max(1, this.delayMs()),
+    );
+    return false;
   }
 
   private readImage(row: Row): LogoImage | null {
@@ -367,17 +425,14 @@ export class SenderLogos {
  * message sits in a demo account. Keeps the logo route from being a fetch-anything oracle.
  */
 export function mailFromDomain(db: Db, userId: string, domain: string): { any: boolean; allDemo: boolean } {
-  // `domain` is a validated host name (letters, digits, dots, hyphens), so it needs no LIKE escaping.
-  const query = (demo: boolean) =>
-    db
-      .all<{ from_email: string }>(
-        `SELECT DISTINCT m.from_email FROM messages m JOIN accounts a ON a.id = m.account_id
-         WHERE a.user_id = ? AND a.provider ${demo ? "=" : "!="} 'demo' AND (m.from_email LIKE ? OR m.from_email LIKE ?) LIMIT 200`,
-        userId,
-        `%@${domain}`,
-        `%@%.${domain}`,
-      )
-      .some((r) => logoDomain(r.from_email) === domain);
-  if (query(false)) return { any: true, allDemo: false };
-  return query(true) ? { any: true, allDemo: true } : { any: false, allDemo: false };
+  // sender_domain is the indexed registrable domain stored with each message (see MailStore and backfillSenderDomains).
+  const has = (demo: boolean) =>
+    db.get(
+      `SELECT 1 FROM messages m JOIN accounts a ON a.id = m.account_id
+       WHERE a.user_id = ? AND a.provider ${demo ? "=" : "!="} 'demo' AND m.sender_domain = ? LIMIT 1`,
+      userId,
+      domain,
+    ) !== undefined;
+  if (has(false)) return { any: true, allDemo: false };
+  return has(true) ? { any: true, allDemo: true } : { any: false, allDemo: false };
 }

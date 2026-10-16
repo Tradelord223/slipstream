@@ -47,6 +47,22 @@ function newProvider(over: Parameters<typeof testCtx>[0] = {}) {
   return { ctx, gmail: new GmailProvider(ctx, testConfig()) };
 }
 
+describe("Gmail ownership", () => {
+  it("calls a message ours because of the SENT label, never because of its From header", async () => {
+    const mail: Record<string, FakeMessage> = {
+      forged: { threadId: "t1", labelIds: ["INBOX"], raw: rawMail({ from: "me@example.com", subject: "Forged", messageId: "<forged@x>" }) },
+      aliased: { threadId: "t2", labelIds: ["SENT"], raw: rawMail({ from: "help@example.com", to: "ann@example.org", subject: "From an alias", messageId: "<aliased@x>" }) },
+    };
+    stub = mailbox(mail);
+    stub.on("GET", `${BASE}/profile`, { emailAddress: "me@example.com", historyId: "100" });
+    stub.on("GET", `${BASE}/messages`, { messages: [{ id: "forged", threadId: "t1" }, { id: "aliased", threadId: "t2" }] });
+    const { gmail } = newProvider();
+    const page = await gmail.sync(null);
+    assert.equal(page.messages.find((m) => m.remoteId === "forged")!.outgoing, false);
+    assert.equal(page.messages.find((m) => m.remoteId === "aliased")!.outgoing, true);
+  });
+});
+
 describe("Gmail initial sync", () => {
   it("pages through the list, maps labels, and ends on an incremental cursor", async () => {
     const mail: Record<string, FakeMessage> = {

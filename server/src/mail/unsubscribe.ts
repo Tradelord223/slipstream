@@ -1,6 +1,5 @@
 import { HttpError } from "../auth/users.ts";
 import type { AppContext } from "../context.ts";
-import { replyIdentity } from "./identities.ts";
 
 /**
  * One-key unsubscribe from a List-Unsubscribe header. A mailto target gets an email sent for the
@@ -9,8 +8,8 @@ import { replyIdentity } from "./identities.ts";
  */
 export async function unsubscribe(ctx: AppContext, userId: string, threadId: string) {
   const { db, triage, events } = ctx;
-  const msg = db.get<{ list_unsubscribe: string; account_id: string; to_json: string; cc_json: string }>(
-    `SELECT m.list_unsubscribe, m.account_id, m.to_json, m.cc_json FROM messages m JOIN accounts a ON a.id = m.account_id
+  const msg = db.get<{ list_unsubscribe: string; account_id: string }>(
+    `SELECT m.list_unsubscribe, m.account_id FROM messages m JOIN accounts a ON a.id = m.account_id
      WHERE m.thread_id = ? AND a.user_id = ? AND m.list_unsubscribe IS NOT NULL ORDER BY m.sent_at DESC LIMIT 1`,
     threadId,
     userId,
@@ -31,8 +30,9 @@ export async function unsubscribe(ctx: AppContext, userId: string, threadId: str
       `drf_unsub_${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       userId,
       msg.account_id,
-      // Unsubscribe as the address the list wrote to, so it can find the subscription.
-      replyIdentity(db, msg.account_id, [...(JSON.parse(msg.to_json) as { email: string }[]), ...(JSON.parse(msg.cc_json) as { email: string }[])].map((a) => a.email)),
+      // Always the account's own address (NULL). The mailto target is written by the sender, so answering from
+      // an alias picked out of its headers would tell the sender which of our addresses belong together.
+      null,
       JSON.stringify([{ name: "", email: decodeURIComponent(url.pathname) }]),
       url.searchParams.get("subject") ?? "unsubscribe",
       `<p>${(url.searchParams.get("body") ?? "unsubscribe").replace(/[<>&]/g, "")}</p>`,

@@ -20,7 +20,7 @@ import { Webhooks } from "./agents/webhooks.ts";
 import { CloudAgent } from "./agents/cloud.ts";
 import { Autopilot } from "./agents/autopilot.ts";
 import { runRules } from "./mail/labels.ts";
-import { backfillSignals, bundleDeliveries } from "./mail/signal-jobs.ts";
+import { backfillSenderDomains, backfillSignals, bundleDeliveries } from "./mail/signal-jobs.ts";
 import { buildCatalog } from "./commands/catalog.ts";
 import { Commands } from "./commands/service.ts";
 
@@ -92,6 +92,7 @@ export async function start(config = loadConfig()) {
   // Everyday signals: scan mail from before they existed, then keep delivery updates tidy as new ones arrive.
   const backfill = new AbortController();
   backfillSignals(ctx, { signal: backfill.signal }).catch((err) => console.error("[slipstream] signals backfill:", err));
+  backfillSenderDomains(ctx, { signal: backfill.signal }).catch((err) => console.error("[slipstream] sender domain backfill:", err));
   const bundleTimer = setInterval(() => {
     try {
       bundleDeliveries(ctx);

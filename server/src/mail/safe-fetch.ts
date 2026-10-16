@@ -84,7 +84,36 @@ export function isBlockedAddress(ip: string): boolean {
 
 export type Resolve = (host: string) => Promise<{ address: string; family: number }[]>;
 
-const systemResolve: Resolve = (host) => dns.promises.lookup(host, { all: true, verbatim: true });
+/** The part of dns.promises.Resolver the lookup needs; tests pass a fake. */
+export interface Resolver {
+  resolve4(host: string): Promise<string[]>;
+  resolve6(host: string): Promise<string[]>;
+}
+
+let shared: dns.promises.Resolver | undefined;
+/**
+ * One c-ares resolver for everything that looks up names from someone else's mail. It does its own network
+ * I/O and gives up after 2 seconds, so a slow or hostile name server can't occupy libuv's four-thread pool
+ * the way getaddrinfo (dns.lookup) can.
+ */
+export function dnsResolver(): dns.promises.Resolver {
+  return (shared ??= new dns.promises.Resolver({ timeout: 2_000, tries: 1 }));
+}
+
+/** Every A and AAAA answer for a name; nothing is dropped before the address check. */
+export function resolverLookup(resolver: () => Resolver = dnsResolver): Resolve {
+  return async (host) => {
+    const r = resolver();
+    const [v4, v6] = await Promise.allSettled([r.resolve4(host), r.resolve6(host)]);
+    if (v4.status === "rejected" && v6.status === "rejected") throw v4.reason;
+    return [
+      ...(v4.status === "fulfilled" ? v4.value.map((address) => ({ address, family: 4 })) : []),
+      ...(v6.status === "fulfilled" ? v6.value.map((address) => ({ address, family: 6 })) : []),
+    ];
+  };
+}
+
+const systemResolve: Resolve = resolverLookup();
 
 /**
  * A `lookup` for the https agent. It runs on the address that is then connected to, so a name that answers

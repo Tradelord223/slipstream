@@ -33,16 +33,21 @@ const ATTRIBUTES: Record<string, string[]> = {
 const NON_TEXT = ["script", "style", "textarea", "option", "foreignObject", "title", "desc", "metadata", "text", "tspan", "animate", "set"];
 
 const SAME_DOCUMENT_ID = /^#[A-Za-z_][\w.-]*$/;
-const URL_REFS = /url\(\s*(['"]?)([^)]*?)\1\s*\)/gi;
+/** A well-formed same-document reference. No lazy wildcard, so no input can make it back-track. */
+const LOCAL_URL_REF = /url\(\s*(['"]?)#[A-Za-z_][\w.-]*\1\s*\)/gi;
+/** Ordinary values are short; anything longer is refused before a pattern sees it. */
+const MAX_VALUE = 2048;
+/** Path and point data legitimately run long, but it is only numbers, commands and separators. */
+const GEOMETRY = /^[\d\s.,eE+\-MmLlHhVvCcSsQqTtAaZz]*$/;
 
 /** Attribute values: `url(#id)` is the only reference form allowed, and href must point inside the document. */
 function safeValue(name: string, value: string): boolean {
+  if (name === "d" || name === "points") return GEOMETRY.test(value);
+  if (value.length > MAX_VALUE) return false;
   if (/[<>&\\]/.test(value) || /[\u0000-\u001f\u007f]/.test(value)) return false;
   if (name === "href" || name === "xlink:href") return SAME_DOCUMENT_ID.test(value);
-  if (/@import|javascript:|data:|expression\(|image-set|src\(/i.test(value)) return false;
-  for (const m of value.matchAll(URL_REFS)) if (!SAME_DOCUMENT_ID.test(m[2]!.trim())) return false;
-  const rest = value.replace(URL_REFS, "");
-  return !/url\s*\(/i.test(rest) && !/[a-z][a-z0-9+.-]*:\/\//i.test(rest);
+  if (/@import|javascript:|data:|expression\(|image-set|src\(/i.test(value) || value.includes("://")) return false;
+  return !/url\s*\(/i.test(value.replace(LOCAL_URL_REF, ""));
 }
 
 const COLOR = [/^#[0-9a-f]{3,8}$/i, /^[a-z]+$/i, /^rgba?\([\d\s.,%]+\)$/i, /^hsla?\([\d\s.,%deg]+\)$/i, /^url\(#[\w.-]+\)$/i];
@@ -63,19 +68,17 @@ const ALLOWED_STYLES: Record<string, RegExp[]> = {
   "stroke-linejoin": [/^(miter|round|bevel)$/],
 };
 
+/** BIMI's own limit for an SVG logo. */
+const MAX_SVG_BYTES = 32 * 1024;
+
 /**
  * Reduces an SVG from the internet to plain vector drawing. Returns null when nothing drawable is left.
  * Run on every SVG before it is stored; the route also serves it with a locked-down CSP.
  */
 export function sanitizeSvg(input: string): string | null {
-  if (input.length > 400_000) return null;
-  // Prolog, DOCTYPE (with any entity definitions) and comments carry nothing a logo needs.
-  const text = input
-    .replace(/^﻿/, "")
-    .replace(/<!DOCTYPE[^[>]*(\[[\s\S]*?\])?\s*>/gi, "")
-    .replace(/<\?[\s\S]*?\?>/g, "")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
+  if (input.length > MAX_SVG_BYTES) return null;
+  // The prolog, DOCTYPE (entities are never expanded), comments and CDATA are dropped by the parser itself.
+  const text = input.replace(/^﻿/, "");
   if (!/<svg[\s>]/i.test(text)) return null;
   const out = sanitizeHtml(text, {
     allowedTags: TAGS,

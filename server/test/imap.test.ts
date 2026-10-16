@@ -330,6 +330,20 @@ function thread(...refs: ([string, string] | [string])[]): ThreadRef {
 
 const noLocksLeft = (r: Rig) => assert.deepEqual(r.conns.map((c) => c.openLocks), r.conns.map(() => 0), "every mailbox lock was released");
 
+describe("ImapProvider ownership", () => {
+  it("calls a message ours because of the Sent folder, never because of its From header", async () => {
+    const s = genericServer();
+    s.deliver("INBOX", mail({ id: "forged", from: "Me <me@example.com>" }));
+    s.deliver("INBOX", mail({ id: "forged-alias", from: "Help <help@example.com>" }));
+    s.deliver("Sent", mail({ id: "aliased", from: "Help <help@example.com>", to: "alice@example.com" }), { flags: ["\\Seen"] });
+    const r = rig(s);
+    const by = new Map((await drain(r.provider, null)).messages.map((m) => [m.messageIdHeader, m]));
+    assert.equal(by.get("<forged@example.com>")!.outgoing, false);
+    assert.equal(by.get("<forged-alias@example.com>")!.outgoing, false);
+    assert.equal(by.get("<aliased@example.com>")!.outgoing, true);
+  });
+});
+
 describe("ImapProvider sync (generic server)", () => {
   it("fetches recent mail in batches of 50, with folders, flags and ids", async () => {
     const s = genericServer();
