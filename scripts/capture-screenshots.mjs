@@ -32,7 +32,7 @@ await new Promise((r) => openai.listen(4399, "127.0.0.1", r));
 const dataDir = mkdtempSync(join(tmpdir(), "slipstream-shots-"));
 const server = spawn(process.execPath, ["server/src/main.ts"], {
   cwd: root,
-  env: { ...process.env, SLIPSTREAM_DATA_DIR: dataDir, SLIPSTREAM_PORT: String(port), SLIPSTREAM_SYNC_SECONDS: "600", SLIPSTREAM_ANTHROPIC_BASE_URL: fakeUrl, OPENAI_API_KEY: "stand-in", SLIPSTREAM_OPENAI_BASE_URL: "http://127.0.0.1:4399/v1",
+  env: { ...process.env, SLIPSTREAM_DEMO: "1", SLIPSTREAM_DATA_DIR: dataDir, SLIPSTREAM_PORT: String(port), SLIPSTREAM_SYNC_SECONDS: "600", SLIPSTREAM_ANTHROPIC_BASE_URL: fakeUrl, OPENAI_API_KEY: "stand-in", SLIPSTREAM_OPENAI_BASE_URL: "http://127.0.0.1:4399/v1",
     // Scripted stand-ins: screenshots must never show (or use) the machine's own Claude Code or Codex sign-in.
     SLIPSTREAM_CLAUDE_BIN: join(root, "contract/fixtures/scripted-claude.mjs"), SLIPSTREAM_CODEX_BIN: join(root, "contract/fixtures/scripted-codex.mjs") },
   stdio: "ignore",

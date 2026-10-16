@@ -22,6 +22,7 @@ const settingsSchema = z
     unifiedInbox: z.boolean(),
     assistant: z.enum(["on", "off"]),
     senderLogos: z.boolean(),
+    onboarded: z.boolean(),
     helpers: z.strictObject({
       codes: z.boolean(),
       deliveries: z.enum(["latest", "all"]),

@@ -258,6 +258,7 @@ export function mailRoutes(ctx: AppContext) {
       syncStatus: a.sync_status,
       syncError: a.sync_error,
       lastSyncedAt: a.last_synced_at,
+      firstSyncedAt: a.first_synced_at,
       identities: listIdentities(db, a.id),
     }));
     const splits = db
@@ -295,6 +296,7 @@ export function mailRoutes(ctx: AppContext) {
         google: Boolean(ctx.config.google.clientId),
         microsoft: Boolean(ctx.config.microsoft.clientId),
         undoSendSeconds: ctx.config.undoSendSeconds,
+        demo: ctx.config.demo,
         sourceUrl: ctx.config.sourceUrl,
         cli: ctx.config.mode === "local" ? localCli() : null,
       },

@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { BUILT_IN_MICROSOFT_CLIENT_ID } from "./providers/builtin-apps.ts";
 
 export type Mode = "local" | "team";
 
@@ -21,7 +22,7 @@ export interface Config {
   openaiApiKey?: string;
   geminiApiKey?: string;
   openrouterApiKey?: string;
-  /** Seed a demo account on first boot (local mode only). */
+  /** Seed an invented demo mailbox on first boot (local mode only). Developers only: `SLIPSTREAM_DEMO=1` or `slipstream --demo`. */
   demo: boolean;
   syncIntervalSeconds: number;
   /** `SLIPSTREAM_SENDER_LOGOS=off` turns sender logos off for the whole server, whatever people choose in Settings. */
@@ -46,6 +47,19 @@ function platformUrl(): string | undefined {
   return undefined;
 }
 
+/**
+ * The Microsoft app: the operator's own (MICROSOFT_CLIENT_ID, optionally with a secret), else Slipstream's built-in
+ * public app. The built-in app is a secretless PKCE client whose redirect is the loopback address, so it is
+ * local mode only, and a stray MICROSOFT_CLIENT_SECRET (meant for a different app) is not sent with it.
+ */
+export function microsoftApp(mode: Mode, builtInClientId = BUILT_IN_MICROSOFT_CLIENT_ID): Config["microsoft"] {
+  const tenant = env("MICROSOFT_TENANT") ?? "common";
+  const own = env("MICROSOFT_CLIENT_ID");
+  if (own) return { clientId: own, clientSecret: env("MICROSOFT_CLIENT_SECRET"), tenant };
+  if (mode === "local" && builtInClientId) return { clientId: builtInClientId, clientSecret: undefined, tenant };
+  return { clientId: undefined, clientSecret: env("MICROSOFT_CLIENT_SECRET"), tenant };
+}
+
 export function loadConfig(overrides: Partial<Config> = {}): Config {
   const mode: Mode = env("SLIPSTREAM_MODE") === "team" ? "team" : "local";
   const port = Number(env("PORT") ?? env("SLIPSTREAM_PORT") ?? 4380);
@@ -68,12 +82,12 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     allowedHosts,
     undoSendSeconds: Number(env("SLIPSTREAM_UNDO_SEND_SECONDS") ?? 10),
     google: { clientId: env("GOOGLE_CLIENT_ID"), clientSecret: env("GOOGLE_CLIENT_SECRET") },
-    microsoft: { clientId: env("MICROSOFT_CLIENT_ID"), clientSecret: env("MICROSOFT_CLIENT_SECRET"), tenant: env("MICROSOFT_TENANT") ?? "common" },
+    microsoft: microsoftApp(mode),
     anthropicApiKey: env("ANTHROPIC_API_KEY"),
     openaiApiKey: env("OPENAI_API_KEY"),
     geminiApiKey: env("GEMINI_API_KEY") ?? env("GOOGLE_API_KEY"),
     openrouterApiKey: env("OPENROUTER_API_KEY"),
-    demo: mode === "local" && env("SLIPSTREAM_DEMO") !== "0",
+    demo: mode === "local" && env("SLIPSTREAM_DEMO") === "1",
     syncIntervalSeconds: Number(env("SLIPSTREAM_SYNC_SECONDS") ?? 60),
     senderLogos: env("SLIPSTREAM_SENDER_LOGOS")?.toLowerCase() !== "off",
     sourceUrl: env("SLIPSTREAM_SOURCE_URL") ?? "https://github.com/Tradelord223/slipstream",

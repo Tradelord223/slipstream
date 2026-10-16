@@ -5,7 +5,7 @@ import { join, normalize } from "node:path";
 import { ZodError } from "zod";
 import { HttpError, LOCAL_USER_ID } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
-import { accountRoutes } from "./accounts.ts";
+import { accountRoutes, type AccountDeps } from "./accounts.ts";
 import { aiRoutes } from "./ai.ts";
 import { authRoutes, SESSION_COOKIE } from "./auth.ts";
 import { composeRoutes } from "./compose.ts";
@@ -26,7 +26,12 @@ const PUBLIC_API = new Set(["/api/auth/login", "/api/auth/signup", "/api/auth/st
 /** Browser navigations (no custom header possible): OAuth redirects and downloads use GET with a session cookie. */
 const NAVIGATION_GET = [/^\/api\/oauth\/(google|microsoft)\/(start|callback)$/, /^\/api\/attachments\/[\w-]+$/, /^\/api\/logos\/[\w.-]+$/, /^\/api\/events$/, /^\/api\/v1\/openapi\.json$/];
 
-export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
+/** Seams for tests; the app is built without them. */
+export interface AppDeps {
+  accounts?: AccountDeps;
+}
+
+export function createApp(ctx: AppContext, staticDir?: string, deps: AppDeps = {}): Hono<Env> {
   const app = new Hono<Env>();
   const { config, users } = ctx;
 
@@ -109,7 +114,7 @@ export function createApp(ctx: AppContext, staticDir?: string): Hono<Env> {
   app.route("/api", mailRoutes(ctx));
   app.route("/api", logoRoutes(ctx));
   app.route("/api", composeRoutes(ctx));
-  app.route("/api", accountRoutes(ctx));
+  app.route("/api", accountRoutes(ctx, deps.accounts));
   app.route("/api", prefsRoutes(ctx));
   app.route("/api", teamRoutes(ctx));
   app.route("/api", aiRoutes(ctx));

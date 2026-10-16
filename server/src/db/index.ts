@@ -6,6 +6,7 @@ export type Row = Record<string, SQLInputValue>;
 export class Db {
   readonly raw: DatabaseSync;
   private cache = new Map<string, ReturnType<DatabaseSync["prepare"]>>();
+  private writes = new Map<string, ReturnType<DatabaseSync["prepare"]>>();
 
   constructor(path: string) {
     this.raw = new DatabaseSync(path);
@@ -51,8 +52,20 @@ export class Db {
     return this.stmt(sql).all(...params) as T[];
   }
 
-  run(sql: string, ...params: SQLInputValue[]) {
-    return this.stmt(sql).run(...params);
+  /**
+   * Statements that write read their result as BigInt and hand it back as numbers. Deleting from the full-text
+   * index can leave SQLite's last-insert rowid above 2^53, and reading that as a plain number throws on the next
+   * statement that runs, whatever it is.
+   */
+  run(sql: string, ...params: SQLInputValue[]): { changes: number; lastInsertRowid: number } {
+    let s = this.writes.get(sql);
+    if (!s) {
+      s = this.raw.prepare(sql);
+      s.setReadBigInts(true);
+      this.writes.set(sql, s);
+    }
+    const r = s.run(...params);
+    return { changes: Number(r.changes), lastInsertRowid: Number(r.lastInsertRowid) };
   }
 
   private depth = 0;
