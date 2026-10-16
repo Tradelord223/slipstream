@@ -32,6 +32,14 @@ Assume some mail will try. Slipstream's defenses are enforced by the server, not
 - **Data, not instructions:** email content (bodies, subjects, names and addresses) goes to a model as marked data with no angle brackets left in it, so it can't pose as Slipstream's own instructions.
 - **Your own Claude Code or Codex** runs in an empty private folder with Slipstream's MCP server as its only tool source: Claude Code's built-in tools are off, and Codex's shell, hooks and command rules are off. Its token works only on `/mcp`, only for that turn. It sees only the environment variables it needs for its own sign-in.
 
+**Sender logos reveal who you hear from.**
+
+- **Off by default.** Logos show next to company senders only after you turn them on in Settings. On a team server, `SLIPSTREAM_SENDER_LOGOS=off` switches them off for everyone.
+- **What is fetched, and by whom.** The computer running Slipstream (your own Mac in local mode, the server in team mode) looks for each company's icon on the company's own website, about once a month per company. Your browser never contacts those sites.
+- **What a sender's site can learn.** That someone running Slipstream asked for its icon. It can't tell which message prompted it or who the message was for, and the request happens at a random time hours later, not when the mail arrives.
+- **Guarded requests.** The server only makes plain https requests on port 443 and refuses any address inside your own network or the internet's reserved ranges, including after redirects. Downloaded images are checked by their contents, and SVG logos are stripped down to plain shapes before they are stored.
+- **No lookups on demand.** Only senders who have actually written to you get a logo, a request for any other domain is refused, and the demo mailbox uses built-in invented logos without any network access.
+
 **Someone gets a copy of the database.**
 
 - **Encryption:** OAuth refresh tokens and IMAP passwords are sealed with AES-256-GCM. The key comes from `SLIPSTREAM_SECRET` or a separate 0600 key file.

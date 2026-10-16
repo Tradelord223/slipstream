@@ -11,6 +11,7 @@ import { createApp } from "./http/app.ts";
 import { createPublicApp, remotePort, watchRemoteOrigin } from "./http/remote.ts";
 import { newId, SecretBox } from "./lib/crypto.ts";
 import { Triage } from "./mail/actions.ts";
+import { SenderLogos } from "./mail/logos.ts";
 import { MailStore } from "./mail/store.ts";
 import { SyncEngine } from "./mail/sync.ts";
 import { DEMO_IDENTITY } from "./providers/demo.ts";
@@ -36,6 +37,7 @@ export function createContext(config: Config): AppContext {
   ctx.webhooks = new Webhooks(ctx);
   ctx.cloud = new CloudAgent(ctx);
   ctx.autopilot = new Autopilot(ctx);
+  ctx.logos = new SenderLogos(ctx);
   commands.bind(ctx);
   return ctx;
 }
@@ -101,6 +103,7 @@ export async function start(config = loadConfig()) {
     ctx.webhooks.close();
     ctx.cloud.close();
     ctx.autopilot.close();
+    ctx.logos.close();
     clearInterval(rulesTimer);
     await ctx.sync.stop();
     ctx.db.close();

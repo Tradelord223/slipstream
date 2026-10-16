@@ -24,6 +24,8 @@ export interface Config {
   /** Seed a demo account on first boot (local mode only). */
   demo: boolean;
   syncIntervalSeconds: number;
+  /** `SLIPSTREAM_SENDER_LOGOS=off` turns sender logos off for the whole server, whatever people choose in Settings. */
+  senderLogos: boolean;
   /**
    * Where users can get this server's source (AGPL-3.0 section 13). Point it at your fork if you run a
    * modified Slipstream for others.
@@ -73,6 +75,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     openrouterApiKey: env("OPENROUTER_API_KEY"),
     demo: mode === "local" && env("SLIPSTREAM_DEMO") !== "0",
     syncIntervalSeconds: Number(env("SLIPSTREAM_SYNC_SECONDS") ?? 60),
+    senderLogos: env("SLIPSTREAM_SENDER_LOGOS")?.toLowerCase() !== "off",
     sourceUrl: env("SLIPSTREAM_SOURCE_URL") ?? "https://github.com/Tradelord223/slipstream",
     ...overrides,
   };
