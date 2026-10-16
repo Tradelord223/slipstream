@@ -1,0 +1,30 @@
+<style>
+@import url("https://css.fernpoint.co/s/import-url.css");
+@import "https://css.fernpoint.co/s/import-string.css";
+@import url(//css.fernpoint.co/s/import-protocol-relative.css) screen;
+@import 'http://css.fernpoint.co/s/import-http.css';
+@namespace svg url(https://css.fernpoint.co/s/namespace.xml);
+body { background: url(https://images.fernpoint.co/c/body-bg.png); }
+.a { background: url("https://images.fernpoint.co/c/quoted.png") no-repeat; }
+.b { background: url( 'https://images.fernpoint.co/c/single-quoted.png' ); }
+.c { background-image: url(//images.fernpoint.co/c/protocol-relative.png); }
+.d { background-image: url(http://images.fernpoint.co/c/http.png); }
+.e { background-image: url(https://pixel.fernpoint.co/c/fallback.png), url(https://pixel.fernpoint.co/c/second.png); }
+.f { background: URL(HTTPS://images.fernpoint.co/c/upper.png); }
+.g { background-image:
+  url(
+    "https://images.fernpoint.co/c/multiline.png"
+  ); }
+.h { background: url(/api/bootstrap); }
+.i { background: image-set("https://images.fernpoint.co/c/image-set-string.png" 1x, "https://images.fernpoint.co/c/image-set-2x.png" 2x); }
+.j { background: -webkit-image-set(url(https://images.fernpoint.co/c/webkit-image-set.png) 1x); }
+@font-face { font-family: Fernpoint; src: url(https://fonts.fernpoint.co/f/face.woff2) format("woff2"), url(https://fonts.fernpoint.co/f/face.woff) format("woff"); }
+@font-face { font-family: Fernpoint2; src: local("Arial"), url("//fonts.fernpoint.co/f/face2.ttf"); }
+body, td, p { font-family: Fernpoint, Fernpoint2, Arial, sans-serif; }
+@media screen { .k { background: url(https://images.fernpoint.co/c/media.png); } }
+@supports (display:grid) { .l { background: url(https://images.fernpoint.co/c/supports.png); } }
+a:hover { background: url(https://pixel.fernpoint.co/c/hover.png); }
+</style>
+<p class="a">a</p><p class="b">b</p><p class="c">c</p><p class="d">d</p><p class="e">e</p><p class="f">f</p><p class="g">g</p><p class="h">h</p><p class="i">i</p><p class="j">j</p><p class="k">k</p><p class="l">l</p>
+<p><a href="https://evil.fernpoint.co/c/link">hover target</a></p>
+<p style="font-family:Fernpoint">Fonts and imports.</p>

@@ -1,0 +1,210 @@
+{
+  "01-script-and-handlers": {
+    "kind": "simple",
+    "banner": true,
+    "allowedRequests": [
+      "https://pixel.fernpoint.co/h/img-duplicate-handler.gif",
+      "https://pixel.fernpoint.co/h/img-onerror.gif",
+      "https://pixel.fernpoint.co/h/img-onmouseover.gif"
+    ],
+    "sameOrigin": []
+  },
+  "02-javascript-and-data-urls": {
+    "kind": "simple",
+    "banner": false,
+    "allowedRequests": [],
+    "sameOrigin": []
+  },
+  "03-tracking-pixels": {
+    "kind": "simple",
+    "banner": true,
+    "allowedRequests": [
+      "https://127.0.0.1:__REMOTE_PORT__/t/loopback-https.gif",
+      "https://pixel.fernpoint.co/t/hidden.gif",
+      "https://pixel.fernpoint.co/t/https-1x1.gif",
+      "https://pixel.fernpoint.co/t/lazy.gif",
+      "https://pixel.fernpoint.co/t/leading-space.gif",
+      "https://pixel.fernpoint.co/t/ping.gif",
+      "https://pixel.fernpoint.co/t/protocol-relative.gif",
+      "https://pixel.fernpoint.co/t/referrer-override.gif",
+      "https://pixel.fernpoint.co/t/upper-case-scheme.gif",
+      "https://pixel.fernpoint.co/t/with-srcset.gif"
+    ],
+    "sameOrigin": []
+  },
+  "04-style-import-and-url": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/c/body-bg.png",
+      "https://images.fernpoint.co/c/image-set-string.png",
+      "https://images.fernpoint.co/c/media.png",
+      "https://images.fernpoint.co/c/multiline.png",
+      "https://images.fernpoint.co/c/quoted.png",
+      "https://images.fernpoint.co/c/single-quoted.png",
+      "https://images.fernpoint.co/c/supports.png",
+      "https://images.fernpoint.co/c/upper.png",
+      "https://images.fernpoint.co/c/webkit-image-set.png",
+      "https://pixel.fernpoint.co/c/fallback.png",
+      "https://pixel.fernpoint.co/c/hover.png",
+      "https://pixel.fernpoint.co/c/second.png"
+    ],
+    "sameOrigin": [
+      "/api/bootstrap"
+    ]
+  },
+  "05-css-image-properties": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/p/border-image.png",
+      "https://images.fernpoint.co/p/clip-path.svg",
+      "https://images.fernpoint.co/p/content-after.png",
+      "https://images.fernpoint.co/p/content-before.png",
+      "https://images.fernpoint.co/p/cursor.cur",
+      "https://images.fernpoint.co/p/custom-property.png",
+      "https://images.fernpoint.co/p/gradient-layer.png",
+      "https://images.fernpoint.co/p/inline-border-image.png",
+      "https://images.fernpoint.co/p/inline-content.png",
+      "https://images.fernpoint.co/p/inline-cursor.cur",
+      "https://images.fernpoint.co/p/inline-list-style.png",
+      "https://images.fernpoint.co/p/inline-mask.png",
+      "https://images.fernpoint.co/p/list-style-image.png",
+      "https://images.fernpoint.co/p/list-style-shorthand.png",
+      "https://images.fernpoint.co/p/mask-box.png",
+      "https://images.fernpoint.co/p/mask-image.png",
+      "https://images.fernpoint.co/p/mask.svg",
+      "https://images.fernpoint.co/p/shape-outside.png"
+    ],
+    "sameOrigin": []
+  },
+  "06-css-escape-tricks": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/e/escaped-h.png",
+      "https://images.fernpoint.co/e/escaped-r.png",
+      "https://images.fernpoint.co/e/escaped-slashes.png",
+      "https://images.fernpoint.co/e/escaped-u-long.png",
+      "https://images.fernpoint.co/e/escaped-u.png",
+      "https://images.fernpoint.co/e/escaped-upper.png",
+      "https://images.fernpoint.co/e/image-set-escaped.png",
+      "https://images.fernpoint.co/e/inline-escaped-slashes.png",
+      "https://images.fernpoint.co/e/inline-escaped.png",
+      "https://images.fernpoint.co/e/leading-spaces.png",
+      "https://images.fernpoint.co/e/string-with-)-paren.png)"
+    ],
+    "sameOrigin": []
+  },
+  "07-legacy-background-attributes": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/l/table-bg.png",
+      "https://images.fernpoint.co/l/td-bg.png",
+      "https://pixel.fernpoint.co/l/second-table.gif",
+      "https://pixel.fernpoint.co/l/tr-bg.gif"
+    ],
+    "sameOrigin": []
+  },
+  "08-picture-video-audio": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/m/img-srcset-base.png",
+      "https://images.fernpoint.co/m/ismap.png",
+      "https://images.fernpoint.co/m/picture-fallback.png"
+    ],
+    "sameOrigin": []
+  },
+  "09-head-elements": {
+    "kind": "simple",
+    "banner": false,
+    "allowedRequests": [],
+    "sameOrigin": []
+  },
+  "10-frames-objects-forms": {
+    "kind": "simple",
+    "banner": true,
+    "allowedRequests": [
+      "https://pixel.fernpoint.co/f/img-with-form-attr.gif"
+    ],
+    "sameOrigin": []
+  },
+  "11-svg-and-mathml": {
+    "kind": "simple",
+    "banner": false,
+    "allowedRequests": [],
+    "sameOrigin": []
+  },
+  "12-srcdoc-and-odd-attributes": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/a/p-style.png",
+      "https://pixel.fernpoint.co/a/img-srcdoc.gif",
+      "https://pixel.fernpoint.co/a/longdesc.gif"
+    ],
+    "sameOrigin": []
+  },
+  "13-cid-inline-images": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/i/remote-next-to-cid.png"
+    ],
+    "sameOrigin": [
+      "/api/attachments/att_logo?inline=1"
+    ]
+  },
+  "14-simple-inline-styles": {
+    "kind": "simple",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/s/plain-img.png"
+    ],
+    "sameOrigin": []
+  },
+  "15-link-attributes": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/k/link-bg.png",
+      "https://images.fernpoint.co/k/linked-image.png"
+    ],
+    "sameOrigin": []
+  },
+  "16-mutation-xss": {
+    "kind": "simple",
+    "banner": false,
+    "allowedRequests": [],
+    "sameOrigin": []
+  },
+  "17-designed-newsletter": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/n/hero-bg.jpg",
+      "https://images.fernpoint.co/n/logo.png",
+      "https://images.fernpoint.co/n/photo.jpg",
+      "https://pixel.fernpoint.co/n/open.gif?u=12345"
+    ],
+    "sameOrigin": []
+  },
+  "18-image-map-links": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/q/map.png"
+    ],
+    "sameOrigin": []
+  },
+  "19-css-namespace": {
+    "kind": "rich",
+    "banner": true,
+    "allowedRequests": [
+      "https://images.fernpoint.co/n/any-namespace-background.png"
+    ],
+    "sameOrigin": []
+  }
+}

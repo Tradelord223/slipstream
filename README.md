@@ -100,6 +100,7 @@ npm install
 npm run dev        # server on :4392 with a demo inbox + web app on :5180
 npm test           # server tests (node:test)
 npm run test:contract   # black-box API + MCP contract suite against a live server
+npm run test:render     # shows hostile email in headless Chrome and proves nothing runs or leaks (needs Chrome; see docs/security.md)
 npm run typecheck
 npm run build && npm start
 ```

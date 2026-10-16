@@ -18,6 +18,8 @@ jobs:
       - run: npm test
       - run: npm run test:contract
       - run: npm run build
+      # Shows hostile mail in the runner's preinstalled Google Chrome (nothing is downloaded).
+      - run: CHROME_PATH="$(command -v google-chrome)" npm run test:render
 
   rust:
     runs-on: ubuntu-latest

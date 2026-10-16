@@ -2,11 +2,12 @@
 // Usage: npm run build && node scripts/capture-screenshots.mjs [outDir]
 // It starts its own server on a temporary data directory, so nothing of yours is touched.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { chromePath } from "./chrome-path.mjs";
 import { FakeManagedAgents } from "./fake-managed-agents.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -18,18 +19,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 if (!existsSync(join(root, "dist/web/index.html"))) {
   console.error("Run `npm run build` first.");
   process.exit(1);
-}
-
-function chromePath() {
-  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-  const cache = join(homedir(), "Library/Caches/ms-playwright");
-  if (!existsSync(cache)) return undefined;
-  const shells = readdirSync(cache).filter((d) => d.startsWith("chromium_headless_shell-")).sort();
-  const dir = shells.at(-1);
-  if (!dir) return undefined;
-  const sub = readdirSync(join(cache, dir)).find((d) => d.startsWith("chrome-headless-shell"));
-  const bin = sub && join(cache, dir, sub, "chrome-headless-shell");
-  return bin && existsSync(bin) ? bin : undefined;
 }
 
 // A stand-in for Anthropic's Managed Agents, so the cloud agent has something to talk to (any API key works).

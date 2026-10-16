@@ -1,0 +1,23 @@
+<p>javascript: and data: URLs.</p>
+<a href="javascript:top.__pwned='js-link';alert('js-link')">js link</a>
+<a href=" JaVaScRiPt:top.__pwned='js-case'">js link spaced and mixed case</a>
+<a href="java&#x0A;script:top.__pwned='js-entity'">js link with entity</a>
+<a href="&#106;avascript:top.__pwned='js-numeric'">js link numeric entity</a>
+<a href="vbscript:msgbox(1)">vbscript link</a>
+<a href="data:text/html;base64,PHNjcmlwdD50b3AuX19wd25lZD0nZGF0YScsYWxlcnQoMSk8L3NjcmlwdD4=">data link</a>
+<a href="data:text/html,<script>top.__pwned='data2'</script>">data link plain</a>
+<a href="blob:https://evil.fernpoint.co/00000000">blob link</a>
+<a href="file:///etc/passwd">file link</a>
+<a href="ftp://evil.fernpoint.co/x">ftp link</a>
+<a href="//evil.fernpoint.co/protocol-relative">protocol-relative link</a>
+<a href="/api/bootstrap">same-origin api link</a>
+<a href="https://evil.fernpoint.co/ok" target="_self" rel="opener">https link with target and rel</a>
+<a href="mailto:hello@fernpoint.co">mail link</a>
+<a href="tel:+15555550100">tel link</a>
+<img src="javascript:top.__pwned='js-img'" alt="">
+<img src="vbscript:msgbox(1)" alt="">
+<img src="data:text/html,<script>top.__pwned='data-img'</script>" alt="">
+<img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' onload='top.__pwned=1'><image href='https://evil.fernpoint.co/s/data-svg.png'/></svg>" alt="">
+<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" alt="">
+<img src="/api/attachments/att_someone_elses?inline=1" alt="">
+<img src="/api/bootstrap" alt="">
