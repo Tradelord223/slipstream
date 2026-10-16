@@ -259,6 +259,8 @@ export function mailRoutes(ctx: AppContext) {
       syncError: a.sync_error,
       lastSyncedAt: a.last_synced_at,
       firstSyncedAt: a.first_synced_at,
+      importing: ctx.imports.has(a.id),
+      imported: ctx.imports.get(a.id)?.imported ?? 0,
       identities: listIdentities(db, a.id),
     }));
     const splits = db

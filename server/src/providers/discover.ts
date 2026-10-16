@@ -23,6 +23,8 @@ export interface SrvRecord {
 export interface DnsLookup {
   resolveMx(domain: string): Promise<MxRecord[]>;
   resolveSrv(name: string): Promise<SrvRecord[]>;
+  /** Stops every query still in flight (node's `Resolver.cancel`). Called when a lookup runs out of time. */
+  cancel?(): void;
 }
 export interface DiscoverDeps {
   dns?: DnsLookup;
@@ -32,8 +34,19 @@ export interface DiscoverDeps {
 
 const DEFAULT_TIMEOUT_MS = 2000;
 
-// Brands that run one domain per country (hotmail.co.uk, yahoo.com.au, live.fr).
-const TLD = String.raw`(?:com|[a-z]{2}|(?:co|com|ne|or)\.[a-z]{2})`;
+// Brands that run one domain per country. Only domains these brands really run are listed: any other domain, even
+// a lookalike such as live.io, goes through DNS, where a real Hotmail or Yahoo domain is still recognised by its MX.
+const OUTLOOK_DOMAINS = new Set([
+  "outlook.com", "outlook.fr", "outlook.de", "outlook.jp", "outlook.es", "msn.com",
+  "hotmail.com", "hotmail.co.uk", "hotmail.fr", "hotmail.de", "hotmail.it", "hotmail.es",
+  "live.com", "live.co.uk", "live.fr",
+]);
+// Yahoo Japan (yahoo.co.jp) is a separate service with its own servers, so it is left out on purpose.
+const YAHOO_DOMAINS = new Set([
+  "yahoo.com", "yahoo.co.uk", "yahoo.fr", "yahoo.de", "yahoo.es", "yahoo.it", "yahoo.ca", "yahoo.com.au",
+  "yahoo.in", "yahoo.co.in", "yahoo.com.br", "yahoo.com.mx", "yahoo.ie", "yahoo.co.nz", "yahoo.com.sg",
+  "ymail.com", "rocketmail.com",
+]);
 
 // Fastmail's own country domains; the long tail of vanity domains is caught by its MX records instead.
 const FASTMAIL_DOMAINS = new Set([
@@ -45,14 +58,23 @@ const FASTMAIL_DOMAINS = new Set([
 /** Domains whose provider is known without asking DNS. */
 const KNOWN: { host: MailHost; test: (domain: string) => boolean }[] = [
   { host: "gmail", test: (d) => d === "gmail.com" || d === "googlemail.com" },
-  { host: "outlook", test: (d) => d === "msn.com" || new RegExp(`^(?:outlook|hotmail|live)\\.${TLD}$`).test(d) },
+  { host: "outlook", test: (d) => OUTLOOK_DOMAINS.has(d) },
   { host: "icloud", test: (d) => d === "icloud.com" || d === "me.com" || d === "mac.com" },
-  // Yahoo Japan is a separate service with its own servers.
-  { host: "yahoo", test: (d) => d === "ymail.com" || d === "rocketmail.com" || (d !== "yahoo.co.jp" && new RegExp(`^yahoo\\.${TLD}$`).test(d)) },
+  { host: "yahoo", test: (d) => YAHOO_DOMAINS.has(d) },
   { host: "fastmail", test: (d) => FASTMAIL_DOMAINS.has(d) },
   { host: "zoho", test: (d) => d === "zoho.com" || d === "zohomail.com" },
   { host: "proton", test: (d) => d === "proton.me" || d === "protonmail.com" || d === "protonmail.ch" || d === "pm.me" },
 ];
+
+/**
+ * Zoho keeps each region's mail on its own servers. The built-in Zoho settings are for zoho.com; a domain whose MX is
+ * in one of these regions gets that region's servers instead. Other regions (Japan, China, Canada, Saudi Arabia) have
+ * no entry here, so those addresses fall back to typing the server names by hand.
+ */
+const ZOHO_REGIONS: { domain: string; servers: ServerSettings }[] = ["eu", "in", "com.au"].map((tld) => ({
+  domain: `zoho.${tld}`,
+  servers: { imapHost: `imap.zoho.${tld}`, imapPort: 993, imapSecure: true, smtpHost: `smtp.zoho.${tld}`, smtpPort: 465, smtpSecure: true },
+}));
 
 const endsWithDomain = (host: string, domain: string) => host === domain || host.endsWith(`.${domain}`);
 
@@ -73,21 +95,30 @@ export function domainOf(email: string): string | null {
   return at > 0 && at < email.length - 1 ? email.slice(at + 1).trim().toLowerCase() : null;
 }
 
+class LookupTimeout extends Error {
+  constructor() {
+    super("DNS lookup timed out");
+  }
+}
+
 /** Rejects after `ms`, so a resolver that never answers can't hold a request open. */
 function within<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("DNS lookup timed out")), ms);
-    timer.unref();
+    timer = setTimeout(() => reject(new LookupTimeout()), ms);
   });
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
 
-/** One lookup. Any failure (no such record, no such domain, timeout, refused) just means "no records". */
-async function lookup<T>(run: () => Promise<T[]>, ms: number): Promise<T[]> {
+/**
+ * One lookup. Any failure (no such record, no such domain, timeout, refused) just means "no records". A lookup that
+ * runs out of time is also cancelled, so its query stops instead of carrying on in the background.
+ */
+async function lookup<T>(dns: DnsLookup, run: () => Promise<T[]>, ms: number): Promise<T[]> {
   try {
     return await within(run(), ms);
-  } catch {
+  } catch (err) {
+    if (err instanceof LookupTimeout) dns.cancel?.();
     return [];
   }
 }
@@ -103,10 +134,10 @@ function bestSrv(records: SrvRecord[]): SrvRecord | null {
 
 async function srvServers(domain: string, dns: DnsLookup, ms: number): Promise<ServerSettings | null> {
   const [imaps, imap, submissions, submission] = await Promise.all([
-    lookup(() => dns.resolveSrv(`_imaps._tcp.${domain}`), ms),
-    lookup(() => dns.resolveSrv(`_imap._tcp.${domain}`), ms),
-    lookup(() => dns.resolveSrv(`_submissions._tcp.${domain}`), ms),
-    lookup(() => dns.resolveSrv(`_submission._tcp.${domain}`), ms),
+    lookup(dns, () => dns.resolveSrv(`_imaps._tcp.${domain}`), ms),
+    lookup(dns, () => dns.resolveSrv(`_imap._tcp.${domain}`), ms),
+    lookup(dns, () => dns.resolveSrv(`_submissions._tcp.${domain}`), ms),
+    lookup(dns, () => dns.resolveSrv(`_submission._tcp.${domain}`), ms),
   ]);
   // The TLS-from-the-start records win; the plain ones mean STARTTLS on that port.
   const imapTls = bestSrv(imaps);
@@ -143,14 +174,17 @@ export async function discover(email: string, config: Config, deps: DiscoverDeps
   if (known) return result(known.host, "preset", known.host);
 
   const dns = deps.dns ?? new Resolver({ timeout: timeoutMs, tries: 1 });
-  const mx = (await lookup(() => dns.resolveMx(domain), timeoutMs))
+  const mx = (await lookup(dns, () => dns.resolveMx(domain), timeoutMs))
     .map((r) => ({ exchange: bare(r.exchange), priority: r.priority }))
     .sort((a, b) => a.priority - b.priority);
   for (const { exchange } of mx) {
     const hit = MX_HOSTS.find((h) => h.test(exchange));
     if (!hit) continue;
-    // Zoho runs separate regions with their own servers; the built-in settings are for zoho.com only.
-    return result(hit.host, "mx", hit.host === "zoho" && !exchange.endsWith(".zoho.com") ? null : hit.host);
+    if (hit.host === "zoho" && !endsWithDomain(exchange, "zoho.com")) {
+      const region = ZOHO_REGIONS.find((z) => endsWithDomain(exchange, z.domain));
+      return result(hit.host, "mx", null, region?.servers ?? null);
+    }
+    return result(hit.host, "mx", hit.host);
   }
 
   const servers = await srvServers(domain, dns, timeoutMs);

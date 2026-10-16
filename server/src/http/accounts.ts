@@ -16,6 +16,9 @@ import { discover, type DiscoverDeps } from "../providers/discover.ts";
 import { IMAP_PRESETS, verifyImap, type ImapSettings } from "../providers/imap.ts";
 import { googleAuthUrl, googleExchange, microsoftAuthUrl, microsoftExchange, type OAuthResult } from "../providers/oauth.ts";
 
+/** Messages stored per step of an import; progress is reported after each. */
+const IMPORT_BATCH = 250;
+
 const ACCOUNT_COLORS = ["#5EE6C7", "#8AB4FF", "#F5B544", "#FF8FA3", "#B79CFF", "#7FD67A"];
 
 const imapBody = z.object({
@@ -38,13 +41,18 @@ export interface AccountDeps {
   discover?: DiscoverDeps;
 }
 
-/** Address lookups that may hit DNS at once. Past this, ask the caller to wait, so the route can't be used to flood a resolver. */
-const MAX_DISCOVERIES = 8;
+/**
+ * Address lookups that may hit DNS at once: per person, so one tab can't use them all up, and in total, so the route
+ * can't be used to flood a resolver. Past either, ask the caller to wait.
+ */
+const MAX_DISCOVERIES_PER_USER = 4;
+const MAX_DISCOVERIES = 16;
 
 export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
-  const { db, sync, secrets, config, store, events } = ctx;
+  const { db, sync, secrets, config, store, events, imports } = ctx;
   const verify = deps.verifyImap ?? verifyImap;
   let discovering = 0;
+  const discoveringBy = new Map<string, number>();
   const app = new Hono<Env>();
 
   const nextColor = (userId: string) => {
@@ -109,12 +117,18 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
   /** Where an address's mail lives, from its own domain's DNS. Used by the "add an account" screen before anything is saved. */
   app.get("/accounts/discover", async (c) => {
     const email = z.email().parse((c.req.query("email") ?? "").trim());
-    if (discovering >= MAX_DISCOVERIES) throw new HttpError(429, "Too many lookups at once; try again in a moment");
+    const userId = c.get("user").id;
+    const mine = discoveringBy.get(userId) ?? 0;
+    if (mine >= MAX_DISCOVERIES_PER_USER || discovering >= MAX_DISCOVERIES) throw new HttpError(429, "Too many lookups at once; try again in a moment");
     discovering++;
+    discoveringBy.set(userId, mine + 1);
     try {
       return c.json(await discover(email, config, deps.discover));
     } finally {
       discovering--;
+      const left = (discoveringBy.get(userId) ?? 1) - 1;
+      if (left > 0) discoveringBy.set(userId, left);
+      else discoveringBy.delete(userId);
     }
   });
 
@@ -196,11 +210,14 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
 
   // ---- OAuth (Google, Microsoft) -----------------------------------------
 
+  /** Where a failed sign-in lands. It always says which provider it was, since two buttons can start one. */
+  const back = (provider: "google" | "microsoft", query: string) => `/settings/accounts?${query}&provider=${provider}`;
+
   const startOAuth = (provider: "google" | "microsoft") =>
     app.get(`/oauth/${provider}/start`, (c) => {
       const user = c.get("user");
       const configured = provider === "google" ? config.google.clientId : config.microsoft.clientId;
-      if (!configured) return c.redirect(`/settings/accounts?error=${provider}-not-configured`);
+      if (!configured) return c.redirect(back(provider, `error=${provider}-not-configured`));
       const state = randomToken(24);
       const verifier = randomToken(48);
       const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -229,18 +246,18 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
       );
       db.run("DELETE FROM oauth_states WHERE state = ?", state);
       // The state is single-use and bound to the user who started the flow.
-      if (!row || row.provider !== provider || row.user_id !== user.id) return c.redirect("/settings/accounts?error=expired");
-      if (!code) return c.redirect(`/settings/accounts?error=${encodeURIComponent(c.req.query("error") ?? "denied")}`);
+      if (!row || row.provider !== provider || row.user_id !== user.id) return c.redirect(back(provider, "error=expired"));
+      if (!code) return c.redirect(back(provider, `error=${encodeURIComponent(c.req.query("error") ?? "denied")}`));
       let result: OAuthResult;
       try {
         result = provider === "google" ? await googleExchange(config, code, row.verifier) : await microsoftExchange(config, code, row.verifier);
       } catch (err) {
         console.error(`[slipstream] ${provider} sign-in failed:`, err);
-        return c.redirect(`/settings/accounts?error=${encodeURIComponent(err instanceof Error ? err.message : "sign-in failed")}`);
+        return c.redirect(back(provider, `error=${encodeURIComponent(err instanceof Error ? err.message : "sign-in failed")}`));
       }
       await upsertAccount(user.id, provider === "google" ? "gmail" : "outlook", result.email, result.name, result.auth);
       // Local mode: OAuth for Microsoft returns on http://localhost, so hop back to the canonical origin.
-      return c.redirect(`${config.publicUrl}/?connected=${provider}`);
+      return c.redirect(`${config.publicUrl}/?connected=${provider}&provider=${provider}`);
     });
 
   startOAuth("google");
@@ -270,34 +287,65 @@ export function accountRoutes(ctx: AppContext, deps: AccountDeps = {}) {
     const accountId = await upsertAccount(user.id, "archive", accountEmail, `Imported · ${label}`, null);
     const jobId = newId("job");
 
+    imports.set(accountId, { jobId, imported: 0 });
     void (async () => {
-      const account = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", accountId)!;
       let imported = 0;
       let batch: IncomingMessage[] = [];
-      const flush = () => {
-        if (batch.length === 0) return;
-        const touched = store.ingest(account, { messages: batch, cursor: "archive", done: true });
-        imported += batch.length;
+      let removed = false;
+      const finish = () => {
+        if (imports.get(accountId)?.jobId === jobId) imports.delete(accountId);
+      };
+      /** Stores the pending batch. False once the account is gone (removed in Settings mid-import): nothing more can be stored. */
+      const flush = (): boolean => {
+        const account = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", accountId);
+        if (!account) {
+          removed = true;
+          return false;
+        }
+        if (batch.length === 0) return true;
+        // Emptied before storing, so a store that fails is never repeated with the same messages.
+        const messages = batch;
         batch = [];
+        const touched = store.ingest(account, { messages, cursor: "archive", done: true });
+        imported += messages.length;
+        imports.set(accountId, { jobId, imported });
         events.emitToUser(user.id, { type: "import", jobId, accountId, status: "running", imported });
         if (touched.length) events.emitToUser(user.id, { type: "threads", accountId, threadIds: touched });
+        return true;
       };
       try {
-        for (const file of saved) {
+        read: for (const file of saved) {
           for await (const msg of readMailFile(file.path, file.name, ownerEmail || undefined)) {
             batch.push(msg);
-            if (batch.length >= 250) flush();
+            // Leaving the loop closes the file, so a removed account doesn't keep a huge archive being read.
+            if (batch.length >= IMPORT_BATCH && !flush()) break read;
           }
         }
-        flush();
-        events.emitToUser(user.id, { type: "import", jobId, accountId, status: "done", imported });
+        const gone = removed || !flush();
+        // Stamped after the last batch, so everything imported counts as history rather than new mail.
+        if (!gone) db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
+        finish();
+        events.emitToUser(
+          user.id,
+          gone
+            ? { type: "import", jobId, accountId, status: "failed", imported, error: "The account was removed while its mail was being imported." }
+            : { type: "import", jobId, accountId, status: "done", imported },
+        );
       } catch (err) {
-        flush();
+        // Keep what was read before the failure. The batch is emptied before it is stored and the account is checked
+        // first, so this can't repeat the store that failed; and nothing in a catch may throw.
+        try {
+          flush();
+        } catch (flushErr) {
+          console.error("[slipstream] import:", flushErr);
+        }
+        finish();
         events.emitToUser(user.id, { type: "import", jobId, accountId, status: "failed", imported, error: err instanceof Error ? err.message : String(err) });
       } finally {
+        finish();
         rmSync(dir, { recursive: true, force: true });
       }
-    })();
+    })().catch((err) => console.error("[slipstream] import:", err));
 
     return c.json({ jobId, accountId });
   });
