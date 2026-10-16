@@ -17,6 +17,7 @@ import "./styles/models.css";
 import "./styles/autopilot.css";
 import "./styles/labels.css";
 import "./styles/signals.css";
+import "./styles/onboarding.css";
 
 // Apply the saved theme before the first paint so there is no flash.
 try {

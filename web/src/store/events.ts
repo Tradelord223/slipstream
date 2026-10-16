@@ -23,6 +23,10 @@ export interface ImportJob {
 export const importState = createStore<{ job: ImportJob | null }>({ job: null });
 export const useImportJob = () => useStore(importState, (s) => s.job);
 
+/** Messages stored so far by each account's first sync, by account id. */
+export const syncProgress = createStore<Record<string, number>>({});
+export const useSyncFetched = (accountId: string | null) => useStore(syncProgress, (s) => (accountId ? (s[accountId] ?? 0) : 0));
+
 /** Bumped when teammates change something, so shared views refetch. */
 export const teamTick = createStore<{ n: number }>({ n: 0 });
 
@@ -75,12 +79,24 @@ function handle(e: ServerEvent) {
       refreshLabels();
       break;
     case "sync": {
+      if (typeof e.fetched === "number") {
+        const fetched = e.fetched;
+        syncProgress.set((s) => ({ ...s, [e.accountId]: fetched }));
+      }
       const accounts = session.get().accounts.map((a) =>
         a.id === e.accountId
-          ? { ...a, syncStatus: e.status, syncError: e.error ?? null, lastSyncedAt: e.status === "idle" ? Date.now() : a.lastSyncedAt }
+          ? {
+              ...a,
+              syncStatus: e.status,
+              syncError: e.error ?? null,
+              lastSyncedAt: e.status === "idle" ? Date.now() : a.lastSyncedAt,
+              firstSyncedAt: a.firstSyncedAt ?? (e.status === "idle" ? Date.now() : null),
+            }
           : a,
       );
       session.set({ accounts });
+      // First-run setup waits on this; pick up the server's own account state once a sync settles.
+      if (session.get().status === "onboarding" && e.status !== "syncing") void refreshSession();
       break;
     }
     case "drafts":

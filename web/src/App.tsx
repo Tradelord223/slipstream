@@ -3,6 +3,7 @@ import { setUnauthorizedHandler } from "./api.ts";
 import { AssistantHost } from "./components/assistant/AssistantPanel.tsx";
 import { CloudAccessDialog } from "./components/assistant/CloudForm.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
+import { oauthErrorText } from "./components/connect/hosts.ts";
 import { Composer, type Placement } from "./components/Composer.tsx";
 import { LabelDialogHost } from "./components/labels/LabelDialogs.tsx";
 import { Logo } from "./components/Icon.tsx";
@@ -29,6 +30,7 @@ import { toast } from "./store/toasts.ts";
 import { ui, useUi } from "./store/ui.ts";
 import { AuthView, JoinSignedIn } from "./views/AuthView.tsx";
 import { ActivityView } from "./views/ActivityView.tsx";
+import { OnboardingView } from "./views/OnboardingView.tsx";
 import { AgentView } from "./views/AgentView.tsx";
 import { AutopilotView } from "./views/AutopilotView.tsx";
 import { MailView } from "./views/MailView.tsx";
@@ -72,6 +74,8 @@ export function App() {
     );
   }
   if (status === "signin" || status === "setup") return <AuthView />;
+  // First run: no rail, no inbox, no shortcuts until a real mailbox is connected.
+  if (status === "onboarding") return <OnboardingView />;
   return <Shell />;
 }
 
@@ -118,16 +122,7 @@ function Shell() {
     const error = q.get("error");
     if (!connected && !error) return;
     if (connected) toast.info(connected === "microsoft" ? "Outlook connected" : "Gmail connected");
-    else if (error) {
-      const friendly: Record<string, string> = {
-        "google-not-configured": "Gmail isn't set up on this server yet. The steps are below.",
-        "microsoft-not-configured": "Outlook isn't set up on this server yet. The steps are below.",
-        expired: "That sign-in took too long. Try connecting again.",
-        denied: "Connecting was cancelled.",
-        access_denied: "Connecting was cancelled.",
-      };
-      toast.error(friendly[error] ?? `Couldn't connect: ${error}`);
-    }
+    else if (error) toast.error(oauthErrorText(error));
     navigate(location.pathname, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

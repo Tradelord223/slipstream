@@ -23,7 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export interface Session {
-  status: "loading" | "ready" | "signin" | "setup" | "error";
+  status: "loading" | "ready" | "signin" | "setup" | "onboarding" | "error";
   error: string | null;
   mode: "local" | "team";
   user: User | null;
@@ -77,13 +77,56 @@ export function applyTheme(theme: Settings["theme"]) {
   }
 }
 
+const ONBOARDING_KEY = "ss-onboarding";
+
+/** Set while someone is partway through first-run setup, so a reload (or the round trip to Google) resumes it. */
+export function onboardingUnderway(): boolean {
+  try {
+    return sessionStorage.getItem(ONBOARDING_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markOnboarding(on: boolean) {
+  try {
+    if (on) sessionStorage.setItem(ONBOARDING_KEY, "1");
+    else sessionStorage.removeItem(ONBOARDING_KEY);
+  } catch {
+    /* private mode: a reload starts the steps again */
+  }
+}
+
+/** Accounts that hold real mail. The invented demo mailbox doesn't count. */
+export const realAccounts = (accounts: Account[]) => accounts.filter((a) => a.provider !== "demo");
+
+/** First-run setup comes before the app: nobody with real mail connected gets in without it (developers with the demo mailbox on skip it). */
+function needsOnboarding(accounts: Account[], features: Features, settings: Settings): boolean {
+  if (features.demo) return false;
+  return realAccounts(accounts).length === 0 || (onboardingUnderway() && !settings.onboarded);
+}
+
+/** Leave first-run setup and open the app. */
+export async function finishOnboarding(patch: Partial<Settings> = {}): Promise<void> {
+  const settings = { ...session.get().settings, ...patch, onboarded: true };
+  session.set({ settings });
+  markOnboarding(false);
+  navigate("/", { replace: true });
+  session.set({ status: "ready" });
+  try {
+    await api.saveSettings({ onboarded: true, ...patch });
+  } catch {
+    /* the inbox opens either way; the steps are skipped next time only if this saved */
+  }
+}
+
 export async function loadSession(): Promise<void> {
   try {
     const b = await api.bootstrap();
     const settings = { ...DEFAULT_SETTINGS, ...b.settings };
     const filter = session.get().accountFilter;
     session.set({
-      status: "ready",
+      status: needsOnboarding(b.accounts, b.features, settings) ? "onboarding" : "ready",
       error: null,
       logosChoice: typeof b.settings.senderLogos === "boolean" ? b.settings.senderLogos : null,
       mode: b.mode,
