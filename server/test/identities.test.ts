@@ -281,6 +281,21 @@ describe("mail sent from an alias", () => {
     assert.equal(env.ctx.db.get<{ sent_count: number }>("SELECT sent_count FROM contacts WHERE account_id = ? AND email = 'bo@kettleby.test'", acc)!.sent_count, 1);
   });
 
+  test("a copy sent to yourself is ours once its Sent copy syncs, whichever mailbox came first", () => {
+    const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
+    const note = { subject: "Note to self", messageIdHeader: "<self@t>", from: { name: "Sam", email: ME }, to: [{ name: "Sam", email: ME }] };
+    const sent = { inbox: false, sent: true, trash: false, spam: false };
+    env.ctx.store.ingest(account, { messages: [msg({ ...note, remoteId: "self-inbox", outgoing: false, remoteThreadId: "self" })], cursor: null, done: false });
+    assert.equal(env.ctx.db.get<{ outgoing: number }>("SELECT outgoing FROM messages WHERE subject = 'Note to self'")!.outgoing, 0);
+    env.ctx.store.ingest(account, { messages: [msg({ ...note, remoteId: "self-sent", outgoing: true, folders: sent, remoteThreadId: "self" })], cursor: null, done: false });
+    assert.equal(env.ctx.db.all("SELECT outgoing FROM messages WHERE subject = 'Note to self'").length, 1, "one message in two mailboxes");
+    assert.equal(env.ctx.db.get<{ outgoing: number }>("SELECT outgoing FROM messages WHERE subject = 'Note to self'")!.outgoing, 1);
+    assert.equal(env.ctx.db.get<{ last_inbound_at: number | null }>("SELECT last_inbound_at FROM threads WHERE remote_id = 'self'")!.last_inbound_at, null);
+    // Seen again from the Inbox, it stays ours.
+    env.ctx.store.ingest(account, { messages: [msg({ ...note, remoteId: "self-inbox-2", outgoing: false, remoteThreadId: "self" })], cursor: null, done: false });
+    assert.equal(env.ctx.db.get<{ outgoing: number }>("SELECT outgoing FROM messages WHERE subject = 'Note to self'")!.outgoing, 1);
+  });
+
   test("a provider that can't tell falls back to our own addresses, aliases included", () => {
     const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", acc)!;
     env.ctx.store.ingest(account, {

@@ -148,6 +148,9 @@ export class MailStore {
           m.remoteThreadId,
         );
       }
+      // One message in two mailboxes (a copy sent to yourself: Inbox first, Sent later): a Sent copy makes it ours.
+      // Only ever raised, so a copy that isn't in Sent can't turn our own mail back into inbound.
+      if (m.outgoing === true) this.db.run("UPDATE messages SET outgoing = 1, signals = '[]' WHERE id = ? AND outgoing = 0", existing.id);
       this.applyFlagUpdate(account.id, {
         remoteId: m.remoteId,
         unread: m.unread,

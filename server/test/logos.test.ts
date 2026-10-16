@@ -342,6 +342,9 @@ describe("svg sanitizer", () => {
     ["fill with external url", `<svg><rect width="5" height="5" fill="url(https://track.invalid/a#g)"/></svg>`],
     ["animate setting an href", `<svg><a><animate attributeName="href" values="javascript:alert(1)"/></a><set attributeName="href" to="javascript:alert(1)"/><rect width="5" height="5"/></svg>`],
     ["doctype with entities", `<!DOCTYPE svg [<!ENTITY a "&#60;script&#62;alert(1)&#60;/script&#62;">]><svg><rect width="5" height="5"/></svg>`],
+    ["xml-stylesheet instruction", `<?xml-stylesheet href="https://track.invalid/a.css"?><svg><rect width="5" height="5"/></svg>`],
+    ["comment hiding a script", `<svg><!-- <script>alert(1)</script> https://track.invalid/x --><rect width="5" height="5"/></svg>`],
+    ["doctype subset carrying markup", `<!DOCTYPE svg [<rect onload="x()" width="9" href="https://track.invalid/"/>]><svg><rect width="5" height="5"/></svg>`],
     ["cdata script", `<svg><![CDATA[<script>alert(1)</script>]]><rect width="5" height="5"/></svg>`],
     ["text elements", `<svg><text>tracking words</text><rect width="5" height="5"/></svg>`],
   ];

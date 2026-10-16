@@ -1,5 +1,5 @@
 import { domainToASCII } from "node:url";
-import { Parser } from "htmlparser2";
+import sanitizeHtml from "sanitize-html";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/index.ts";
 import { dnsResolver, FetchError, httpsTransport, isPublicHostname, makeSafeFetch, type SafeFetch } from "./safe-fetch.ts";
@@ -106,19 +106,22 @@ interface IconLink {
 /** Declared attribute text is cut to this before any pattern reads it. */
 const MAX_ATTR = 256;
 
-/** The attributes of every `<link>` tag in a page, read by a real HTML tokenizer rather than patterns. */
+/**
+ * The attributes of every `<link>` tag in a page, read by sanitize-html's HTML tokenizer (htmlparser2, already a
+ * dependency through it) rather than by patterns. Nothing it outputs is used.
+ */
 function linkTags(html: string): Record<string, string>[] {
   const links: Record<string, string>[] = [];
-  const parser = new Parser(
-    {
-      onopentag(name, attribs) {
-        if (name === "link" && links.length < 500) links.push(attribs);
+  sanitizeHtml(html, {
+    allowedTags: ["link"],
+    allowedAttributes: {},
+    transformTags: {
+      link: (tagName, attribs) => {
+        if (links.length < 500) links.push(attribs);
+        return { tagName, attribs: {} };
       },
     },
-    { decodeEntities: true },
-  );
-  parser.write(html);
-  parser.end();
+  });
   return links;
 }
 
