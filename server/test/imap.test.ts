@@ -1069,7 +1069,7 @@ describe("ImapProvider summaries", () => {
     assert.equal(parseCursor(rest.cursor).boxes["[Gmail]/All Mail"]!.initial, undefined);
   });
 
-  it("brings the previews of a page in one FETCH that asks for every text part the page needs", async () => {
+  it("brings the previews of a page with one FETCH per kind of text part, each naming only messages that have it", async () => {
     const s = genericServer();
     const head = (id: string, type: string) => [`Message-ID: <${id}@example.com>`, "From: Alice <alice@example.com>", "To: me@example.com", `Subject: ${id}`, `Date: ${new Date().toUTCString()}`, "MIME-Version: 1.0", `Content-Type: ${type}`, ""];
     // Part "1" (a plain message), "1.1" (text first in an alternative) and "2" (text after an attachment).
@@ -1106,8 +1106,10 @@ describe("ImapProvider summaries", () => {
     assert.deepEqual(s.partCommands, []);
 
     const previews = await r.provider.fetchPreviews(page.previewIds!);
-    assert.equal(s.partCommands.length, 1, "one FETCH for the whole page");
-    assert.deepEqual([...s.partCommands[0]!].sort(), ["1", "1.1", "2"], "every distinct part in the same command");
+    // Gmail refuses a whole FETCH that names a part one of its messages lacks, so each kind of part has its own command.
+    assert.equal(s.partCommands.length, 3, "one FETCH per kind of part");
+    for (const parts of s.partCommands as string[][]) assert.equal(parts.length, 1);
+    assert.deepEqual(s.partCommands.flat().sort(), ["1", "1.1", "2"]);
     assert.equal(previews.get(byId.get("<plain@example.com>")!), "Just text.");
     assert.equal(previews.get(byId.get("<alt@example.com>")!), "Alternative text.", "each message reads only its own part");
     assert.equal(previews.get(byId.get("<mixed@example.com>")!), "Text after the picture.");
@@ -1116,7 +1118,7 @@ describe("ImapProvider summaries", () => {
 
     // Each preview is fetched once; asking again finds nothing to do.
     assert.equal((await r.provider.fetchPreviews(page.previewIds!)).size, 0);
-    assert.equal(s.partCommands.length, 1);
+    assert.equal(s.partCommands.length, 3, "no new FETCH the second time");
     noLocksLeft(r);
   });
 

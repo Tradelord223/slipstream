@@ -491,7 +491,7 @@ describe("the sync engine", () => {
     const progress = events.flatMap((e) => (e.type === "sync" && e.progress ? [e.progress] : []));
     assert.deepEqual(
       progress.map((p) => p.stage).filter((s, i, all) => all.indexOf(s) === i),
-      ["signin", "inbox", "previews", "recent", "history", "done"],
+      ["signin", "inbox", "recent", "previews", "history", "done"],
       "stages come in this order, each once",
     );
     assert.deepEqual(progress[0], { stage: "signin", done: 0, total: null });
@@ -526,7 +526,7 @@ describe("the sync engine", () => {
     assert.ok(row<{ f: number }>(r.env, "SELECT first_synced_at AS f FROM accounts WHERE id = ?", r.accountId).f >= readyWhen[0]!, "and the mark has moved past the window by the time it is in");
   });
 
-  test("the inbox page is stored before any preview is asked for; previews fill in afterwards, in their own stage", async () => {
+  test("the inbox opens on headers; the newest come in full first, and only the rest get a preview pass", async () => {
     const r = rig();
     const inboxFolders = { inbox: true, sent: false, trash: false, spam: false };
     const headersOnly = (remoteId: string, folders = inboxFolders) => summary({ remoteId, from: ana, remoteThreadId: `th-${remoteId}`, bodyText: "", subject: `Re ${remoteId}`, folders });
@@ -545,16 +545,30 @@ describe("the sync engine", () => {
         order.push(`previews ${ids.join(",")} (stored: ${ids.filter(known).length} of ${ids.length}, ready: ${row<{ f: number | null }>(r.env, "SELECT first_synced_at AS f FROM accounts WHERE id = ?", r.accountId).f !== null})`);
         return new Map(ids.map((id) => [id, `preview of ${id}`]));
       },
-      fetchBody: async (id: string) => (order.push(`body ${id}`), { text: `whole ${id}`, attachments: [] }),
+      // i1 can't be fetched in full right now, so it is the one inbox message left needing a preview.
+      fetchBody: async (id: string) => {
+        order.push(`body ${id} (ready: ${row<{ f: number | null }>(r.env, "SELECT first_synced_at AS f FROM accounts WHERE id = ?", r.accountId).f !== null})`);
+        if (id === "i1") throw new Error("busy");
+        return { text: `whole ${id}`, attachments: [] };
+      },
     } as unknown as MailProvider;
     r.env.ctx.sync.provider = () => fake;
-    await r.env.ctx.sync.syncAccount(r.accountId);
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      await r.env.ctx.sync.syncAccount(r.accountId);
+    } finally {
+      console.warn = warn;
+    }
 
-    assert.equal(order[0], "previews i0,i1 (stored: 2 of 2, ready: true)", "the inbox is stored and open before its previews are fetched");
-    assert.ok(order.indexOf("previews h0 (stored: 1 of 1, ready: true)") > order.findIndex((o) => o.startsWith("body ")), "history previews come after the inbox's recent cache, as their own pass");
-    assert.equal(order.filter((o) => o.startsWith("previews")).length, 2, "one pass per page");
+    assert.ok(order[0]!.startsWith("body ") && order[0]!.endsWith("(ready: true)"), "the inbox is open before anything else is fetched, and the newest come in full first");
+    assert.ok(order.indexOf("previews i1 (stored: 1 of 1, ready: true)") > order.findIndex((o) => o.startsWith("body i1")), "after the full fetch, only what it couldn't fill gets a preview");
+    assert.ok(!order.some((o) => o.startsWith("previews i0")), "a message already fetched in full is never asked for a preview");
+    assert.ok(order.indexOf("previews h0 (stored: 1 of 1, ready: true)") > order.indexOf("previews i1 (stored: 1 of 1, ready: true)"), "history previews follow, as their own pass");
+    assert.equal(row<{ body_text: string }>(r.env, "SELECT body_text FROM messages WHERE remote_id = 'i0'").body_text, "whole i0");
+    assert.equal(row<{ snippet: string }>(r.env, "SELECT snippet FROM messages WHERE remote_id = 'i1'").snippet, "preview of i1");
 
-    // The previews reached the rows (the history one stays a preview; the inbox ones were then fetched whole by the recent cache).
+    // The history one stays a preview.
     assert.equal(row<{ body_text: string }>(r.env, "SELECT body_text FROM messages WHERE remote_id = 'h0'").body_text, "preview of h0");
     assert.equal(row<{ snippet: string }>(r.env, "SELECT snippet FROM messages WHERE remote_id = 'h0'").snippet, "preview of h0");
     assert.deepEqual(await search(r.env, "preview of h0"), [threadOf(r.env, "h0")]);
@@ -563,9 +577,9 @@ describe("the sync engine", () => {
     assert.ok(touched.includes(threadOf(r.env, "i0")) && touched.includes(threadOf(r.env, "h0")));
 
     const progress = events.flatMap((e) => (e.type === "sync" && e.progress ? [e.progress] : []));
-    assert.deepEqual(progress.map((p) => p.stage).filter((st, i, all) => all.indexOf(st) === i), ["signin", "inbox", "previews", "recent", "history", "done"]);
-    assert.deepEqual(progress.filter((p) => p.stage === "previews").map((p) => [p.done, p.total, p.rate === undefined]), [[0, 2, true], [2, 2, false]]);
-    const done = progress.find((p) => p.stage === "previews" && p.done === 2)!;
+    assert.deepEqual(progress.map((p) => p.stage).filter((st, i, all) => all.indexOf(st) === i), ["signin", "inbox", "recent", "previews", "history", "done"]);
+    assert.deepEqual(progress.filter((p) => p.stage === "previews").map((p) => [p.done, p.total, p.rate === undefined]), [[0, 1, true], [1, 1, false]]);
+    const done = progress.find((p) => p.stage === "previews" && p.done === 1)!;
     assert.ok(done.rate! > 0 && Number.isFinite(done.rate!));
   });
 
@@ -579,14 +593,15 @@ describe("the sync engine", () => {
       progress: { stage: "inbox", total: 1, count: 1, last: true },
     });
     let failure: Error = new Error("connection reset");
-    const fake = { kind: "imap", sync: async () => page(), fetchPreviews: async () => { throw failure; }, fetchBody: async () => ({ text: "whole", attachments: [] }) } as unknown as MailProvider;
+    // The full fetch can't help here, so the preview pass runs and is the thing that fails.
+    const fake = { kind: "imap", sync: async () => page(), fetchPreviews: async () => { throw failure; }, fetchBody: async () => { throw new Error("busy"); } } as unknown as MailProvider;
     r.env.ctx.sync.provider = () => fake;
     const warn = console.warn;
     console.warn = () => {};
     try {
       await r.env.ctx.sync.syncAccount(r.accountId);
       assert.equal(row<{ sync_status: string }>(r.env, "SELECT sync_status FROM accounts WHERE id = ?", r.accountId).sync_status, "idle");
-      assert.equal(row<{ body_state: string }>(r.env, "SELECT body_state FROM messages WHERE remote_id = 'i0'").body_state, "cached", "the recent cache still brings the whole message");
+      assert.equal(row<{ body_state: string }>(r.env, "SELECT body_state FROM messages WHERE remote_id = 'i0'").body_state, "none", "it stays a summary and opens on demand later");
 
       const { ProviderAuthError } = await import("../src/mail/types.ts");
       failure = new ProviderAuthError("sign in again");

@@ -217,8 +217,12 @@ export class SyncEngine {
           if (sp.stage === "inbox" && sp.last) {
             // The newest inbox mail is in: the dashboard can open now, while the rest of the window keeps arriving.
             if (account.provider !== "archive") this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
-            // It opened on headers alone; the previews follow in one round trip. Providers whose pages carry them have none to fetch.
-            const ids = provider.fetchPreviews ? (page.previewIds ?? []) : [];
+            // It opened on headers alone. The newest messages come in full first: Gmail sends 50 whole messages faster than it
+            // sends the first lines of 100 (measured: 2.3 s against 7.7 s), and a full message gives its own preview.
+            await this.cacheRecent(account, report);
+            recentDone = true;
+            // Then first lines for the rest of the page, skipping what the full fetch already filled in.
+            const ids = provider.fetchPreviews ? this.stillPreviewOnly(account.id, page.previewIds ?? []) : [];
             if (ids.length > 0) {
               report("previews", 0, ids.length);
               await this.fillPreviews(account, provider, ids);
@@ -227,8 +231,6 @@ export class SyncEngine {
               report("previews", page.messages.length, page.messages.length, { rate: false });
             }
             previewed = true;
-            await this.cacheRecent(account, report);
-            recentDone = true;
           }
         }
         // Later pages (history, new mail) have their previews fetched right after they are stored, without a stage of their own.
@@ -279,6 +281,18 @@ export class SyncEngine {
       }
     });
     if (touched.size) this.events.emitToUser(account.user_id, { type: "threads", accountId: account.id, threadIds: [...touched] });
+  }
+
+  /** Of these remote ids, the ones whose message still has only its headers (no full text and no preview yet). */
+  private stillPreviewOnly(accountId: string, remoteIds: string[]): string[] {
+    if (remoteIds.length === 0) return [];
+    const marks = remoteIds.map(() => "?").join(",");
+    const filled = new Set(
+      this.db
+        .all<{ remote_id: string }>(`SELECT remote_id FROM messages WHERE account_id = ? AND remote_id IN (${marks}) AND body_state = 'cached'`, accountId, ...remoteIds)
+        .map((r) => r.remote_id),
+    );
+    return remoteIds.filter((id) => !filled.has(id));
   }
 
   /**

@@ -1010,13 +1010,18 @@ export class ImapProvider implements MailProvider {
           withMailbox(c, path, true, async (mb) => {
             const live = entries.filter((e) => e.ref.validity === String(mb.uidValidity));
             if (live.length === 0) return;
-            const keys = [...new Set(live.map((e) => e.ref.part.key))];
-            const bodyParts = keys.map((key) => ({ key, maxLength: PREVIEW_BYTES }));
-            const got = await c.fetchAll(live.map((e) => e.ref.uid), { uid: true, bodyParts }, { uid: true });
-            const byUid = new Map(got.map((fm) => [fm.uid, fm]));
-            for (const { id, ref } of live) {
-              const bytes = byUid.get(ref.uid)?.bodyParts?.get(ref.part.key);
-              if (bytes) out.set(id, previewFromPart(bytes, ref.part));
+            // One FETCH per kind of text part, naming only the messages that have it: Gmail refuses a whole FETCH
+            // ("Some messages could not be FETCHed") when it names a part one of the messages lacks.
+            // The most common layout goes first, so most of the inbox gets its previews soonest.
+            const groups = new Map<string, typeof live>();
+            for (const e of live) groups.set(e.ref.part.key, [...(groups.get(e.ref.part.key) ?? []), e]);
+            for (const [key, group] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
+              const got = await c.fetchAll(group.map((e) => e.ref.uid), { uid: true, bodyParts: [{ key, maxLength: PREVIEW_BYTES }] }, { uid: true });
+              const byUid = new Map(got.map((fm) => [fm.uid, fm]));
+              for (const { id, ref } of group) {
+                const bytes = byUid.get(ref.uid)?.bodyParts?.get(key);
+                if (bytes) out.set(id, previewFromPart(bytes, ref.part));
+              }
             }
           }),
         );

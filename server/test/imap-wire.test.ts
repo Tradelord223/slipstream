@@ -134,7 +134,7 @@ describe("ImapProvider over a real IMAP connection", () => {
     assert.deepEqual([st.messages.length, st.flags.length, st.deleted.length], [0, 0, 0]);
   });
 
-  it("asks for the previews of several kinds of message in a single FETCH, and each message gets its own part", async () => {
+  it("asks for each kind of text part in its own FETCH, naming only the messages that have it", async () => {
     const data = generic();
     const mixed = [
       "Message-ID: <mixed@example.com>",
@@ -165,8 +165,10 @@ describe("ImapProvider over a real IMAP connection", () => {
     const before = mini.fetches.length;
     const previews = await provider.fetchPreviews(page.previewIds!);
     const asked = mini.fetches.slice(before);
-    assert.equal(asked.length, 1, "one FETCH command");
-    assert.deepEqual(asked[0]!.filter((i) => /^BODY\.PEEK\[\d/i.test(i)).sort(), ["BODY.PEEK[1]<0.2048>", "BODY.PEEK[2]<0.2048>"]);
+    // Gmail refuses a FETCH that names a part one of its messages lacks, so each command asks for one part only.
+    assert.equal(asked.length, 2, "one FETCH per kind of part");
+    for (const items of asked) assert.equal(items.filter((i) => /^BODY\.PEEK\[\d/i.test(i)).length, 1);
+    assert.deepEqual(asked.flatMap((items) => items.filter((i) => /^BODY\.PEEK\[\d/i.test(i))).sort(), ["BODY.PEEK[1]<0.2048>", "BODY.PEEK[2]<0.2048>"]);
     const ids = new Map(page.messages.map((m) => [m.messageIdHeader, m.remoteId]));
     assert.equal(previews.get(ids.get("<plain@example.com>")!)?.trim(), "Body of plain");
     assert.equal(previews.get(ids.get("<mixed@example.com>")!)?.trim(), "Text after the picture.");
