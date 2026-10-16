@@ -192,7 +192,7 @@ export function JoinSignedIn({ invite }: { invite: string }) {
     return (
       <Frame title="This invite can't be used" lead={problem}>
         <button className="btn" onClick={() => navigate("/", { replace: true })}>
-          Back to your inbox
+          Continue
         </button>
       </Frame>
     );
