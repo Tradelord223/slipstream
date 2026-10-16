@@ -19,6 +19,14 @@ const settingsSchema = z
     defaultRemindHour: z.number().int().min(0).max(23),
     showTips: z.boolean(),
     unifiedInbox: z.boolean(),
+    assistant: z.enum(["on", "off"]),
+    senderLogos: z.boolean(),
+    helpers: z.strictObject({
+      codes: z.boolean(),
+      deliveries: z.enum(["latest", "all"]),
+      securityAlerts: z.boolean(),
+      urgent: z.boolean(),
+    }),
   })
   .partial();
 

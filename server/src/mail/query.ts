@@ -3,6 +3,7 @@
  *
  *   from:ana  to:@acme.com  subject:"q3 plan"  label:clients  has:attachment
  *   is:unread is:starred is:snoozed is:done is:vip is:muted is:important
+ *   is:code is:delivery (is:package) is:security (is:signin) is:urgent   (what the latest incoming message is about)
  *   in:inbox|sent|trash|spam|done|snoozed|all   category:news|notification|important|other
  *   after:2026-01-31  before:2026-03-01  newer:7d  older:2w   account:me@work.com
  *   -from:ana (negation)   a OR b   "exact phrase"   free text (full-text, prefix match)
@@ -190,6 +191,12 @@ function termSql(term: Term, params: (string | number)[], now: number): string |
         case "done": return `t.in_inbox = 0 AND t.in_trash = 0 AND t.in_spam = 0 AND t.snoozed_until IS NULL`;
         case "muted": return `t.muted = 1`;
         case "important": return `t.category = 'important'`;
+        case "code": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'code'`;
+        case "delivery":
+        case "package": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'delivery'`;
+        case "security":
+        case "signin": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'security'`;
+        case "urgent": return `coalesce(json_extract(t.signal, '$.kind'), '') = 'urgent'`;
         case "vip":
           return `EXISTS (SELECT 1 FROM messages m JOIN contacts c ON c.account_id = m.account_id AND c.email = m.from_email
                    WHERE m.thread_id = t.id AND c.vip = 1)`;
