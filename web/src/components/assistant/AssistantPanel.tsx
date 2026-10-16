@@ -25,6 +25,10 @@ export function AssistantHost() {
   const windowWidth = useWindowWidth();
   const name = useAssistantName();
   const on = useAssistantOn();
+  // An open state left over from before the switch went off must not pop the sidebar open when it comes back on.
+  useEffect(() => {
+    if (!on && assistant.get().open) setOpen(false);
+  }, [on]);
   if (!on) return null;
   if (viewport === "desktop" && windowWidth >= ASSISTANT_INLINE_MIN) {
     return (

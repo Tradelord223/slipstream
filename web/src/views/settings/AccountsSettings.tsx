@@ -105,7 +105,8 @@ function AccountRow({ account: a }: { account: Account }) {
           </Dialog>
         )}
       </div>
-      <Identities account={a} />
+      {/* Imported files can't send, so they have no other addresses to manage. */}
+      {a.provider !== "archive" && <Identities account={a} />}
     </li>
   );
 }

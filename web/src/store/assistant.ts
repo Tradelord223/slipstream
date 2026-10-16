@@ -1,4 +1,5 @@
 import { createStore, useStore } from "./createStore.ts";
+import { assistantOn } from "./session.ts";
 
 export const ASSISTANT_MIN = 320;
 export const ASSISTANT_MAX = 640;
@@ -49,12 +50,15 @@ export function toggleAssistant() {
   setOpen(!assistant.get().open);
 }
 
+/** With the assistant switched off nothing opens, and nothing is remembered as open for when it comes back on. */
 export function setOpen(open: boolean) {
+  if (open && !assistantOn()) return;
   assistant.set({ open, view: "chat" });
   write("ss-assistant", open ? "1" : "0");
 }
 
 export function openAssistant(opts: { runId?: string | null; draft?: string } = {}) {
+  if (!assistantOn()) return;
   const patch: Partial<AssistantState> = { open: true, view: "chat" };
   if (opts.runId !== undefined) patch.runId = opts.runId;
   if (opts.draft !== undefined) patch.draft = opts.draft;

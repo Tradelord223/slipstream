@@ -44,7 +44,7 @@ export function AiSettings() {
             ]}
           />
         </div>
-        <p className="block-lead">Slipstream works fully without AI. Turn this on to ask a model about your mail or let Autopilot sort new mail. Your own agents can connect either way.</p>
+        <p className="block-lead">Slipstream works fully without AI. Turn this on to ask a model about your mail or let Autopilot sort new mail. Off pauses Autopilot and routines too. Your own agents can connect either way.</p>
         <ul className="link-list" role="list">
           <li>
             <Link to="/settings/models" className="link-row">

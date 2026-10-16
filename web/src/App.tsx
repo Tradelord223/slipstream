@@ -151,6 +151,12 @@ function Shell() {
     document.title = n ? `Inbox (${n}) · Slipstream` : "Slipstream";
   }, [counts]);
 
+  // Agent and Autopilot belong to the built-in assistant; with it off their page is Settings → AI & agents.
+  const assistantPage = route.name === "agent" || route.name === "autopilot";
+  useEffect(() => {
+    if (assistantPage && !assistantOn) navigate("/settings/ai", { replace: true });
+  }, [assistantPage, assistantOn]);
+
   useEffect(() => {
     if (viewport === "desktop") ui.set({ sheetOpen: false });
   }, [viewport]);
@@ -189,8 +195,8 @@ function Shell() {
   else if (route.name === "shared") main = <SharedView id={route.id} />;
   else if (route.name === "review") main = <ReviewView tab={route.tab} />;
   else if (route.name === "activity") main = <ActivityView />;
-  else if (route.name === "agent") main = <AgentView />;
-  else if (route.name === "autopilot") main = <AutopilotView />;
+  else if (route.name === "agent") main = assistantOn ? <AgentView /> : null;
+  else if (route.name === "autopilot") main = assistantOn ? <AutopilotView /> : null;
   else if (route.name === "join") main = <JoinSignedIn invite={route.invite} />;
   else main = <JoinOrHome />;
 

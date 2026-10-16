@@ -1,13 +1,23 @@
 import { useState, type ReactNode } from "react";
 import { Avatar } from "./Avatar.tsx";
 
-/** Domains whose logo came back missing. Kept for the session so a miss never asks again. */
-const missed = new Set<string>();
+/** How long a missing logo is left alone before one more try; a transient error shouldn't hide a mark until reload. */
+const MISS_MS = 10 * 60 * 1000;
+/** Domains whose logo came back missing, and when. */
+const missed = new Map<string, number>();
+
+function isMissed(domain: string): boolean {
+  const at = missed.get(domain);
+  if (at === undefined) return false;
+  if (Date.now() - at < MISS_MS) return true;
+  missed.delete(domain);
+  return false;
+}
 
 /** A company's mark as a small rounded square; `fallback` shows when the logo isn't there. */
 function SenderMark({ domain, size, fallback = null }: { domain: string; size: number; fallback?: ReactNode }) {
   const [, rerender] = useState(0);
-  if (missed.has(domain)) return <>{fallback}</>;
+  if (isMissed(domain)) return <>{fallback}</>;
   return (
     <img
       className="mark"
@@ -19,7 +29,7 @@ function SenderMark({ domain, size, fallback = null }: { domain: string; size: n
       decoding="async"
       draggable={false}
       onError={() => {
-        missed.add(domain);
+        missed.set(domain, Date.now());
         rerender((n) => n + 1);
       }}
     />

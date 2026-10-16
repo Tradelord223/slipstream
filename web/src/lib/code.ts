@@ -6,7 +6,7 @@ import { cachedThread } from "../store/threads.ts";
 import { toast } from "../store/toasts.ts";
 import type { Message } from "../types.ts";
 import { copyPending } from "./clipboard.ts";
-import { codeFreshFor } from "./signals.ts";
+import { codeFreshFor, threadSignals } from "./signals.ts";
 
 /** Copy a one-time code the server reads out of the message when asked. Resolves to whether it ended up on the clipboard. */
 export async function copyCode(load: () => Promise<{ code: string }>): Promise<boolean> {
@@ -37,12 +37,12 @@ export function codeTarget(): Target | null {
   const route = getRoute();
   if (route.name === "thread") {
     const m = codeMessage(cachedThread(route.id)?.messages ?? []);
-    return m ? { kind: "message", id: m.id } : null;
+    return m && codeFreshFor(m.sentAt) > 0 ? { kind: "message", id: m.id } : null;
   }
   if (route.name !== "mail") return null;
   const s = list.get();
   const t = s.visible.find((x) => x.id === s.focusedId);
-  return t && t.signal === "code" && codeFreshFor(t.signalAt) > 0 ? { kind: "thread", id: t.id } : null;
+  return t && codeFreshFor(t.signalAt) > 0 && threadSignals(t).some((x) => x.kind === "code") ? { kind: "thread", id: t.id } : null;
 }
 
 export async function copyFocusedCode(): Promise<void> {

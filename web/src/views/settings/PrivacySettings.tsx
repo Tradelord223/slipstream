@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../../api.ts";
 import { Icon, type IconName } from "../../components/Icon.tsx";
 import { Link } from "../../components/Link.tsx";
+import { refreshAutopilot, useAutopilot } from "../../store/autopilot.ts";
+import { refreshCloud, useCloud } from "../../store/cloud.ts";
 import { useSession } from "../../store/session.ts";
 import { safetyFacts as SAFETY_FACTS } from "../../lib/safetyFacts.ts";
 
@@ -11,6 +13,19 @@ export function PrivacySettings() {
   const logos = useSession((s) => s.settings.senderLogos);
   const assistant = useSession((s) => s.settings.assistant === "on");
   const agents = useAgentCount();
+  const autopilot = useAutopilot((s) => s.overview);
+  const autopilotError = useAutopilot((s) => s.error);
+  const cloud = useCloud((s) => s.status);
+  const cloudError = useCloud((s) => s.error);
+
+  useEffect(() => {
+    if (!assistant) return;
+    refreshAutopilot(true);
+    void refreshCloud();
+  }, [assistant]);
+
+  const routines = cloud?.routines ?? [];
+  const routinesOn = routines.filter((r) => r.enabled).length;
 
   return (
     <div className="settings-list">
@@ -41,7 +56,35 @@ export function PrivacySettings() {
             action="Change in General"
           />
           <StatusRow icon="tag" title="Company logos" value={logos ? "On" : "Off"} on={logos} to="/settings/general" action="Change in General" />
-          <StatusRow icon="sparkle" title="Built-in assistant" value={assistant ? "On" : "Off"} on={assistant} to="/settings/ai" action="Change in AI & agents" />
+          <StatusRow
+            icon="sparkle"
+            title="Built-in assistant"
+            value={assistant ? "On" : "Off"}
+            on={assistant}
+            note={assistant ? undefined : "Off, so Autopilot and routines are paused too."}
+            to="/settings/ai"
+            action="Change in AI & agents"
+          />
+          {assistant && (
+            <>
+              <StatusRow
+                icon="zap"
+                title="Autopilot"
+                value={autopilot ? (autopilot.settings.enabled ? "On" : "Off") : autopilotError ? "Couldn't load" : "Checking…"}
+                on={autopilot?.settings.enabled === true}
+                to="/autopilot"
+                action="Open Autopilot"
+              />
+              <StatusRow
+                icon="clock"
+                title="Routines"
+                value={cloud ? (routines.length === 0 ? "None" : routinesOn === 0 ? "None on" : `${routinesOn} on`) : cloudError ? "Couldn't load" : "Checking…"}
+                on={routinesOn > 0}
+                to="/agent"
+                action="Open routines"
+              />
+            </>
+          )}
           <StatusRow
             icon="shield"
             title="Connected agents"
@@ -60,11 +103,14 @@ export function PrivacySettings() {
   );
 }
 
-function StatusRow({ icon, title, value, on, to, action }: { icon: IconName; title: string; value: string; on: boolean; to: string; action: string }) {
+function StatusRow({ icon, title, value, on, note, to, action }: { icon: IconName; title: string; value: string; on: boolean; note?: string; to: string; action: string }) {
   return (
     <li className="status-row">
       <Icon name={icon} size={16} className="status-icon" />
-      <span className="status-title">{title}</span>
+      <span className="status-main">
+        <span className="status-title">{title}</span>
+        {note && <span className="status-note">{note}</span>}
+      </span>
       <span className={`status-value ${on ? "on" : ""}`}>{value}</span>
       <Link to={to} className="status-link" aria-label={`${action}: ${title}`}>
         {action}

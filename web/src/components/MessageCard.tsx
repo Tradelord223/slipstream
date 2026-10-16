@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { bytes, displayName, firstName, listTime, longTime, ownAddresses } from "../lib/format.ts";
-import { cardSignal } from "../lib/signals.ts";
+import { pickSignal } from "../lib/signals.ts";
 import { useSession } from "../store/session.ts";
 import type { Account, Address, Message } from "../types.ts";
 import { EmailBody } from "./EmailBody.tsx";
 import { Icon } from "./Icon.tsx";
 import { SenderAvatar } from "./SenderMark.tsx";
-import { SignalCard } from "./Signals.tsx";
+import { SignalCard, useCodeFresh } from "./Signals.tsx";
 
 function recipientsLine(m: Message, mine: Set<string>): string {
   const names = (list: Address[]) => list.map((a) => (mine.has(a.email.toLowerCase()) ? "me" : firstName(a)));
@@ -40,7 +40,8 @@ export function MessageCard({
   const [details, setDetails] = useState(false);
   const mine = ownAddresses(accounts);
   const helpers = useSession((x) => x.settings.helpers);
-  const signal = cardSignal(message.signals ?? [], helpers);
+  const codeFresh = useCodeFresh(message.sentAt);
+  const signal = pickSignal(message.signals ?? [], helpers, codeFresh);
   const logoDomain = logos ? message.logoDomain : null;
   const sender = mine.has(message.from.email.toLowerCase()) ? "me" : displayName(message.from);
   const files = message.attachments.filter((a) => !a.inline || !a.contentId);

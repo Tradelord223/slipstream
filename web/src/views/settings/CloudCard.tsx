@@ -5,6 +5,7 @@ import { assistant } from "../../store/assistant.ts";
 import { disconnectCloud, modelName } from "../../store/cloud.ts";
 import { refreshEngines } from "../../store/engines.ts";
 import { navigate } from "../../store/route.ts";
+import { useAssistantOn } from "../../store/session.ts";
 import { toast } from "../../store/toasts.ts";
 import type { CloudStatus } from "../../types.ts";
 
@@ -30,6 +31,8 @@ export function ManagedDetails({ status }: { status: CloudStatus }) {
 export function ManagedActions() {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The Agent page belongs to the built-in assistant, so there is nothing to manage there while it is off.
+  const assistantOn = useAssistantOn();
 
   const disconnect = async () => {
     setBusy(true);
@@ -47,9 +50,11 @@ export function ManagedActions() {
 
   return (
     <>
-      <button className="btn btn-sm" onClick={() => navigate("/agent")}>
-        Manage
-      </button>
+      {assistantOn && (
+        <button className="btn btn-sm" onClick={() => navigate("/agent")}>
+          Manage
+        </button>
+      )}
       <button className="btn btn-sm" onClick={() => assistant.set({ accessOpen: true })} aria-label="Change what Claude can do and spend">
         Edit
       </button>

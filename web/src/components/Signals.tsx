@@ -4,7 +4,7 @@ import { copyCode } from "../lib/code.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { ago } from "../lib/format.ts";
 import { useNow } from "../lib/hooks.ts";
-import { codeFreshFor, deliveryLabel, rowSignal } from "../lib/signals.ts";
+import { codeFreshFor, deliveryLabel, pickSignal, threadSignals } from "../lib/signals.ts";
 import { useSession } from "../store/session.ts";
 import { toast } from "../store/toasts.ts";
 import type { Message, Signal, Thread } from "../types.ts";
@@ -28,16 +28,16 @@ export function useCodeFresh(at: number | null | undefined): boolean {
 /** The chip a list row shows for what a rule spotted in the latest message. `where` picks the row layout that shows it. */
 export function RowSignal({ thread, where }: { thread: Thread; where: "wide" | "narrow" }) {
   const helpers = useSession((s) => s.settings.helpers);
-  const sig = rowSignal(thread, helpers);
+  const fresh = useCodeFresh(thread.signalAt);
+  const sig = pickSignal(threadSignals(thread), helpers, fresh);
   if (!sig) return null;
   const cls = `sig-${where}`;
   if (sig.kind === "code") return <CodeChip thread={thread} className={cls} />;
   if (sig.kind === "delivery") {
-    const status = sig.detail?.kind === "delivery" ? sig.detail.status : undefined;
     return (
       <span className={`sig sig-delivery ${cls}`}>
         <Icon name="package" size={12} />
-        <span className="sig-text">{deliveryLabel(status)}</span>
+        <span className="sig-text">{deliveryLabel(sig.status)}</span>
       </span>
     );
   }
@@ -49,7 +49,7 @@ export function RowSignal({ thread, where }: { thread: Thread; where: "wide" | "
       </span>
     );
   }
-  const reason = sig.detail?.kind === "urgent" ? sig.detail.reason : "Urgent";
+  const reason = sig.reason || "Urgent";
   return (
     <span className={`sig sig-urgent ${cls}`} title={reason}>
       <Icon name="alert" size={12} />
@@ -59,14 +59,12 @@ export function RowSignal({ thread, where }: { thread: Thread; where: "wide" | "
 }
 
 function CodeChip({ thread, className }: { thread: Thread; className: string }) {
-  const fresh = useCodeFresh(thread.signalAt);
   const [state, setState] = useState<"idle" | "busy" | "copied">("idle");
   useEffect(() => {
     if (state !== "copied") return;
     const t = setTimeout(() => setState("idle"), 1800);
     return () => clearTimeout(t);
   }, [state]);
-  if (!fresh) return null;
   const copy = async (e: MouseEvent) => {
     e.stopPropagation();
     if (state === "busy") return;
@@ -122,7 +120,6 @@ type CodeState = { status: "loading" } | { status: "ready"; code: string } | { s
 function CodeCard({ message, shortcut }: { message: Message; shortcut: boolean }) {
   const [state, setState] = useState<CodeState>({ status: "loading" });
   const [copied, setCopied] = useState(false);
-  const fresh = useCodeFresh(message.sentAt);
   const now = useNow();
 
   const load = useCallback(() => {
@@ -151,7 +148,7 @@ function CodeCard({ message, shortcut }: { message: Message; shortcut: boolean }
   };
 
   return (
-    <div className={`sig-card sig-card-code ${fresh ? "" : "stale"}`} role="group" aria-label="One-time code">
+    <div className="sig-card sig-card-code" role="group" aria-label="One-time code">
       <Icon name="key" size={16} className="sig-card-icon" />
       <div className="sig-card-main">
         {state.status === "error" ? (

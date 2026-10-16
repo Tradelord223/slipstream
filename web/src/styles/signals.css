@@ -130,14 +130,6 @@ button.sig-code:active {
   color: var(--text);
   user-select: all;
 }
-.sig-card-code.stale {
-  border-color: var(--line);
-  background: transparent;
-}
-.sig-card-code.stale .sig-card-icon,
-.sig-card-code.stale .sig-code-digits {
-  color: var(--text-3);
-}
 .sig-card-delivery {
   border-color: color-mix(in srgb, var(--sky) 30%, var(--line));
 }

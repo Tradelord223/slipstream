@@ -266,6 +266,14 @@
 .composer-attachments {
   padding: 0 14px 10px;
 }
+.composer-note {
+  margin: 0;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
 .composer-error {
   display: flex;
   align-items: flex-start;

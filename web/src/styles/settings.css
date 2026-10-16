@@ -632,8 +632,17 @@
 .status-icon {
   color: var(--text-3);
 }
+.status-main {
+  display: grid;
+  padding: 8px 0;
+}
 .status-title {
   font-weight: 550;
+}
+.status-note {
+  color: var(--text-2);
+  font-size: 13px;
+  max-width: 52ch;
 }
 .status-value {
   color: var(--text-2);

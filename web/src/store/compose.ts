@@ -23,6 +23,8 @@ export interface ComposeState {
   accountId: string;
   /** The address it goes out from: the account's own or one of its other addresses. */
   fromEmail: string;
+  /** Said once when the address it was set to send from has been removed under an open composer. */
+  fromNote: string | null;
   threadId: string | null;
   replyToMessageId: string | null;
   to: Address[];
@@ -53,6 +55,7 @@ const empty: ComposeState = {
   draftId: null,
   accountId: "",
   fromEmail: "",
+  fromNote: null,
   threadId: null,
   replyToMessageId: null,
   to: [],
@@ -260,10 +263,23 @@ export function setFrom(accountId: string, fromEmail: string) {
   const general = session.get().settings.signature;
   const before = signatureFor(accountById(s.accountId), s.fromEmail, general);
   const after = signatureFor(accountById(accountId), fromEmail, general);
-  compose.set({ error: null });
+  compose.set({ error: null, fromNote: null });
   edit({ accountId, fromEmail });
   if (before !== after) editor?.swapSignature(before, after);
 }
+
+/** The address a draft sends from was removed in Settings: fall back to the account's own address and say so. */
+function reconcileFrom() {
+  const s = compose.get();
+  if (!s.open || !s.fromEmail) return;
+  const account = accountById(s.accountId);
+  if (!account) return;
+  const want = s.fromEmail.toLowerCase();
+  if (account.email.toLowerCase() === want || (account.identities ?? []).some((i) => i.email.toLowerCase() === want)) return;
+  compose.set({ fromNote: `${s.fromEmail} was removed, so this will send from ${account.email}.` });
+  edit({ fromEmail: account.email });
+}
+session.subscribe(reconcileFrom);
 
 export async function flushDraft(): Promise<void> {
   clearTimeout(timer);
@@ -277,10 +293,18 @@ export async function closeCompose() {
   if (!s.open) return;
   try {
     await flushDraft();
-  } catch {
-    toast.error("Couldn't save your draft");
+  } catch (err) {
+    // Closing would throw away what was typed, so the composer stays open with the reason.
+    if (compose.get().editorKey === s.editorKey) {
+      compose.set({ error: err instanceof Error ? err.message : "Couldn't save your draft" });
+      toast.error("Couldn't save your draft, so it's still open");
+      focusCompose();
+    }
+    return;
   }
   const after = compose.get();
+  // Another message was started while this one saved; leave it alone.
+  if (after.editorKey !== s.editorKey) return;
   compose.set({ ...empty, editorKey: after.editorKey });
   if (after.draftId) toast.info("Draft saved");
 }

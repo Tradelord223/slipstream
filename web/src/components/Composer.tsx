@@ -140,6 +140,11 @@ function ComposerBody({ placement }: { placement: Placement }) {
             </select>
           </div>
         )}
+        {s.fromNote && (
+          <p className="composer-note" role="status">
+            {s.fromNote}
+          </p>
+        )}
         <RecipientField
           label="To"
           value={s.to}

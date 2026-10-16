@@ -1,4 +1,4 @@
-import type { DeliveryStatus, Helpers, Signal, SignalKind, Thread } from "../types.ts";
+import type { DeliveryStatus, Helpers, Signal, Thread } from "../types.ts";
 
 /** A one-time code is worth offering for this long after the message arrived. */
 export const CODE_FRESH_MS = 15 * 60 * 1000;
@@ -18,25 +18,20 @@ export const deliveryLabel = (status: DeliveryStatus | undefined): string => (st
 /** Milliseconds until a code stops being fresh; 0 or less means it already has. */
 export const codeFreshFor = (at: number | null | undefined, now = Date.now()): number => (at ? at + CODE_FRESH_MS - now : 0);
 
-/** The one signal a list row shows, after the person's helper settings. Codes still need `codeFreshFor` > 0. */
-export function rowSignal(t: Thread, h: Helpers): { kind: SignalKind; detail: Signal | null } | null {
-  switch (t.signal) {
-    case "code":
-      return h.codes && t.signalAt ? { kind: "code", detail: t.signalDetail } : null;
-    case "delivery":
-      return { kind: "delivery", detail: t.signalDetail };
-    case "security":
-      return h.securityAlerts ? { kind: "security", detail: t.signalDetail } : null;
-    case "urgent":
-      return h.urgent ? { kind: "urgent", detail: t.signalDetail } : null;
-    default:
-      return null;
-  }
+/** Every signal on a thread's latest incoming message, most important first. Servers that predate `signals` only send the first. */
+export function threadSignals(t: Thread): Signal[] {
+  if (t.signals && t.signals.length > 0) return t.signals;
+  if (t.signalDetail) return [t.signalDetail];
+  // No detail came with the kind (a code, or a sign-in alert); the chips don't need any.
+  return t.signal ? [{ kind: t.signal } as Signal] : [];
 }
 
-/** The signal a message card shows: the first one the person's helper settings allow. */
-export function cardSignal(signals: Signal[], h: Helpers): Signal | null {
+/**
+ * The first signal the person's helper settings allow. A code also has to be fresh, so a sign-in alert whose
+ * code has expired shows as the alert. Rows and message cards both choose with this, so they agree.
+ */
+export function pickSignal(signals: readonly Signal[], h: Helpers, codeFresh: boolean): Signal | null {
   return (
-    signals.find((s) => (s.kind === "code" ? h.codes : s.kind === "security" ? h.securityAlerts : s.kind === "urgent" ? h.urgent : true)) ?? null
+    signals.find((s) => (s.kind === "code" ? h.codes && codeFresh : s.kind === "security" ? h.securityAlerts : s.kind === "urgent" ? h.urgent : true)) ?? null
   );
 }
