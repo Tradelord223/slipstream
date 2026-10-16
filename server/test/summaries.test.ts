@@ -79,6 +79,7 @@ function rig(over: Parameters<typeof makeEnv>[0] = {}): Rig {
   return r;
 }
 
+const without = <T extends object>(o: T, key: string) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== key));
 const row = <T,>(env: TestEnv, sql: string, ...p: (string | number)[]) => env.ctx.db.get<T>(sql, ...p)!;
 const idOf = (env: TestEnv, remote: string) => row<{ id: string }>(env, "SELECT id FROM messages WHERE remote_id = ?", remote).id;
 const threadOf = (env: TestEnv, remote: string) => row<{ thread_id: string }>(env, "SELECT thread_id FROM messages WHERE remote_id = ?", remote).thread_id;
@@ -133,6 +134,40 @@ describe("a message synced as a summary", () => {
     assert.match(row<{ signal: string }>(r.env, "SELECT signal FROM threads WHERE id = ?", tid).signal, /"kind":"code"/, "and so does the list row");
     assert.equal(r.env.ctx.store.attachBody(id, { text: "again", attachments: [] }), null, "a message that has its body is left alone");
     assert.equal(row<{ body_text: string }>(r.env, "SELECT body_text FROM messages WHERE id = ?", id).body_text, full);
+  });
+
+  test("attachPreview fills in a header-only message: snippet, search index and signals, and never overwrites a body", async () => {
+    const r = rig();
+    r.env.ctx.store.ingest(r.account, {
+      messages: [summary({ remoteId: "s1", from: bank, remoteThreadId: "t1", subject: "Sign-in", bodyText: "" })],
+      cursor: null,
+      done: true,
+    });
+    const id = idOf(r.env, "s1");
+    const tid = threadOf(r.env, "s1");
+    assert.equal(row<{ snippet: string }>(r.env, "SELECT snippet FROM messages WHERE id = ?", id).snippet, "", "nothing is invented while there is no preview");
+    assert.deepEqual(await search(r.env, "is:code"), []);
+    assert.deepEqual(await search(r.env, "amberline"), []);
+    const created = row<{ created_at: number }>(r.env, "SELECT created_at FROM messages WHERE id = ?", id).created_at;
+
+    const text = "Your verification code is 482913. Tracked with amberline.";
+    assert.equal(r.env.ctx.store.attachPreview(id, text), tid);
+    const m = row<Record<string, unknown>>(r.env, "SELECT body_state, body_text, snippet, signals, created_at FROM messages WHERE id = ?", id);
+    assert.equal(m.body_state, "none", "still a summary: the full text is fetched on demand");
+    assert.equal(m.body_text, text);
+    assert.equal(m.snippet, text);
+    assert.match(String(m.signals), /"kind":"code"/);
+    assert.equal(m.created_at, created, "arrival time is untouched");
+    assert.equal(row<{ snippet: string }>(r.env, "SELECT snippet FROM threads WHERE id = ?", tid).snippet, text, "the thread row shows it");
+    assert.deepEqual(await search(r.env, "is:code"), [tid]);
+    assert.deepEqual(await search(r.env, "amberline"), [tid]);
+
+    assert.equal(r.env.ctx.store.attachPreview(id, "  "), null, "a blank preview changes nothing");
+    const full = "The whole message.";
+    r.env.ctx.store.attachBody(id, { text: full, attachments: [] });
+    assert.equal(r.env.ctx.store.attachPreview(id, "late preview"), null, "the full text wins");
+    assert.equal(row<{ body_text: string }>(r.env, "SELECT body_text FROM messages WHERE id = ?", id).body_text, full);
+    assert.equal(r.env.ctx.store.attachPreview("msg_gone", "x"), null);
   });
 
   test("attachBody keeps attachment ids, takes the new handles, saves inline images and drops stale rows", () => {
@@ -456,16 +491,17 @@ describe("the sync engine", () => {
     const progress = events.flatMap((e) => (e.type === "sync" && e.progress ? [e.progress] : []));
     assert.deepEqual(
       progress.map((p) => p.stage).filter((s, i, all) => all.indexOf(s) === i),
-      ["signin", "inbox", "recent", "history", "done"],
+      ["signin", "inbox", "previews", "recent", "history", "done"],
       "stages come in this order, each once",
     );
     assert.deepEqual(progress[0], { stage: "signin", done: 0, total: null });
-    assert.deepEqual(progress.find((p) => p.stage === "inbox"), { stage: "inbox", done: 60, total: 60 });
+    assert.deepEqual(without(progress.find((p) => p.stage === "inbox")!, "rate"), { stage: "inbox", done: 60, total: 60 });
+    assert.deepEqual(without(progress.find((p) => p.stage === "previews")!, "rate"), { stage: "previews", done: 60, total: 60 }, "this provider's pages carry their previews already");
     for (const stage of ["recent", "history"] as const) {
       const of = progress.filter((p) => p.stage === stage);
       assert.ok(of.every((p, i) => i === 0 || p.done >= of[i - 1]!.done), `${stage} never goes backwards`);
     }
-    assert.deepEqual(progress.filter((p) => p.stage === "recent").at(-1), { stage: "recent", done: 50, total: 50 });
+    assert.deepEqual(without(progress.filter((p) => p.stage === "recent").at(-1)!, "rate"), { stage: "recent", done: 50, total: 50 });
     assert.deepEqual(progress.filter((p) => p.stage === "history").map((p) => [p.done, p.total]), [[40, 100], [80, 100], [100, 100]]);
     assert.deepEqual(progress.at(-1), { stage: "done", done: 100, total: 100 });
     assert.ok(readyWhen.every((f) => f !== null) && readyWhen.length > 0, "the account is ready for the inbox as soon as the recent cache starts, before the window is in");
@@ -482,7 +518,83 @@ describe("the sync engine", () => {
     // A reloaded dashboard sees where the sync is.
     const boot = (await (await r.env.api("/api/bootstrap")).json()) as { accounts: { progress: unknown }[] };
     assert.deepEqual(boot.accounts[0]!.progress, { stage: "done", done: 100, total: 100 });
+    // Every stage that did work says how fast: items per second so far, a positive number, and the client divides what's left by it.
+    for (const p of progress) {
+      if (p.stage === "signin" || p.stage === "done" || p.stage === "previews" || p.done === 0) assert.equal(p.rate, undefined, `${p.stage} ${p.done}`);
+      else assert.ok(typeof p.rate === "number" && Number.isFinite(p.rate) && p.rate > 0, `${p.stage} ${p.done} has a positive rate, got ${p.rate}`);
+    }
     assert.ok(row<{ f: number }>(r.env, "SELECT first_synced_at AS f FROM accounts WHERE id = ?", r.accountId).f >= readyWhen[0]!, "and the mark has moved past the window by the time it is in");
+  });
+
+  test("the inbox page is stored before any preview is asked for; previews fill in afterwards, in their own stage", async () => {
+    const r = rig();
+    const inboxFolders = { inbox: true, sent: false, trash: false, spam: false };
+    const headersOnly = (remoteId: string, folders = inboxFolders) => summary({ remoteId, from: ana, remoteThreadId: `th-${remoteId}`, bodyText: "", subject: `Re ${remoteId}`, folders });
+    const pages: SyncPage[] = [
+      { messages: [headersOnly("i0"), headersOnly("i1")], cursor: "1", done: false, previewIds: ["i0", "i1"], progress: { stage: "inbox", total: 2, count: 2, last: true } },
+      { messages: [headersOnly("h0", { ...inboxFolders, inbox: false })], cursor: "2", done: true, previewIds: ["h0"], progress: { stage: "history", total: 1, count: 1, last: true } },
+    ];
+    const order: string[] = [];
+    const events: ServerEvent[] = [];
+    r.env.ctx.events.subscribe([`user:${LOCAL_USER_ID}`], (e) => events.push(e));
+    const known = (remote: string) => row<{ n: number }>(r.env, "SELECT count(*) AS n FROM messages WHERE remote_id = ?", remote).n === 1;
+    const fake = {
+      kind: "imap",
+      sync: async () => pages.shift()!,
+      fetchPreviews: async (ids: string[]) => {
+        order.push(`previews ${ids.join(",")} (stored: ${ids.filter(known).length} of ${ids.length}, ready: ${row<{ f: number | null }>(r.env, "SELECT first_synced_at AS f FROM accounts WHERE id = ?", r.accountId).f !== null})`);
+        return new Map(ids.map((id) => [id, `preview of ${id}`]));
+      },
+      fetchBody: async (id: string) => (order.push(`body ${id}`), { text: `whole ${id}`, attachments: [] }),
+    } as unknown as MailProvider;
+    r.env.ctx.sync.provider = () => fake;
+    await r.env.ctx.sync.syncAccount(r.accountId);
+
+    assert.equal(order[0], "previews i0,i1 (stored: 2 of 2, ready: true)", "the inbox is stored and open before its previews are fetched");
+    assert.ok(order.indexOf("previews h0 (stored: 1 of 1, ready: true)") > order.findIndex((o) => o.startsWith("body ")), "history previews come after the inbox's recent cache, as their own pass");
+    assert.equal(order.filter((o) => o.startsWith("previews")).length, 2, "one pass per page");
+
+    // The previews reached the rows (the history one stays a preview; the inbox ones were then fetched whole by the recent cache).
+    assert.equal(row<{ body_text: string }>(r.env, "SELECT body_text FROM messages WHERE remote_id = 'h0'").body_text, "preview of h0");
+    assert.equal(row<{ snippet: string }>(r.env, "SELECT snippet FROM messages WHERE remote_id = 'h0'").snippet, "preview of h0");
+    assert.deepEqual(await search(r.env, "preview of h0"), [threadOf(r.env, "h0")]);
+    // The open inbox is told, thread by thread, as previews arrive.
+    const touched = events.filter((e) => e.type === "threads").flatMap((e) => (e.type === "threads" ? e.threadIds : []));
+    assert.ok(touched.includes(threadOf(r.env, "i0")) && touched.includes(threadOf(r.env, "h0")));
+
+    const progress = events.flatMap((e) => (e.type === "sync" && e.progress ? [e.progress] : []));
+    assert.deepEqual(progress.map((p) => p.stage).filter((st, i, all) => all.indexOf(st) === i), ["signin", "inbox", "previews", "recent", "history", "done"]);
+    assert.deepEqual(progress.filter((p) => p.stage === "previews").map((p) => [p.done, p.total, p.rate === undefined]), [[0, 2, true], [2, 2, false]]);
+    const done = progress.find((p) => p.stage === "previews" && p.done === 2)!;
+    assert.ok(done.rate! > 0 && Number.isFinite(done.rate!));
+  });
+
+  test("a preview pass that fails leaves the inbox open and the sync going; only a sign-in problem stops it", async () => {
+    const r = rig();
+    const page = (): SyncPage => ({
+      messages: [summary({ remoteId: "i0", from: ana, remoteThreadId: "th-i0", bodyText: "", folders: { inbox: true, sent: false, trash: false, spam: false } })],
+      cursor: "1",
+      done: true,
+      previewIds: ["i0"],
+      progress: { stage: "inbox", total: 1, count: 1, last: true },
+    });
+    let failure: Error = new Error("connection reset");
+    const fake = { kind: "imap", sync: async () => page(), fetchPreviews: async () => { throw failure; }, fetchBody: async () => ({ text: "whole", attachments: [] }) } as unknown as MailProvider;
+    r.env.ctx.sync.provider = () => fake;
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      await r.env.ctx.sync.syncAccount(r.accountId);
+      assert.equal(row<{ sync_status: string }>(r.env, "SELECT sync_status FROM accounts WHERE id = ?", r.accountId).sync_status, "idle");
+      assert.equal(row<{ body_state: string }>(r.env, "SELECT body_state FROM messages WHERE remote_id = 'i0'").body_state, "cached", "the recent cache still brings the whole message");
+
+      const { ProviderAuthError } = await import("../src/mail/types.ts");
+      failure = new ProviderAuthError("sign in again");
+      await r.env.ctx.sync.syncAccount(r.accountId);
+      assert.equal(row<{ sync_status: string }>(r.env, "SELECT sync_status FROM accounts WHERE id = ?", r.accountId).sync_status, "reauth");
+    } finally {
+      console.warn = warn;
+    }
   });
 
   test("history stored after the inbox opened is never mistaken for news by delivery tidying", async () => {
@@ -529,7 +641,7 @@ describe("the sync engine", () => {
     r.env.ctx.events.subscribe([`user:${LOCAL_USER_ID}`], (e) => events.push(e));
     await r.env.ctx.sync.syncAccount(r.accountId);
     const progress = events.flatMap((e) => (e.type === "sync" && e.progress ? [e.progress] : []));
-    assert.deepEqual(progress.filter((p) => p.stage === "history"), [{ stage: "history", done: 5, total: 5 }]);
+    assert.deepEqual(progress.filter((p) => p.stage === "history").map((p) => without(p, "rate")), [{ stage: "history", done: 5, total: 5 }]);
     assert.equal(row<{ sync_status: string }>(r.env, "SELECT sync_status FROM accounts WHERE id = ?", r.accountId).sync_status, "idle");
     assert.equal(row<{ n: number }>(r.env, "SELECT count(*) AS n FROM messages WHERE body_state = 'none' AND remote_id LIKE 'in%'").n, 1, "the one that failed stays a preview");
   });

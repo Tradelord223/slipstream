@@ -10,7 +10,7 @@ export type ServerEvent =
       error?: string | null;
       fetched?: number;
       /** Exact progress of the current stage (see web/src/types.ts SyncProgress). */
-      progress?: { stage: "signin" | "inbox" | "recent" | "history" | "done"; done: number; total: number | null };
+      progress?: { stage: "signin" | "inbox" | "previews" | "recent" | "history" | "done"; done: number; total: number | null; rate?: number };
     }
   | { type: "drafts"; draftId: string; status: string; error?: string | null }
   | { type: "team"; workspaceId: string; sharedThreadId: string }
