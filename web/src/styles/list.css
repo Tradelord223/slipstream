@@ -264,3 +264,27 @@
 .mail-pane-compact .filter-chip {
   display: none;
 }
+
+/* The line after the last result of a search, about the rest of the mail at the provider. No motion: it only says what is happening. */
+.remote-row {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 0 14px;
+  font-size: var(--fs-row);
+  color: var(--text-3);
+}
+.remote-row-inline {
+  position: static;
+  justify-content: center;
+}
+.remote-text {
+  min-width: 0;
+  line-height: 1.25;
+}
+.remote-row .btn {
+  flex: none;
+}

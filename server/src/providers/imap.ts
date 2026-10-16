@@ -9,6 +9,7 @@ import {
 } from "imapflow";
 import nodemailer, { type Transporter } from "nodemailer";
 import { extractAttachment, parseHeaderBlock, parseRaw, previewFromPart } from "../mail/mime.ts";
+import { imapGmailSearch, imapSearch } from "../mail/remote-query.ts";
 import {
   PermanentProviderError,
   ProviderAuthError,
@@ -20,6 +21,7 @@ import {
   type MailProvider,
   type OutgoingMessage,
   type ProviderContext,
+  type ProviderQuery,
   type RemoteAction,
   type SyncPage,
   type SyncStageProgress,
@@ -589,6 +591,19 @@ interface StepResult {
   previews: string[];
 }
 
+/** A search's continuation token: for each mailbox with hits left, the UID to search below. */
+function parseSearchToken(token: string | undefined): Record<string, number> | undefined {
+  if (token === undefined) return undefined;
+  try {
+    const o = JSON.parse(token) as Record<string, unknown>;
+    const entries = Object.entries(o);
+    if (typeof o === "object" && o !== null && entries.every(([, v]) => Number.isInteger(v) && (v as number) > 0)) return o as Record<string, number>;
+  } catch {
+    // falls through
+  }
+  throw new Error("That search can't be continued; run it again");
+}
+
 const emptyStep = (): StepResult => ({ messages: [], flagUpdates: [], deleted: [], more: false, previews: [] });
 
 /** The mailbox whose newest mail is the "inbox" page: Gmail's All Mail (its inbox is a label), otherwise INBOX. */
@@ -1030,6 +1045,68 @@ export class ImapProvider implements MailProvider {
       }
     }
     return out;
+  }
+
+  /* -------- search */
+
+  /**
+   * Search the server. Gmail answers its own query language in All Mail (X-GM-RAW). Any other server is asked with plain
+   * SEARCH in the Inbox, Sent and the archive folder, and the newest hits of the three are merged. A continuation token
+   * records, for each mailbox that still has hits, the UID to search below. Summaries come back without previews; the ones
+   * `fetchPreviews` can supply are queued for it, like the sync's.
+   */
+  async search(query: ProviderQuery, opts: { limit: number; pageToken?: string }): Promise<{ messages: IncomingMessage[]; next?: string }> {
+    const below = parseSearchToken(opts.pageToken);
+    return this.run(async (c) => {
+      const layout = await this.layout(c);
+      const targets: SyncTarget[] = layout.gmail
+        ? syncTargets(layout.map, true).filter((t) => t.role === "all")
+        : (["inbox", "sent", "archive"] as const).flatMap((role) => {
+            const path = layout.map[role] ?? (role === "inbox" ? "INBOX" : undefined);
+            return path ? [{ path, role }] : [];
+          });
+      const criteria = layout.gmail ? imapGmailSearch(query) : imapSearch(query);
+
+      const found: { target: SyncTarget; validity: string; total: number; top: number; rows: { m: IncomingMessage; uid: number; fm: FetchMessageObject }[] }[] = [];
+      for (const target of targets.filter((t) => !below || below[t.path] !== undefined)) {
+        const upper = below?.[target.path];
+        if (upper !== undefined && upper < 2) continue;
+        const one = await withMailbox(c, target.path, true, async (mb) => {
+          const hits = ((await c.search({ ...criteria, ...(upper !== undefined ? { uid: `1:${upper - 1}` } : {}) }, { uid: true })) || []).sort((a, b) => b - a);
+          const wanted = hits.slice(0, opts.limit);
+          const what: FetchQueryObject = { uid: true, flags: true, internalDate: true, size: true, bodyStructure: true, headers: HEADER_FIELDS };
+          if (layout.gmail) {
+            what.labels = true;
+            what.threadId = true;
+          }
+          const fetched = wanted.length ? await c.fetchAll(wanted, what, { uid: true }) : [];
+          const rows: { m: IncomingMessage; uid: number; fm: FetchMessageObject }[] = [];
+          for (const fm of fetched) {
+            const m = await toSummary(fm, target, String(mb.uidValidity), layout.gmail, this.ctx.email);
+            if (m) rows.push({ m, uid: fm.uid, fm });
+          }
+          return { target, validity: String(mb.uidValidity), total: hits.length, top: wanted[0] ?? 0, rows };
+        });
+        found.push(one);
+      }
+
+      // Newest first across the mailboxes; what doesn't fit waits for the next page.
+      const all = found.flatMap((f) => f.rows.map((r) => ({ ...r, f })));
+      all.sort((a, b) => b.m.sentAt - a.m.sentAt);
+      const kept = all.slice(0, opts.limit);
+      const resume: Record<string, number> = {};
+      for (const f of found) {
+        const mine = kept.filter((k) => k.f === f);
+        if (f.total - mine.length <= 0) continue;
+        resume[f.target.path] = mine.length ? Math.min(...mine.map((k) => k.uid)) : (below?.[f.target.path] ?? f.top + 1);
+      }
+      for (const k of kept) {
+        const part = describeStructure(k.fm.bodyStructure).text;
+        if (part) this.previewable.set(k.m.remoteId, { path: k.f.target.path, validity: k.f.validity, uid: k.uid, part });
+      }
+      while (this.previewable.size > PREVIEWABLE_MAX) this.previewable.delete(this.previewable.keys().next().value!);
+      return { messages: kept.map((k) => k.m), next: Object.keys(resume).length ? JSON.stringify(resume) : undefined };
+    });
   }
 
   /* -------- actions */

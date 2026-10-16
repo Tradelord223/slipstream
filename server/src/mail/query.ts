@@ -108,7 +108,7 @@ export function parseRelative(v: string, now: number): number | null {
   return now - n * unit;
 }
 
-function parseDate(v: string): number | null {
+export function parseDate(v: string): number | null {
   const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(v.trim());
   if (!m) return null;
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
@@ -131,7 +131,17 @@ export function ftsQuery(text: string): string | null {
  * is:code, from: and the other field operators still list them.
  */
 export function compile(input: string, now = Date.now(), opts: { agent?: boolean } = {}): Compiled {
-  const clauses = parse(input);
+  return compileClauses(parse(input), now, opts);
+}
+
+/** What an agent's text search adds: a conversation that carries (or might carry) a one-time code never matches. */
+export const NO_CODE_THREAD = `NOT ${HAS_CODE}`;
+
+/** Whether any clause matches message text (free words, subject:, filename:), which is what the agent guard is about. */
+export const hasTextTerm = (clauses: Clause[]) => clauses.some((c) => c.some(isTextTerm));
+
+/** `compile` for clauses that are already parsed, such as the part of a search that stays local when a provider runs the rest. */
+export function compileClauses(clauses: Clause[], now = Date.now(), opts: { agent?: boolean } = {}): Compiled {
   const parts: string[] = [];
   const params: (string | number)[] = [];
   let scoped = false;
@@ -158,7 +168,7 @@ export function compile(input: string, now = Date.now(), opts: { agent?: boolean
     }
     if (ors.length) parts.push(ors.length === 1 ? ors[0]! : `(${ors.join(" OR ")})`);
   }
-  if (opts.agent && clauses.some((c) => c.some(isTextTerm))) parts.push(`NOT ${HAS_CODE}`);
+  if (opts.agent && hasTextTerm(clauses)) parts.push(NO_CODE_THREAD);
   return { where: parts.length ? parts.join(" AND ") : "1", params, scoped };
 }
 

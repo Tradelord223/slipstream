@@ -12,8 +12,16 @@ import { triageCommandName } from "../commands/catalog.ts";
 import { listIdentities } from "../mail/identities.ts";
 import { extractCode } from "../mail/signals.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
-import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, messageAttachments, shapeRow, touchThread, type SplitRow, type ThreadListRow } from "../mail/views.ts";
+import { REMOTE_PAGE_MAX, searchRemote } from "../mail/remote-search.ts";
+import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, messageAttachments, shapeRow, threadsById, touchThread, type SplitRow, type ThreadListRow } from "../mail/views.ts";
 import type { AccountRow } from "../mail/store.ts";
+
+const remoteSearchQuery = z.object({
+  q: z.string().max(500),
+  account: z.string().optional(),
+  pageToken: z.string().max(8000).optional(),
+  limit: z.coerce.number().int().min(1).max(REMOTE_PAGE_MAX).default(REMOTE_PAGE_MAX),
+});
 
 const triageBody = z.object({
   kind: z.enum([
@@ -42,6 +50,21 @@ export function mailRoutes(ctx: AppContext) {
     const result = listThreads(ctx, c.get("user").id, listQuerySchema.parse(c.req.query()));
     c.header("Server-Timing", `db;dur=${(performance.now() - started).toFixed(2)}`);
     return c.json(result);
+  });
+
+  /**
+   * A search over everything at the person's mail providers, which Slipstream may not have synced. Hits are stored as summaries
+   * and come back as list rows; an account that fails is named in `failures` and the others still answer.
+   */
+  app.get("/search/remote", async (c) => {
+    const query = remoteSearchQuery.parse(c.req.query());
+    return c.json(await searchRemote(ctx, c.get("user").id, { q: query.q, account: query.account, pageToken: query.pageToken, limit: query.limit }));
+  });
+
+  /** Fresh list rows for conversations the dashboard already shows, such as search hits it keeps between reloads. */
+  app.get("/threads-by-ids", (c) => {
+    const ids = (c.req.query("ids") ?? "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 200);
+    return c.json({ threads: threadsById(ctx, c.get("user").id, ids) });
   });
 
   app.get("/counts", (c) => c.json(counts(ctx, c.get("user").id)));

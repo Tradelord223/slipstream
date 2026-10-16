@@ -2,6 +2,7 @@ import type { Config } from "../config.ts";
 import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
 import { decodeEntities } from "../lib/text.ts";
 import { extractAttachment, parseHeaderBlock, parseRaw } from "../mail/mime.ts";
+import { gmailQuery } from "../mail/remote-query.ts";
 import {
   PermanentProviderError,
   ProviderAuthError,
@@ -14,6 +15,7 @@ import {
   type OutgoingMessage,
   type ProviderContext,
   type ProviderIdentity,
+  type ProviderQuery,
   type RemoteAction,
   type SyncPage,
 } from "../mail/types.ts";
@@ -294,6 +296,16 @@ export class GmailProvider implements MailProvider {
       return this.toSummary(m);
     });
     return parsed.filter((m): m is IncomingMessage => m !== null);
+  }
+
+  /** Gmail's own search over the whole mailbox (spam and trash excluded, as in Gmail), then summaries for the hits. */
+  async search(query: ProviderQuery, opts: { limit: number; pageToken?: string }): Promise<{ messages: IncomingMessage[]; next?: string }> {
+    const list = await this.api<{ messages?: { id: string }[]; nextPageToken?: string }>(
+      "GET",
+      withQuery("/messages", { q: gmailQuery(query), maxResults: opts.limit, pageToken: opts.pageToken }),
+    );
+    const messages = await this.fetchSummaries((list.messages ?? []).map((m) => m.id));
+    return { messages, next: list.nextPageToken };
   }
 
   private async fetchFlags(id: string): Promise<FlagUpdate | null> {

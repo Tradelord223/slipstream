@@ -84,6 +84,21 @@ slipstream drafts.create --threadId thr_… --body "Sounds good — Thursday wor
 slipstream mail.read --help               # a command's input schema
 ```
 
+### Searching all of a person's mail
+
+`mail.search` looks at what Slipstream has on this machine: summaries (headers and a short preview) of the last 30 days, and the full text of the newest inbox mail and anything opened lately. `mail.searchAll` (scope `read`) asks each account's own provider instead, so it finds older mail and words deep inside a message.
+
+```bash
+slipstream mail.searchAll --query "from:@lumenridge.com lease" --limit 10
+```
+
+- **Same search language.** Free words, `from:`, `to:`, `subject:`, `has:attachment`, `after:`, `before:`, `newer:` and `older:` are translated for Gmail, Outlook (Microsoft Graph) and IMAP servers (Gmail over IMAP uses Gmail's own query language). Operators that only exist in Slipstream (`is:`, `label:`, `category:`, `in:`, `cc:`, `filename:`) are not sent; they narrow what the provider finds, and the result lists them in `localOnly` with a `note`. A search made only of those returns nothing from this command; use `mail.search`.
+- **Results are stored.** Every hit becomes an ordinary conversation holding just its summary, so `mail.read`, `triage.*` and the dashboard work on it like any other. Mail Slipstream already has is left exactly as it is.
+- **Paging.** Up to 50 results per account per page (`limit`, default 25), newest first. When `next` is set, pass it back as `pageToken`. Pass `account` to search one account only.
+- **One account failing doesn't fail the call.** An account that errors or doesn't answer within about 8 seconds is named in `failures` with a plain reason, the other accounts' results are returned, and `next` asks the failed account again.
+- **One-time codes stay hidden.** Codes are masked in every row, as everywhere. A provider matches words against the whole message, though, and a stored summary was only checked for codes in its preview. So when the search has words, `mail.searchAll` first reads each hit in full, then leaves out every conversation that carries a code, and any conversation it couldn't read. A search with only `from:`, `to:`, dates and the like returns code conversations, masked, as `mail.search` does.
+- **People can use it too.** The dashboard asks the same way when you search: local results appear at once, and a quiet line at the end says it is searching your whole mailbox at Gmail, Outlook or your mail server.
+
 ### Webhooks
 
 Settings → Agents → Webhooks. Choose the events you want: `threads`, `drafts`, `activity`, `approval`, `sync`, `import`, or everything. Each delivery carries two headers:

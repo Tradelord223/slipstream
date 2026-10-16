@@ -1,19 +1,22 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useViewport } from "../lib/hooks.ts";
 import { act } from "../store/actions.ts";
 import { focusId, list, loadMore, toggleSelected, useList } from "../store/list.ts";
 import { openThread } from "../store/nav.ts";
 import { prefetch } from "../store/threads.ts";
 import { logosFor, useLogoPolicy, useSession } from "../store/session.ts";
+import { RemoteLine } from "./RemoteSearch.tsx";
 import { ThreadRow } from "./ThreadRow.tsx";
 
 const OVERSCAN = 8;
+/** Room after the last row for the line about searching the provider. */
+const FOOTER_H = 44;
 
 /** Where the list was scrolled when it last left the screen, so coming back from a conversation lands in the same place. */
 let savedScroll: { key: string; top: number } | null = null;
 
 /** A windowed list: only the rows near the viewport exist in the DOM, so 50k conversations scroll like 50. */
-export function ThreadList({ activeId, compact = false }: { activeId?: string | null; compact?: boolean }) {
+export function ThreadList({ activeId, compact = false, footer }: { activeId?: string | null; compact?: boolean; footer?: ReactNode }) {
   const rows = useList((s) => s.visible);
   const focusedId = useList((s) => s.focusedId);
   const selected = useList((s) => s.selected);
@@ -129,7 +132,8 @@ export function ThreadList({ activeId, compact = false }: { activeId?: string | 
       tabIndex={0}
       onScroll={measure}
     >
-      <div className="list-canvas" style={{ height: rows.length * rowH }}>
+      <div className="list-canvas" style={{ height: rows.length * rowH + (footer ? FOOTER_H : 0) }}>
+        {footer && <RemoteLine top={rows.length * rowH}>{footer}</RemoteLine>}
         {rows.slice(start, end).map((t, i) => (
           <ThreadRow
             key={t.id}

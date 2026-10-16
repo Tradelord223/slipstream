@@ -186,6 +186,19 @@ export interface ThreadPage {
   next: string | null;
 }
 
+/** One page of what a search found at the mail providers. */
+export interface RemoteSearchPage {
+  threads: Thread[];
+  /** Pass back as `pageToken` for more. */
+  next: string | null;
+  /** Accounts that couldn't be searched; the rest of the page stands. */
+  failures: { accountId: string; email: string; provider: string; error: string }[];
+  /** The accounts that were actually asked (none when nothing in the search can be sent to a provider). */
+  searched: { accountId: string; email: string; provider: string }[];
+  /** Operators that were not sent to the provider. */
+  localOnly: string[];
+}
+
 export interface Attachment {
   id: string;
   filename: string;

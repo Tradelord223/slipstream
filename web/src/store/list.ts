@@ -10,6 +10,8 @@ export interface ListState {
   view: MailView | null;
   params: ListParams | null;
   rows: Thread[];
+  /** Conversations a search found at the mail provider that this list doesn't have; merged into `visible`, newest first. */
+  remote: Thread[];
   visible: Thread[];
   next: string | null;
   status: "idle" | "loading" | "ready" | "error";
@@ -27,6 +29,7 @@ export const list = createStore<ListState>({
   view: null,
   params: null,
   rows: [],
+  remote: [],
   visible: [],
   next: null,
   status: "idle",
@@ -58,10 +61,19 @@ function patched(rows: Thread[]): Thread[] {
   return out;
 }
 
+/** The list's own rows with the provider's finds among them, newest first. A conversation in both appears once, as the list has it. */
+function withRemote(rows: Thread[], remote: Thread[]): Thread[] {
+  if (remote.length === 0) return rows;
+  const have = new Set(rows.map((t) => t.id));
+  const extra = remote.filter((t) => !have.has(t.id));
+  if (extra.length === 0) return rows;
+  return [...rows, ...extra].sort((a, b) => b.sortAt - a.sortAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+}
+
 /** Install new raw rows: reapply pending optimistic patches, keep focus by id, prune selection. */
 function commit(raw: Thread[], extra: Partial<ListState> = {}) {
   const s = list.get();
-  const rows = patched(raw);
+  const rows = patched(withRemote(raw, extra.remote ?? s.remote));
   const visible = filtered(rows, s.filter);
   let focusedId = s.focusedId;
   if (focusedId && !visible.some((t) => t.id === focusedId)) {
@@ -85,6 +97,35 @@ function recompute() {
   commit(s.rows);
 }
 
+/** Add conversations a provider search found. One already held is replaced by the newer copy. */
+export function addRemote(threads: Thread[]) {
+  if (threads.length === 0) return;
+  const incoming = new Map(threads.map((t) => [t.id, t]));
+  commit(list.get().rows, { remote: [...list.get().remote.filter((t) => !incoming.has(t.id)), ...threads] });
+}
+
+/** Forget the provider's finds (the search changed, or the view did). */
+export function clearRemote() {
+  if (list.get().remote.length === 0) return;
+  commit(list.get().rows, { remote: [] });
+}
+
+/** The rows of the provider's finds, read again: a list reload brings the list's own rows up to date, and these should follow. */
+async function refreshRemote() {
+  const asked = list.get().remote.slice(0, 200).map((t) => t.id);
+  if (asked.length === 0) return;
+  const mine = seq;
+  try {
+    const { threads } = await api.threadsByIds(asked);
+    if (mine !== seq) return;
+    const fresh = new Map(threads.map((t) => [t.id, t]));
+    const gone = new Set(asked.filter((id) => !fresh.has(id)));
+    commit(list.get().rows, { remote: list.get().remote.flatMap((t) => (fresh.has(t.id) ? [fresh.get(t.id)!] : gone.has(t.id) ? [] : [t])) });
+  } catch {
+    // The rows stay as they were; the next reload tries again.
+  }
+}
+
 export function openView(key: string, view: MailView, params: ListParams | null) {
   const s = list.get();
   if (s.key === key && s.status !== "error" && s.status !== "idle") return;
@@ -95,6 +136,7 @@ export function openView(key: string, view: MailView, params: ListParams | null)
     view,
     params,
     rows: [],
+    remote: [],
     visible: [],
     next: null,
     status: params ? "loading" : "idle",
@@ -123,6 +165,7 @@ async function fetchFirst(params: ListParams, count: number) {
       const tail = list.get().rows.filter((t) => t.sortAt < edge.sortAt || (t.sortAt === edge.sortAt && t.id < edge.id));
       commit([...rows, ...tail], { next: tail.length ? list.get().next : next, status: "ready", error: null });
     } else commit(rows, { next, status: "ready", error: null });
+    void refreshRemote();
   } catch (err) {
     if ((err as Error).name === "AbortError" || mine !== seq) return;
     list.set({ status: "error", error: err instanceof Error ? err.message : "Couldn't load your mail" });
@@ -267,7 +310,8 @@ export function targetIds(preferId?: string | null): string[] {
 }
 
 export function threadById(id: string): Thread | undefined {
-  return list.get().rows.find((t) => t.id === id);
+  const s = list.get();
+  return s.rows.find((t) => t.id === id) ?? s.remote.find((t) => t.id === id);
 }
 
 /** Which row should take focus once `ids` leave the list. */

@@ -39,6 +39,7 @@ export function blocks(text: string): Block[] {
 
 const PHRASE: Record<string, string> = {
   "mail.search": "Searched your mail",
+  "mail.searchAll": "Searched all your mail at its provider",
   "mail.list": "Looked through a list of conversations",
   "mail.read": "Read a conversation",
   "mail.unsubscribe": "Unsubscribed from a sender",

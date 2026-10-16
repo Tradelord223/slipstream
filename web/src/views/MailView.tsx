@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.ts";
 import { EmptyState, InboxZero } from "../components/InboxZero.tsx";
 import { MailHeader } from "../components/MailHeader.tsx";
+import { useRemoteSearch } from "../components/RemoteSearch.tsx";
 import { ThreadList } from "../components/ThreadList.tsx";
 import { clearFilter, reload, useList } from "../store/list.ts";
 import { openDraft, useCompose } from "../store/compose.ts";
@@ -32,6 +33,8 @@ function ListBody({ view, compact }: { view: MailViewType; compact: boolean }) {
   const hasMore = useList((s) => Boolean(s.next));
   const noAccounts = useSession((s) => s.accounts.length === 0);
   const team = useSession((s) => s.mode === "team");
+  // Local results show at once; for a search, the provider is asked about the rest of the person's mail alongside.
+  const remote = useRemoteSearch(view.kind === "search" ? view.q : null);
 
   if (status === "error" && rowsLoaded === 0) {
     return (
@@ -79,12 +82,21 @@ function ListBody({ view, compact }: { view: MailViewType; compact: boolean }) {
       case "label":
         return <EmptyState title={`Nothing labeled ${view.name}`} hint="Press L on a conversation to add the label." />;
       case "search":
-        return <EmptyState title="No conversations match" hint="Try fewer words, or add in:all to search everywhere." />;
+        return (
+          <div className="state-block">
+            {!remote.busy && <EmptyState title="No conversations match" hint="Try fewer words, or add in:all to search everywhere." />}
+            {remote.line && (
+              <div className="remote-row remote-row-inline" role="status" aria-live="polite">
+                {remote.line}
+              </div>
+            )}
+          </div>
+        );
       default:
         return <EmptyState title="Nothing here" />;
     }
   }
-  return <ThreadList compact={compact} />;
+  return <ThreadList compact={compact} footer={remote.line} />;
 }
 
 function ListSkeleton() {

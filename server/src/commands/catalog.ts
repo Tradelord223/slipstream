@@ -9,6 +9,7 @@ import { unsubscribe } from "../mail/unsubscribe.ts";
 import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, sendDraft, updateDraft } from "../mail/drafts.ts";
 import { listIdentities, ownAddresses, replyIdentity, resolveFrom } from "../mail/identities.ts";
 import { isPersonalMailDomain } from "../mail/logos.ts";
+import { searchRemote } from "../mail/remote-search.ts";
 import { maskCodes } from "../mail/signals.ts";
 import { counts, getThread, getThreadWithBodies, listThreads } from "../mail/views.ts";
 import { createSnippet, createSplit, deleteSplit, listSnippets, listSplits } from "../prefs.ts";
@@ -236,6 +237,25 @@ export function buildCatalog(): Command[] {
       run: (ctx, actor, i) => {
         const r = listThreads(ctx, actor.user.id, { view: "search", q: i.query, account: i.account, limit: i.limit, before: i.before }, { hideCodes: actor.kind === "agent" });
         return { result: i.detail === "full" ? r : compactList(r) };
+      },
+    }),
+    defineCommand({
+      name: "mail.searchAll",
+      title: "Search all mail at the provider",
+      description: `Search the whole mailbox at each account's provider (Gmail, Outlook, IMAP), including old mail Slipstream hasn't synced: use it when mail.search finds nothing or the mail is older than about 30 days. Takes the same search language as mail.search; free words, from:, to:, subject:, has:attachment, after:, before:, newer: and older: are sent to the provider, and is:, label:, category:, in:, cc: and filename: only narrow what it finds (they are listed in localOnly). Hits are stored as summaries, so mail.read can open them. Returns up to \`limit\` results per account, newest first; pass \`next\` back as pageToken for more. An account that fails is named in failures and the others still answer. Searches that include words never return conversations that carry a one-time code. ${UNTRUSTED}`,
+      scope: "read",
+      readOnly: true,
+      input: z.object({
+        query: z.string().max(500),
+        account: z.string().optional().describe("Limit to one account id"),
+        limit: z.number().int().min(1).max(50).default(25).describe("Results per account"),
+        pageToken: z.string().max(8000).optional().describe("Continuation token from a previous result's `next`"),
+        detail,
+      }),
+      run: async (ctx, actor, i) => {
+        const r = await searchRemote(ctx, actor.user.id, { q: i.query, account: i.account, limit: i.limit, pageToken: i.pageToken, hideCodes: actor.kind === "agent" });
+        const rows = i.detail === "full" ? { threads: r.threads, next: r.next } : compactList({ threads: r.threads, next: r.next });
+        return { result: { ...rows, failures: r.failures, localOnly: r.localOnly, ...(r.note ? { note: r.note } : {}) } };
       },
     }),
     defineCommand({

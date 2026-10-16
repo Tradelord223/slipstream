@@ -64,7 +64,7 @@ Slipstream keeps the speed and drops the rest.
 - **Remind Me.** Type "tomorrow 9am" or "next week". The conversation leaves your inbox and comes back to the top when it's time, or as soon as someone replies.
 - **Get Me To Zero.** Clear the whole backlog, or everything older than a week or a month, in one undoable step.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
-- **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `is:code`, `is:delivery`, `after:`, `label:` and more, over everything you've synced or imported.
+- **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `is:code`, `is:delivery`, `after:`, `label:` and more, over everything you've synced or imported. Older mail and words deep inside a message are found by your provider's own search, which runs alongside and merges in.
 
 **Everyday helpers, no AI needed**
 

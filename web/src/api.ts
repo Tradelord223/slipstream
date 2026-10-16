@@ -1,7 +1,7 @@
 import type {
   ActivityItem, AgentInfo, AgentInput, Approval, ExecuteResult, RemoteMode, RemoteStatus, Webhook,
   Address, Bootstrap, ContactInfo, Contact, Counts, Discovery, Draft, Identity, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
-  ThreadPage, TriageKind, TriageResult, SharedComment,
+  ThreadPage, RemoteSearchPage, Thread, TriageKind, TriageResult, SharedComment,
   CloudConnectInput, CloudRun, CloudStatus, LabelInfo, LabelRule, Routine, RoutineInput,
   AutopilotOverview, AutopilotPatch, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction, MessageBodies,
 } from "./types.ts";
@@ -90,6 +90,11 @@ export const api = {
 
   threads: (p: ListParams, signal?: AbortSignal) =>
     get<ThreadPage>(`/api/threads${qs({ view: p.view, split: p.split, q: p.q, account: p.account, before: p.before, limit: p.limit })}`, signal),
+  /** Search an account's whole mailbox at its provider; hits are stored here and come back as list rows. */
+  searchRemote: (p: { q: string; account?: string; pageToken?: string | null }, signal?: AbortSignal) =>
+    get<RemoteSearchPage>(`/api/search/remote${qs({ q: p.q, account: p.account, pageToken: p.pageToken })}`, signal),
+  /** Fresh list rows for conversations already on screen. */
+  threadsByIds: (ids: string[]) => get<{ threads: Thread[] }>(`/api/threads-by-ids${qs({ ids: ids.join(",") })}`),
   thread: (id: string, signal?: AbortSignal) => get<ThreadDetail>(`/api/threads/${encodeURIComponent(id)}`, signal),
   /** Full text for messages that were synced as previews. */
   threadBodies: (id: string, messageIds: string[]) => get<MessageBodies>(`/api/threads/${encodeURIComponent(id)}/bodies${qs({ ids: messageIds.join(",") })}`),

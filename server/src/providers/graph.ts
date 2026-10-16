@@ -1,5 +1,6 @@
 import type { Config } from "../config.ts";
 import { parseHeaderBlock } from "../mail/mime.ts";
+import { graphSearch } from "../mail/remote-query.ts";
 import {
   PermanentProviderError,
   ProviderAuthError,
@@ -11,6 +12,7 @@ import {
   type MailProvider,
   type OutgoingMessage,
   type ProviderContext,
+  type ProviderQuery,
   type RemoteAction,
   type SyncPage,
   type SyncStageProgress,
@@ -83,6 +85,7 @@ interface GraphMessage {
   flag?: { flagStatus?: string };
   conversationId?: string;
   internetMessageId?: string;
+  parentFolderId?: string;
   /** Only when asked for in $select, and every header comes with it, so the few the summary needs are picked out. */
   internetMessageHeaders?: { name: string; value: string }[];
   body?: { contentType?: string; content?: string };
@@ -344,6 +347,58 @@ export class GraphProvider implements MailProvider {
       outgoing: folders.sent,
       attachments: m.hasAttachments ? await this.attachments(m.id) : [],
     };
+  }
+
+  /** Graph's ids for the folders a search hit can sit in, so a hit knows whether it is in the inbox, Sent Items, Deleted Items or Junk. */
+  private folderIds?: Promise<Map<string, (typeof FOLDERS)[number]>>;
+
+  private folderMap(): Promise<Map<string, (typeof FOLDERS)[number]>> {
+    this.folderIds ??= (async () => {
+      const map = new Map<string, (typeof FOLDERS)[number]>();
+      // Drafts are never shown; their folder is marked so search can leave them out.
+      const known = [...FOLDERS.filter((f) => f.flag), { name: "drafts", flag: null }];
+      await Promise.all(
+        known.map(async (f) => {
+          const res = await this.request(`${ME}/mailFolders/${f.name}?$select=id`);
+          if (res.status === 404) return;
+          const body = await jsonBody<{ id?: string }>(res);
+          if (!res.ok) throw new GraphHttpError(res.status, graphMessage(res.status, body));
+          if (body?.id) map.set(body.id, f);
+        }),
+      );
+      return map;
+    })().catch((err) => {
+      this.folderIds = undefined;
+      throw err;
+    });
+    return this.folderIds;
+  }
+
+  /**
+   * Graph's `$search` over every folder. It can't be combined with $orderby or $filter, and returns results already ordered by
+   * date (up to 1,000), so neither is sent. A continuation token is Graph's `@odata.nextLink`, which comes back from the browser
+   * and is fetched with the account's token, so it is only followed while it still points at this mailbox's messages.
+   */
+  async search(query: ProviderQuery, opts: { limit: number; pageToken?: string }): Promise<{ messages: IncomingMessage[]; next?: string }> {
+    let url: string;
+    if (opts.pageToken) {
+      const link = URL.canParse(opts.pageToken) ? new URL(opts.pageToken) : null;
+      if (!link || link.origin !== "https://graph.microsoft.com" || !link.pathname.startsWith("/v1.0/me/messages")) {
+        throw new Error("That search can't be continued; run it again");
+      }
+      url = link.href;
+    } else {
+      const expression = graphSearch(query).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      url = `${ME}/messages?$search=${enc(`"${expression}"`)}&$top=${opts.limit}&$select=${SELECT}`;
+    }
+    const body = await this.json<DeltaResponse>(url);
+    const folders = await this.folderMap();
+    const hits = (body.value ?? []).flatMap((m) => {
+      const folder = folders.get(m.parentFolderId ?? "") ?? { name: "other", flag: null };
+      return folder.name === "drafts" ? [] : [{ m, folder }];
+    });
+    const messages = await mapLimit(hits, ATTACHMENT_CONCURRENCY, (h) => this.toIncoming(h.m, h.folder));
+    return { messages, next: body["@odata.nextLink"] };
   }
 
   /** The whole message, for one that was synced as a summary. Graph lists every attachment, inline ones included. */

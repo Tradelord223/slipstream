@@ -81,7 +81,30 @@ export function shapeRow(r: ThreadListRow) {
 }
 
 /** For readers that must not see one-time codes (agents): the subject and snippet of a row with the code masked. */
-const hideRowCodes = (r: ReturnType<typeof shapeRow>) => ({ ...r, ...maskCodes({ subject: r.subject, snippet: r.snippet }) });
+export const hideRowCodes = (r: ReturnType<typeof shapeRow>) => ({ ...r, ...maskCodes({ subject: r.subject, snippet: r.snippet }) });
+
+/**
+ * List rows for specific conversations (the person's own), newest first, optionally narrowed by one more condition.
+ * Search at the provider uses it for the conversations a hit landed in; the dashboard uses it to refresh rows it already shows.
+ */
+export function threadsById(
+  ctx: AppContext,
+  userId: string,
+  ids: string[],
+  extra: { where?: string; params?: (string | number)[] } = {},
+  opts: { hideCodes?: boolean } = {},
+) {
+  if (ids.length === 0) return [];
+  const rows = ctx.db.all<ThreadListRow>(
+    `SELECT ${LIST_COLUMNS} FROM threads t
+     WHERE t.account_id IN (SELECT id FROM accounts WHERE user_id = ?) AND t.id IN (${ids.map(() => "?").join(",")})${extra.where ? ` AND ${extra.where}` : ""}
+     ORDER BY t.sort_at DESC, t.id DESC`,
+    userId,
+    ...ids,
+    ...(extra.params ?? []),
+  );
+  return rows.map(shapeRow).map((r) => (opts.hideCodes ? hideRowCodes(r) : r));
+}
 
 /** WHERE clause for a split: its own query, scoped to the inbox, minus custom splits for the built-ins. */
 export function splitWhere(split: SplitRow, all: SplitRow[], now: number, opts: { hideCodes?: boolean } = {}): { where: string; params: (string | number)[] } {

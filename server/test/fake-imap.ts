@@ -285,7 +285,22 @@ export class FakeConn {
       if (!ranges.some(([a, b]) => m.uid >= a && m.uid <= b)) return false;
     }
     if (q.since && m.internalDate.getTime() < new Date(q.since).getTime()) return false;
-    if (q.gmraw !== undefined && !(q.gmraw === "in:inbox" ? m.labels?.has("\\Inbox") : true)) return false;
+    const text = m.source.toString("latin1").toLowerCase();
+    const header = (name: string) => new RegExp(`^${name}:\\s*(.*)$`, "im").exec(m.source.toString("latin1"))?.[1]?.toLowerCase() ?? "";
+    if (q.gmraw !== undefined) {
+      // Gmail's own language is stood in for by its simplest part: every plain word must appear in the message.
+      if (q.gmraw === "in:inbox") {
+        if (!m.labels?.has("\\Inbox")) return false;
+      } else if (!q.gmraw.split(/\s+/).filter((w) => w && !w.includes(":") && !w.startsWith("-")).every((w) => text.includes(w.replace(/"/g, "").toLowerCase()))) return false;
+    }
+    if (q.from !== undefined && !header("from").includes(q.from.toLowerCase())) return false;
+    if (q.to !== undefined && !header("to").includes(q.to.toLowerCase())) return false;
+    if (q.subject !== undefined && !header("subject").includes(q.subject.toLowerCase())) return false;
+    if (q.text !== undefined && !text.includes(q.text.toLowerCase())) return false;
+    if (q.body !== undefined && !text.includes(q.body.toLowerCase())) return false;
+    // BEFORE is exclusive and works on the day, as on a real server.
+    if (q.before && m.internalDate.getTime() >= new Date(q.before).getTime()) return false;
+    if (q.not && this.matches(m, q.not, maxUid)) return false;
     if (q.header) {
       for (const [name, value] of Object.entries(q.header)) {
         const line = new RegExp(`^${name}:\\s*(.*)$`, "im").exec(m.source.toString("latin1"))?.[1] ?? "";

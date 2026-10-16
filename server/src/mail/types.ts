@@ -168,6 +168,18 @@ export interface ProviderIdentity {
   signatureHtml?: string;
 }
 
+/** One condition of a search a provider can run for itself. Dates are epoch milliseconds. */
+export type SearchTerm =
+  | { kind: "text"; value: string; neg: boolean }
+  | { kind: "from" | "to" | "subject"; value: string; neg: boolean }
+  | { kind: "attachment"; neg: boolean }
+  | { kind: "after" | "before"; at: number; neg: boolean };
+
+/** Slipstream's search language, cut down to what providers understand: every clause must match, and one term of a clause is enough. */
+export interface ProviderQuery {
+  clauses: SearchTerm[][];
+}
+
 export interface MailProvider {
   readonly kind: ProviderKind;
   /** Pull one page of changes. `cursor` is null for the first sync. */
@@ -184,6 +196,12 @@ export interface MailProvider {
    * A message it can't preview is left out; nothing here may download a whole message.
    */
   fetchPreviews?(remoteIds: string[]): Promise<Map<string, string>>;
+  /**
+   * Search all of the account's mail at the provider, newest first, whatever Slipstream has synced. Summaries only (headers and a
+   * preview where the provider has one, no bodies); the caller stores them and fetches bodies when something is opened.
+   * `next` continues the search and is opaque. Throws when the provider can't answer; the caller reports it per account.
+   */
+  search?(query: ProviderQuery, opts: { limit: number; pageToken?: string }): Promise<{ messages: IncomingMessage[]; next?: string }>;
   /** The account's send-as aliases (Gmail). Throws when the provider can't say; callers keep what they have. */
   listIdentities?(): Promise<ProviderIdentity[]>;
   /** Rename a label at the provider (labels whose remoteId is still a local "name:" placeholder are skipped). */

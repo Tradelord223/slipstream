@@ -44,6 +44,13 @@ Assume some mail will try. Slipstream's defenses are enforced by the server, not
 - **Other web pages can't ask.** Logos load only for Slipstream's own pages. A request from any other site, or from a browser that doesn't say where a request came from, gets nothing, so a web page can't probe which companies email you.
 - **Teammates can't learn from each other.** On a team server each person waits out their own random delay before seeing a logo, even when a teammate's request already fetched it, so how fast a logo appears says nothing about anyone else's mail.
 
+**Searching all your mail sends your search to your mail provider.**
+
+- **What goes out.** When you search (or an agent runs `mail.searchAll`) and the search has words or `from:`, `to:`, `subject:`, `has:attachment` or a date, the words and operators go to each of your own accounts' provider (Gmail, Microsoft or your IMAP server) over the same connection that account already uses for sync. Nothing goes to anyone else. A search of only Slipstream's own operators (`is:`, `label:`) stays on this machine.
+- **No setting.** It is how a search finds mail that isn't stored here, and the provider already holds that mail and your credentials. Searching is never done in the background: it follows a search you typed, a short pause after your last keystroke.
+- **What comes back.** Headers and a short preview of each hit, stored like synced mail. Full text is fetched only when a conversation is opened or an agent reads it.
+- **Limits.** At most 50 results per account per page, and a provider that doesn't answer in about 8 seconds is skipped for that page. A "next page" link from Microsoft is only followed when it still points at Microsoft Graph's own messages, never at another address.
+
 **Someone gets a copy of the database.**
 
 - **Encryption:** sealed with AES-256-GCM are the sign-in tokens and passwords for your mail accounts (OAuth refresh tokens, IMAP passwords), saved AI keys and sign-ins, the cloud agent's key and webhook signing secrets. The key comes from `SLIPSTREAM_SECRET` or a separate 0600 key file (`secret.key`) in the same data folder.
