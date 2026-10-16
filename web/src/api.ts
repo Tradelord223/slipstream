@@ -1,6 +1,6 @@
 import type {
   ActivityItem, AgentInfo, AgentInput, Approval, ExecuteResult, RemoteMode, RemoteStatus, Webhook,
-  Address, Bootstrap, ContactInfo, Contact, Counts, Draft, Identity, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
+  Address, Bootstrap, ContactInfo, Contact, Counts, Discovery, Draft, Identity, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
   ThreadPage, TriageKind, TriageResult, SharedComment,
   CloudConnectInput, CloudRun, CloudStatus, LabelInfo, LabelRule, Routine, RoutineInput,
   AutopilotOverview, AutopilotPatch, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction,
@@ -139,6 +139,7 @@ export const api = {
 
   presets: () => get<{ presets: { id: string; label: string; help: string }[] }>("/api/accounts/presets"),
   connectImap: (body: Record<string, unknown>) => post<{ id: string }>("/api/accounts/imap", body),
+  discover: (email: string) => get<Discovery>(`/api/accounts/discover?email=${encodeURIComponent(email)}`),
   syncAccount: (id: string) => post<{ ok: true }>(`/api/accounts/${id}/sync`),
   removeAccount: (id: string) => del<{ ok: true }>(`/api/accounts/${id}`),
   addIdentity: (accountId: string, body: IdentityInput) => post<Identity>(`/api/accounts/${accountId}/identities`, body),

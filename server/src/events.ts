@@ -2,7 +2,8 @@ import { EventEmitter } from "node:events";
 
 export type ServerEvent =
   | { type: "threads"; accountId: string; threadIds: string[] }
-  | { type: "sync"; accountId: string; status: string; error?: string | null }
+  /** `fetched`: messages stored so far in this sync run, sent with each page while syncing. */
+  | { type: "sync"; accountId: string; status: string; error?: string | null; fetched?: number }
   | { type: "drafts"; draftId: string; status: string; error?: string | null }
   | { type: "team"; workspaceId: string; sharedThreadId: string }
   | { type: "activity"; activityId: string }

@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS: Settings = {
   assistant: "off",
   senderLogos: false,
   helpers: { codes: true, deliveries: "latest", securityAlerts: true, urgent: true },
+  onboarded: false,
 };
 
 export interface Session {
@@ -57,7 +58,7 @@ export const session = createStore<Session>({
   splits: [],
   labels: [],
   settings: DEFAULT_SETTINGS,
-  features: { ai: false, google: false, microsoft: false, undoSendSeconds: 10 },
+  features: { ai: false, google: false, microsoft: false, undoSendSeconds: 10, demo: false },
   snippets: [],
   accountFilter: savedFilter || null,
   logosChoice: null,

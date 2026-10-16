@@ -26,6 +26,8 @@ export interface Account {
   syncStatus: "idle" | "syncing" | "error" | "reauth" | string;
   syncError: string | null;
   lastSyncedAt: number | null;
+  /** When the first full sync finished; null while it's still running. */
+  firstSyncedAt: number | null;
   /** Other addresses this account can send as (aliases, custom domains). */
   identities: Identity[];
 }
@@ -64,6 +66,34 @@ export interface Settings {
   /** Company logos for automated senders, fetched by the server from the sender's own site. Off unless turned on. */
   senderLogos: boolean;
   helpers: Helpers;
+  /** The optional "Make it yours" step after the first account was finished or skipped. */
+  onboarded: boolean;
+}
+
+export type MailHost = "gmail" | "outlook" | "icloud" | "yahoo" | "fastmail" | "zoho" | "proton" | "imap";
+
+export interface ServerSettings {
+  imapHost: string;
+  imapPort: number;
+  imapSecure: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+}
+
+/** GET /api/accounts/discover: where an address's mail lives, from its domain's own DNS (no third party is asked). */
+export interface Discovery {
+  email: string;
+  domain: string;
+  provider: MailHost;
+  /** IMAP preset id (gmail, icloud, fastmail, yahoo, zoho, proton) when one fits. */
+  preset: string | null;
+  /** A one-click sign-in this install can offer for it, when its Google or Microsoft app is set up. */
+  oauth: "google" | "microsoft" | null;
+  /** Server names for "Other" mail, when DNS (SRV records) says so; null when unknown. */
+  servers: ServerSettings | null;
+  /** How it was worked out. */
+  source: "mx" | "srv" | "preset" | "none";
 }
 
 /** Everyday helpers that run on simple rules, no model. */
@@ -94,6 +124,8 @@ export interface Features {
   google: boolean;
   microsoft: boolean;
   undoSendSeconds: number;
+  /** The invented demo mailbox is on (developers: SLIPSTREAM_DEMO=1). When false, a person with no real account sees onboarding. */
+  demo: boolean;
   /** Where this server's source is (AGPL-3.0). */
   sourceUrl?: string;
   /** How to run this install's CLI from another program, with absolute paths (local mode). */
