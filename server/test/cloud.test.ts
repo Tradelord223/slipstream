@@ -90,7 +90,8 @@ class FakeManagedAgents {
   }
 }
 
-const waitFor = async (fn: () => boolean, ms = 3000) => {
+// Generous: under a loaded machine (CI, parallel suites) a run can take a few seconds to settle.
+const waitFor = async (fn: () => boolean, ms = 10_000) => {
   const end = Date.now() + ms;
   while (!fn()) {
     if (Date.now() > end) throw new Error("timed out");

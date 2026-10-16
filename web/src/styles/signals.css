@@ -72,11 +72,8 @@ button.sig-code:active {
   outline: 1px solid var(--paper-edge);
   outline-offset: -1px;
 }
-.mark-slot {
+.row-sender .mark {
   flex: none;
-  width: 18px;
-  height: 18px;
-  display: inline-grid;
 }
 
 /* The card above a message body */

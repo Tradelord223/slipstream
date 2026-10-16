@@ -36,9 +36,9 @@ function SenderMark({ domain, size, fallback = null }: { domain: string; size: n
   );
 }
 
-/** The mark at the start of a list row's sender column. Keeps its slot when logos are on, so names stay aligned. */
+/** The mark at the start of a list row's sender column. Only company senders with a logo get one; people's rows stay flush. */
 export function RowMark({ domain }: { domain: string | null }) {
-  return <span className="mark-slot">{domain && <SenderMark domain={domain} size={18} />}</span>;
+  return domain ? <SenderMark domain={domain} size={18} /> : null;
 }
 
 /** The sender's avatar in a conversation: their company's mark when there is one, initials otherwise. */
