@@ -429,7 +429,7 @@ describe("the assistant switch is enforced by the server", () => {
     await calm();
   });
 
-  test("Autopilot reads no new mail while off, and picks it up when turned on", async () => {
+  test("Autopilot reads no new mail while off, and starts from now when turned back on", async () => {
     await setAssistant("on");
     assert.equal((await env.api("/api/autopilot", { method: "PUT", json: { enabled: true, mode: "suggest" } })).status, 200);
     await sleep(5);
@@ -443,10 +443,15 @@ describe("the assistant switch is enforced by the server", () => {
     await setAssistant("on");
     await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
     await calm();
-    assert.equal(runs("autopilot"), 1);
+    assert.equal(runs("autopilot"), 0, "mail that arrived while it was off isn't sent to a model in one go");
+    await sleep(5);
+    f.ingest(msg({ from: ana, remoteThreadId: "ap2", subject: "One more thing", bodyText: "Can you send the deck?", sentAt: Date.now() }));
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    await calm();
+    assert.equal(runs("autopilot"), 1, "new mail is sorted again");
   });
 
-  test("routines don't start while off, scheduled or triggered by mail, and resume when turned on", async () => {
+  test("routines don't start while off, and resume from now when turned back on", async () => {
     await setAssistant("on");
     await env.api("/api/autopilot", { method: "PUT", json: { enabled: false } });
     const mailRoutine = env.ctx.cloud.saveRoutine(LOCAL_USER_ID, { name: "Ana mail", instruction: "Look at Ana.", trigger: { type: "mail", query: "from:@acme.test" }, enabled: true, engine: "loop:openai" });
@@ -466,10 +471,15 @@ describe("the assistant switch is enforced by the server", () => {
     await setAssistant("on");
     await env.ctx.cloud.tick();
     await calm();
+    assert.equal(rec.messages.length, before, "a missed schedule doesn't fire late, and mail from the off period doesn't trigger");
+    assert.ok(env.ctx.db.get<{ n: number }>("SELECT next_run_at AS n FROM cloud_routines WHERE id = ?", scheduled.id)!.n > Date.now(), "the schedule moved to its next time");
+    await sleep(5);
+    f.ingest(msg({ from: ana, remoteThreadId: "rt2", subject: "Fresh bait", bodyText: "Hello again", sentAt: Date.now() }));
+    await env.ctx.cloud.tick();
+    await calm();
     const started = rec.messages.slice(before);
-    assert.equal(started.length, 2, "both routines run once it is on");
-    assert.ok(started.some((m) => /Look at Ana/.test(m) && /Routine bait/.test(m)));
-    assert.ok(started.some((m) => /Morning round/.test(m)));
+    assert.equal(started.length, 1, "new mail triggers the mail routine again");
+    assert.ok(/Look at Ana/.test(started[0]!) && /Fresh bait/.test(started[0]!));
   });
 
   test("an agent the person connected themselves works whether it is on or off", async () => {

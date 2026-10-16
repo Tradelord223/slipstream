@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/wordmark-dark.svg">
-    <img src="docs/brand/wordmark-light.svg" alt="Slipstream" width="360">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/brand/wordmark-dark.svg">
+    <img src="https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/brand/wordmark-light.svg" alt="Slipstream" width="360">
   </picture>
 </p>
 
@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/slipstream-mail"><img src="https://img.shields.io/npm/v/slipstream-mail?label=npm&color=0b7f66" alt="npm version"></a>
   <a href="https://github.com/Tradelord223/slipstream/actions/workflows/ci.yml"><img src="https://github.com/Tradelord223/slipstream/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-0b7f66" alt="License: AGPL-3.0"></a>
+  <a href="https://github.com/Tradelord223/slipstream/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-0b7f66" alt="License: AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A522.18-0b7f66" alt="Node.js 22.18 or newer">
 </p>
 
@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/inbox-dark.png" alt="The Slipstream inbox: a split inbox with one-key triage" width="900">
+  <img src="https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/inbox-dark.png" alt="The Slipstream inbox: a split inbox with one-key triage" width="900">
 </p>
 
 Slipstream is an open-source, keyboard-first email client. It works with Gmail, Outlook and any IMAP server, and keeps your mail in a local database so every keystroke is instant. It runs on your laptop or on your team's own server. Your AI agents get the same powers you have, through MCP, an HTTP API and a CLI. You see everything they do, approve what matters, and undo the rest. And if you don't want AI at all, it stays out of your way.
@@ -88,8 +88,8 @@ Slipstream keeps the speed and drops the rest.
 **AI, only if you want it**
 
 - **Off by default.** Slipstream works fully without AI, and the assistant stays hidden until you turn it on. Then you get one-key summaries and reply suggestions, the assistant sidebar and Autopilot.
-- **Autopilot.** New mail is sorted as it arrives: what needs you stays, receipts and notices are labelled and cleared, later things come back when they matter, and replies are drafted in your voice for you to send. Every decision shows its reason and can be undone, and it learns from what you change. It can't send. See [docs/autopilot.md](docs/autopilot.md).
-- **Any model you already have.** Sign in with ChatGPT, use your own Claude Code or Codex, or paste a Claude, OpenAI, Gemini or OpenRouter key. Pick per conversation; every model works through the same commands, approvals and undo. See [docs/models.md](docs/models.md).
+- **Autopilot.** New mail is sorted as it arrives: what needs you stays, receipts and notices are labelled and cleared, later things come back when they matter, and replies are drafted in your voice for you to send. Every decision shows its reason and can be undone, and it learns from what you change. It can't send. See [docs/autopilot.md](https://github.com/Tradelord223/slipstream/blob/main/docs/autopilot.md).
+- **Any model you already have.** Sign in with ChatGPT, use your own Claude Code or Codex, or paste a Claude, OpenAI, Gemini or OpenRouter key. Pick per conversation; every model works through the same commands, approvals and undo. See [docs/models.md](https://github.com/Tradelord223/slipstream/blob/main/docs/models.md).
 - **A cloud agent with one API key.** Paste an Anthropic key and Claude works your inbox on Anthropic's Managed Agents, through Slipstream's own actions. Ask it anything, or give it routines ("weekdays at 8: triage and draft replies", "when client mail arrives: draft a reply"). It has hard budgets per run and per month, and sending still waits for you.
 
 ## Built for agents
@@ -110,24 +110,24 @@ claude mcp add --transport http slipstream http://127.0.0.1:4380/mcp \
 slipstream mail.search --query "is:unread from:@client.com" --limit 5
 ```
 
-**claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI. Full guide: [docs/agent-api.md](docs/agent-api.md).
+**claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI. Full guide: [docs/agent-api.md](https://github.com/Tradelord223/slipstream/blob/main/docs/agent-api.md).
 
 ## See it
 
 | | |
 |---|---|
-| ![Everyday helpers: copy a sign-in code, see a package's status, spot sign-in alerts](docs/screenshots/helpers-dark.png) | ![A one-time code, ready to copy with Shift+C](docs/screenshots/code-dark.png) |
-| ![Autopilot: every new conversation sorted, with its reason](docs/screenshots/autopilot-dark.png) | ![Models & accounts: ChatGPT, Claude Code, Codex or your own keys](docs/screenshots/models-dark.png) |
-| ![The assistant in the sidebar, working on the open conversation](docs/screenshots/assistant-dark.png) | ![Review: approve or reject what agents want to do](docs/screenshots/review-dark.png) |
-| ![The cloud agent: chats, routines and budget](docs/screenshots/agent-dark.png) | ![Labels with colors, nesting and auto-label rules](docs/screenshots/labels-dark.png) |
-| ![Conversation](docs/screenshots/thread-dark.png) | ![Compose with snippets](docs/screenshots/compose-dark.png) |
-| ![Remind me](docs/screenshots/remind-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |
-| ![Privacy & safety: what's stored where and what any model sees](docs/screenshots/privacy-dark.png) | ![Send from your aliases and custom domains](docs/screenshots/settings-accounts-dark.png) |
-| ![Connect an assistant over MCP](docs/screenshots/connect-dark.png) | ![Light theme](docs/screenshots/inbox-light.png) |
+| ![Everyday helpers: copy a sign-in code, see a package's status, spot sign-in alerts](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/helpers-dark.png) | ![A one-time code, ready to copy with Shift+C](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/code-dark.png) |
+| ![Autopilot: every new conversation sorted, with its reason](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/autopilot-dark.png) | ![Models & accounts: ChatGPT, Claude Code, Codex or your own keys](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/models-dark.png) |
+| ![The assistant in the sidebar, working on the open conversation](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/assistant-dark.png) | ![Review: approve or reject what agents want to do](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/review-dark.png) |
+| ![The cloud agent: chats, routines and budget](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/agent-dark.png) | ![Labels with colors, nesting and auto-label rules](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/labels-dark.png) |
+| ![Conversation](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/thread-dark.png) | ![Compose with snippets](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/compose-dark.png) |
+| ![Remind me](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/remind-dark.png) | ![Command palette](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/palette-dark.png) |
+| ![Privacy & safety: what's stored where and what any model sees](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/privacy-dark.png) | ![Send from your aliases and custom domains](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/settings-accounts-dark.png) |
+| ![Connect an assistant over MCP](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/connect-dark.png) | ![Light theme](https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/inbox-light.png) |
 
 ## Connect your mail
 
-Settings → Accounts. Gmail works in two minutes with an app password over IMAP. Google and Microsoft OAuth take a one-time setup, because each install brings its own OAuth app. Full guide: [docs/connect-accounts.md](docs/connect-accounts.md).
+Settings → Accounts. Gmail works in two minutes with an app password over IMAP. Google and Microsoft OAuth take a one-time setup, because each install brings its own OAuth app. Full guide: [docs/connect-accounts.md](https://github.com/Tradelord223/slipstream/blob/main/docs/connect-accounts.md).
 
 ## Run it for a team
 
@@ -138,7 +138,7 @@ fly secrets set SLIPSTREAM_SECRET="$(openssl rand -base64 32)"
 fly deploy
 ```
 
-Fly.io is the recommended host: one always-on machine with a volume, about $4 a month at October 2026 prices. Docker Compose works on any server (the compose file is 19 lines), and Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](docs/self-hosting.md).
+Fly.io is the recommended host: one always-on machine with a volume, about $4 a month at October 2026 prices. Docker Compose works on any server (the compose file is 19 lines), and Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](https://github.com/Tradelord223/slipstream/blob/main/docs/self-hosting.md).
 
 ## Fast, measured
 
@@ -165,21 +165,21 @@ Provider round-trips never block you: actions apply locally first and reach Gmai
 - **Your copy stays yours.** Mail stays in Slipstream's own data folder on your computer or server. Account sign-ins and keys are encrypted.
 - **No surprise AI.** No model sees your mail until you turn a feature on, and then only what that feature needs.
 
-**Settings → Privacy & safety** says all of this in plain words, and [docs/security.md](docs/security.md) has the details. Found a problem? Please report it privately; see [SECURITY.md](SECURITY.md).
+**Settings → Privacy & safety** says all of this in plain words, and [docs/security.md](https://github.com/Tradelord223/slipstream/blob/main/docs/security.md) has the details. Found a problem? Please report it privately; see [SECURITY.md](https://github.com/Tradelord223/slipstream/blob/main/SECURITY.md).
 
 ## Documentation
 
 | Guide | What's in it |
 |---|---|
-| [Connect accounts](docs/connect-accounts.md) | Gmail, Outlook, IMAP, aliases and imports |
-| [Agents and the API](docs/agent-api.md) | MCP, the HTTP API, the CLI, webhooks, remote access |
-| [Choose a model](docs/models.md) | ChatGPT sign-in, Claude Code, Codex, API keys |
-| [Autopilot](docs/autopilot.md) | How new mail is sorted, and how to evaluate it |
-| [Self-hosting](docs/self-hosting.md) | Fly.io, Docker, Render, Railway, backups, settings |
-| [Security](docs/security.md) | Rendering, storage, encryption, what models see |
-| [Architecture](docs/architecture.md) | How the server, store and web app fit together |
-| [How it was built](docs/reverse-engineering.md) | The clean-room approach, from public material only |
-| [Roadmap](ROADMAP.md) | What's next, and what isn't verified yet |
+| [Connect accounts](https://github.com/Tradelord223/slipstream/blob/main/docs/connect-accounts.md) | Gmail, Outlook, IMAP, aliases and imports |
+| [Agents and the API](https://github.com/Tradelord223/slipstream/blob/main/docs/agent-api.md) | MCP, the HTTP API, the CLI, webhooks, remote access |
+| [Choose a model](https://github.com/Tradelord223/slipstream/blob/main/docs/models.md) | ChatGPT sign-in, Claude Code, Codex, API keys |
+| [Autopilot](https://github.com/Tradelord223/slipstream/blob/main/docs/autopilot.md) | How new mail is sorted, and how to evaluate it |
+| [Self-hosting](https://github.com/Tradelord223/slipstream/blob/main/docs/self-hosting.md) | Fly.io, Docker, Render, Railway, backups, settings |
+| [Security](https://github.com/Tradelord223/slipstream/blob/main/docs/security.md) | Rendering, storage, encryption, what models see |
+| [Architecture](https://github.com/Tradelord223/slipstream/blob/main/docs/architecture.md) | How the server, store and web app fit together |
+| [How it was built](https://github.com/Tradelord223/slipstream/blob/main/docs/reverse-engineering.md) | The clean-room approach, from public material only |
+| [Roadmap](https://github.com/Tradelord223/slipstream/blob/main/ROADMAP.md) | What's next, and what isn't verified yet |
 
 ## Develop
 
@@ -197,11 +197,11 @@ npm run build && npm start
 - **Server:** TypeScript run directly by Node, with no build step in development. Hono for HTTP, `node:sqlite` with FTS5 for storage. No native npm dependencies: SQLite comes with Node.
 - **Web app:** React and Vite, with plain CSS.
 
-Contributions are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) explains how to get a change in.
+Contributions are welcome; [CONTRIBUTING.md](https://github.com/Tradelord223/slipstream/blob/main/CONTRIBUTING.md) explains how to get a change in.
 
 ## License
 
-Slipstream is licensed under the [GNU AGPL v3.0](LICENSE). Use it, run it for your company, change it.
+Slipstream is licensed under the [GNU AGPL v3.0](https://github.com/Tradelord223/slipstream/blob/main/LICENSE). Use it, run it for your company, change it.
 
 - **Running a modified version:** if you run it for other people over a network, the AGPL asks you to offer them its source. Set `SLIPSTREAM_SOURCE_URL` so the app's source link points at your version.
 - **Third-party software:** bundled software and fonts keep their own licenses, listed in `THIRD_PARTY_LICENSES.txt` in every build.

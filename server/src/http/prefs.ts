@@ -5,6 +5,7 @@ import type { AppContext, Env } from "../context.ts";
 import { newId } from "../lib/crypto.ts";
 import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
 import { compile } from "../mail/query.ts";
+import { assistantSetting } from "../agents/assistant.ts";
 
 /** Settings the client may read and write. Anything else is rejected. */
 const settingsSchema = z
@@ -45,6 +46,8 @@ export function prefsRoutes(ctx: AppContext) {
   app.put("/settings", async (c) => {
     const user = c.get("user");
     const body = settingsSchema.parse(await c.req.json());
+    // Switching the assistant back on resumes from now rather than catching up on everything that arrived while it was off.
+    const resuming = body.assistant === "on" && assistantSetting(ctx, user.id) === "off";
     db.tx(() => {
       for (const [k, v] of Object.entries(body)) {
         if (v === undefined) continue;
@@ -57,6 +60,10 @@ export function prefsRoutes(ctx: AppContext) {
         );
       }
     });
+    if (resuming) {
+      ctx.autopilot.resumeFromNow(user.id);
+      ctx.cloud.resumeRoutinesFromNow(user.id);
+    }
     return c.json({ ok: true });
   });
 

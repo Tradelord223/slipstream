@@ -153,6 +153,8 @@ try {
   // A custom-domain address beside the demo account, for the From picker and Settings → Accounts.
   const demo = (await call("GET", "/api/bootstrap")).accounts[0];
   await call("POST", `/api/accounts/${demo.id}/identities`, { email: "jordan@studio.fernpoint.co", name: "Jordan Reyes · Studio" });
+  // Everyday shots show the default: the built-in assistant off. It's turned on for the AI shots further down.
+  await call("PUT", "/api/settings", { assistant: "off" });
 
   const browser = await chromium.launch({ headless: true, executablePath: chromePath() });
   const shot = (page, name) => page.screenshot({ path: join(out, `${name}.png`) });
@@ -259,6 +261,7 @@ try {
   await mobile.close();
 
   // Agents: Review, Activity, Settings -> Agents and Connect.
+  await call("PUT", "/api/settings", { assistant: "on" });
   await seedAgents();
   await call("POST", "/api/webhooks", { url: "https://hooks.fernpoint.example/slipstream", events: ["approval"] });
   const agentsDark = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark", timezoneId: "America/New_York" });

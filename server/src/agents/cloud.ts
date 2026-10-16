@@ -882,6 +882,15 @@ export class CloudAgent {
     }
   }
 
+  /** The assistant was switched back on: schedules missed while it was off don't fire late, and mail routines start from now. */
+  resumeRoutinesFromNow(userId: string, now = Date.now()) {
+    for (const r of this.ctx.db.all<RoutineRow>("SELECT * FROM cloud_routines WHERE user_id = ?", userId)) {
+      const t = JSON.parse(r.trigger) as z.infer<typeof trigger>;
+      if (t.type === "schedule") this.ctx.db.run("UPDATE cloud_routines SET next_run_at = ? WHERE id = ?", nextScheduled(t.days, t.time, t.timezone, now), r.id);
+      else this.ctx.db.run("UPDATE cloud_routines SET last_checked_at = ? WHERE id = ?", now, r.id);
+    }
+  }
+
   /** Fire due schedules, and mail routines whose search matches newly arrived mail. */
   async tick(now = Date.now()) {
     const due = this.ctx.db.all<RoutineRow>("SELECT * FROM cloud_routines WHERE enabled = 1");

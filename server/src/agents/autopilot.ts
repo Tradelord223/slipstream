@@ -196,6 +196,13 @@ export class Autopilot {
     return this.overview(userId);
   }
 
+  /** The assistant was switched back on: start from now, so mail that arrived while it was off isn't sent to a model in one go. */
+  resumeFromNow(userId: string, now = Date.now()) {
+    const cur = this.settings(userId);
+    this.save(userId, { ...cur, since: now, backfillFrom: null });
+    this.lastFailure.delete(userId);
+  }
+
   /** Process conversations sent in the last `days` too. */
   backfill(userId: string, days: number) {
     const s = this.settings(userId);
