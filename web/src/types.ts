@@ -32,6 +32,8 @@ export interface Account {
   importing?: boolean;
   /** Messages the archive import has stored so far, for a screen that opened mid-import. */
   imported?: number;
+  /** IMAP preset it was connected with (gmail, icloud, fastmail, yahoo, zoho, proton); null otherwise. */
+  preset?: string | null;
   /** Other addresses this account can send as (aliases, custom domains). */
   identities: Identity[];
 }
@@ -208,6 +210,9 @@ export interface Message {
   canUnsubscribe: boolean;
   /** Sent by a list or automated system. */
   isBulk: boolean;
+  /** "cached": text/html hold the full message. "none": only the preview is here (text is the snippet, html null);
+   * GET /api/threads/:id/bodies brings the full text from the provider. */
+  bodyState: "cached" | "none";
   logoDomain: string | null;
   signals: Signal[];
   attachments: Attachment[];
@@ -662,3 +667,18 @@ export interface AutopilotOverview {
 }
 
 export type AutopilotPatch = Partial<Pick<AutopilotSettings, "enabled" | "mode" | "engine" | "playbook" | "draftReplies" | "voice">>;
+
+/** GET /api/threads/:id/bodies?ids=a,b: full text for messages that only had a preview. */
+export interface MessageBodies {
+  messages: { id: string; text: string; html: string | null; attachments: Attachment[] }[];
+  /** Messages the provider couldn't return right now, with a plain reason. */
+  failed: { id: string; error: string }[];
+}
+
+/** Where a sync is, for the onboarding progress screen and the rail. Counts are exact; `total` is null until known. */
+export interface SyncProgress {
+  stage: "signin" | "inbox" | "recent" | "history" | "done";
+  done: number;
+  total: number | null;
+}
+

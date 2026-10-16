@@ -3,7 +3,15 @@ import { EventEmitter } from "node:events";
 export type ServerEvent =
   | { type: "threads"; accountId: string; threadIds: string[] }
   /** `fetched`: messages stored so far in this sync run, sent with each page while syncing. */
-  | { type: "sync"; accountId: string; status: string; error?: string | null; fetched?: number }
+  | {
+      type: "sync";
+      accountId: string;
+      status: string;
+      error?: string | null;
+      fetched?: number;
+      /** Exact progress of the current stage (see web/src/types.ts SyncProgress). */
+      progress?: { stage: "signin" | "inbox" | "recent" | "history" | "done"; done: number; total: number | null };
+    }
   | { type: "drafts"; draftId: string; status: string; error?: string | null }
   | { type: "team"; workspaceId: string; sharedThreadId: string }
   | { type: "activity"; activityId: string }
