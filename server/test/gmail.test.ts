@@ -364,6 +364,39 @@ describe("Gmail actions", () => {
   });
 });
 
+describe("Gmail send-as list", () => {
+  it("keeps verified aliases, with name, reply-to and a sanitized signature", async () => {
+    stub = new FetchStub().on("GET", `${BASE}/settings/sendAs`, {
+      sendAs: [
+        { sendAsEmail: "me@example.com", isPrimary: true, isDefault: true, verificationStatus: "accepted" },
+        { sendAsEmail: "help@fernpoint.test", displayName: "Fernpoint Help", replyToAddress: "desk@fernpoint.test", signature: "<p>Best</p><script>x()</script>", verificationStatus: "accepted" },
+        { sendAsEmail: "legacy@fernpoint.test", displayName: "", replyToAddress: "", signature: "" },
+        { sendAsEmail: "later@fernpoint.test", verificationStatus: "pending" },
+        { sendAsEmail: "ME@example.com" },
+      ],
+    });
+    const { gmail } = newProvider();
+    assert.deepEqual(await gmail.listIdentities(), [
+      { email: "help@fernpoint.test", name: "Fernpoint Help", replyTo: "desk@fernpoint.test", signatureHtml: "<p>Best</p>" },
+      { email: "legacy@fernpoint.test", name: "", replyTo: undefined, signatureHtml: undefined },
+    ]);
+  });
+
+  it("returns nothing for an account with no aliases", async () => {
+    stub = new FetchStub().on("GET", `${BASE}/settings/sendAs`, {});
+    assert.deepEqual(await newProvider().gmail.listIdentities(), []);
+  });
+
+  it("reports a missing permission as a sign-in problem, not as an empty list", async () => {
+    stub = new FetchStub().on(
+      "GET",
+      `${BASE}/settings/sendAs`,
+      json({ error: { code: 403, message: "Request had insufficient authentication scopes.", errors: [{ reason: "insufficientPermissions" }] } }, 403),
+    );
+    await assert.rejects(newProvider().gmail.listIdentities(), ProviderAuthError);
+  });
+});
+
 describe("Gmail authentication", () => {
   it("refreshes the token on a 401, saves it, and retries", async () => {
     stub = new FetchStub()

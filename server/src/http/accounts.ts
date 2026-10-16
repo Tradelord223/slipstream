@@ -9,6 +9,7 @@ import { HttpError } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 import { newId, randomToken } from "../lib/crypto.ts";
 import { readMailFile } from "../import/mailfile.ts";
+import { addIdentity, removeIdentity, updateIdentity } from "../mail/identities.ts";
 import type { AccountRow } from "../mail/store.ts";
 import type { IncomingMessage } from "../mail/types.ts";
 import { IMAP_PRESETS, verifyImap, type ImapSettings } from "../providers/imap.ts";
@@ -106,6 +107,31 @@ export function accountRoutes(ctx: AppContext) {
     const acc = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ? AND user_id = ?", c.req.param("id"), user.id);
     if (!acc) throw new HttpError(404, "Account not found");
     db.run("UPDATE accounts SET name = coalesce(?, name), color = coalesce(?, color) WHERE id = ?", body.name ?? null, body.color ?? null, acc.id);
+    return c.json({ ok: true });
+  });
+
+  // ---- Send-as identities --------------------------------------------------
+
+  const emailField = z.string().trim().toLowerCase().max(320).pipe(z.email());
+  const identityBody = z.object({
+    email: emailField,
+    name: z.string().trim().max(120).default(""),
+    replyTo: emailField.nullable().optional(),
+    signatureHtml: z.string().max(100_000).nullable().optional(),
+  });
+
+  app.post("/accounts/:id/identities", async (c) => {
+    const body = identityBody.parse(await c.req.json());
+    return c.json(addIdentity(db, c.get("user").id, c.req.param("id"), body));
+  });
+
+  app.patch("/accounts/:id/identities/:identityId", async (c) => {
+    const body = identityBody.partial().parse(await c.req.json());
+    return c.json(updateIdentity(db, c.get("user").id, c.req.param("id"), c.req.param("identityId"), body));
+  });
+
+  app.delete("/accounts/:id/identities/:identityId", (c) => {
+    removeIdentity(db, c.get("user").id, c.req.param("id"), c.req.param("identityId"));
     return c.json({ ok: true });
   });
 

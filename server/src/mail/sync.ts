@@ -4,15 +4,19 @@ import type { Events } from "../events.ts";
 import type { SecretBox } from "../lib/crypto.ts";
 import { createProvider } from "../providers/index.ts";
 import { buildOutgoing } from "./compose.ts";
+import { resolveFrom, syncProviderIdentities } from "./identities.ts";
 import type { AccountRow, MailStore } from "./store.ts";
 import { PermanentProviderError, ProviderAuthError, type Address, type MailProvider, type RemoteAction } from "./types.ts";
 
 const MAX_ATTEMPTS = 6;
+/** How often an account's send-as list is read from its provider. */
+const IDENTITY_REFRESH_MS = 6 * 3_600_000;
 
 interface DraftRow {
   id: string;
   user_id: string;
   account_id: string;
+  from_email: string | null;
   thread_id: string | null;
   reply_to_message_id: string | null;
   to_json: string;
@@ -30,6 +34,8 @@ interface DraftRow {
 export class SyncEngine {
   private providers = new Map<string, MailProvider>();
   private running = new Set<string>();
+  /** When each account's send-as list was last read; empty after a restart, so the first sync reads it. */
+  private identitiesReadAt = new Map<string, number>();
   private timers: NodeJS.Timeout[] = [];
   private draining = false;
 
@@ -95,7 +101,24 @@ export class SyncEngine {
   async forget(accountId: string): Promise<void> {
     const p = this.providers.get(accountId);
     this.providers.delete(accountId);
+    this.identitiesReadAt.delete(accountId);
     await p?.close?.().catch(() => {});
+  }
+
+  /**
+   * Refresh the account's provider-sourced send-as addresses. It never fails the sync: if the provider can't say
+   * (no permission, outage) the addresses already stored stay as they are, and the next try waits a full interval.
+   */
+  private async refreshIdentities(account: AccountRow, provider: MailProvider): Promise<void> {
+    if (!provider.listIdentities) return;
+    const now = Date.now();
+    if (now - (this.identitiesReadAt.get(account.id) ?? 0) < IDENTITY_REFRESH_MS) return;
+    this.identitiesReadAt.set(account.id, now);
+    try {
+      syncProviderIdentities(this.db, account.id, await provider.listIdentities());
+    } catch (err) {
+      console.warn(`[slipstream] send-as list for ${account.email}:`, err instanceof Error ? err.message : err);
+    }
   }
 
   async syncAll(): Promise<void> {
@@ -134,6 +157,7 @@ export class SyncEngine {
         if (touched.length) this.events.emitToUser(account.user_id, { type: "threads", accountId, threadIds: touched });
         if (page.done) break;
       }
+      await this.refreshIdentities(account, provider);
       setStatus("idle");
     } catch (err) {
       if (err instanceof ProviderAuthError) setStatus("reauth", err.message);
@@ -287,9 +311,12 @@ export class SyncEngine {
       .map((a) => ({ filename: a.filename, mimeType: a.mime_type, content: this.store.readBlob(a.blob_sha256)! }))
       .filter((a) => a.content);
 
-    const from: Address = { name: account.name, email: account.email };
+    // Checked again now: the address may have been removed since the draft was written or queued.
+    const sender = resolveFrom(this.db, account.id, d.from_email);
+    const from: Address = { name: sender.name, email: sender.email };
     const outgoing = await buildOutgoing({
       from,
+      replyTo: sender.replyTo ?? undefined,
       to: JSON.parse(d.to_json),
       cc: JSON.parse(d.cc_json),
       bcc: JSON.parse(d.bcc_json),
@@ -313,6 +340,7 @@ export class SyncEngine {
           inReplyTo,
           references,
           from,
+          replyTo: sender.replyTo ?? undefined,
           to: outgoing.to,
           cc: outgoing.cc,
           bcc: outgoing.bcc,

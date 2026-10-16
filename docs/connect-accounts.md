@@ -57,6 +57,16 @@ Microsoft has turned off password sign-in for Outlook.com and Exchange Online IM
 
 Settings → Accounts → **Connect another mail server**. Presets fill in the server names for iCloud, Fastmail, Yahoo, Zoho and Proton Mail Bridge; choose **Other** to type your own IMAP and SMTP hosts. Most providers want an app-specific password rather than your main one.
 
+## Send from an alias or your own domain
+
+An account can send as more than one address, such as `help@fernpoint.co` or an old address you still use. In a draft, pick the address in the From field. When you reply to a message that was sent to one of your aliases, Slipstream replies from that same alias.
+
+- **Gmail (signed in with Google):** aliases show up on their own once you've added and verified them in Gmail under Settings → See all settings → Accounts and Import → Send mail as. Slipstream checks again every few hours. Change or remove an alias in Gmail, not in Slipstream.
+- **Outlook and other mail servers (IMAP):** add the address yourself in Settings → Accounts, under the account. You can give it a name, a reply-to address and a signature. Your mail provider has to allow sending from that address, or it may refuse the message or rewrite the From. For a custom domain, that usually means adding the address as an alias in your provider's settings first.
+- **Gmail with an app password:** add aliases by hand, the same as for any other mail server.
+
+If you remove an address that a queued message was going to use, that message fails with a plain note instead of going out from a different address.
+
 ## Importing an export
 
 Settings → Accounts → **Import mail**, then drop one or more files:

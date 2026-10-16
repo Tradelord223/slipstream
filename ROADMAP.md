@@ -33,6 +33,7 @@
 ## Not verified yet
 
 - Live Gmail and Microsoft OAuth sign-in. This needs each installer's own OAuth app.
+- Sending from Gmail aliases and Outlook aliases. Gmail's alias list is read with the access Slipstream already asks for, but nobody has sent real mail from an alias yet. Outlook (Microsoft Graph) sending from an alias isn't confirmed for personal accounts, so Outlook and IMAP aliases are added by hand.
 - Tailscale Funnel on a real tailnet.
 - The cloud agent against the live Managed Agents API. Tests use a local stand-in.
 - Every engine against its live provider: ChatGPT sign-in, the four API keys, and real Claude Code and Codex runs. Tests use stand-ins for each API and scripted CLIs that call Slipstream's real MCP endpoint.

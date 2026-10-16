@@ -8,6 +8,7 @@ import { HttpError } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 import type { ServerEvent } from "../events.ts";
 import { triageCommandName } from "../commands/catalog.ts";
+import { listIdentities } from "../mail/identities.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
 import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, shapeRow, type SplitRow, type ThreadListRow } from "../mail/views.ts";
 import type { AccountRow } from "../mail/store.ts";
@@ -221,6 +222,7 @@ export function mailRoutes(ctx: AppContext) {
       syncStatus: a.sync_status,
       syncError: a.sync_error,
       lastSyncedAt: a.last_synced_at,
+      identities: listIdentities(db, a.id),
     }));
     const splits = db
       .all<SplitRow>("SELECT * FROM splits WHERE user_id = ? ORDER BY position", user.id)
