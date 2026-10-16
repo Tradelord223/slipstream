@@ -5,6 +5,7 @@ import { formatWhen } from "../lib/when.ts";
 import type { Address, Draft, DraftAttachment, Snippet, ThreadDetail } from "../types.ts";
 import { createStore, useStore } from "./createStore.ts";
 import { removeLocally, undo as undoTriage } from "./actions.ts";
+import { ensureBodies } from "./bodies.ts";
 import { reload } from "./list.ts";
 import { getRoute, navigate } from "./route.ts";
 import { accountById, myEmails, session } from "./session.ts";
@@ -118,13 +119,22 @@ export function startNew(seed: { to?: Address[]; subject?: string } = {}) {
   start({ kind: "new", accountId, fromEmail: accountById(accountId)?.email ?? "", to: seed.to ?? [], subject: seed.subject ?? "", initialBody: body });
 }
 
-export function startReply(detail: ThreadDetail, kind: Exclude<ComposeKind, "new">, inline: boolean) {
+export async function startReply(detail: ThreadDetail, kind: Exclude<ComposeKind, "new">, inline: boolean) {
   const st = compose.get();
   if (st.open && st.threadId === detail.thread.id && st.kind === kind) {
     focusCompose();
     return;
   }
-  if (st.open) void closeCompose();
+  // The quote is the message being answered, so a message that only has its preview is fetched whole first.
+  if (replyTarget(detail.messages, myEmails()).bodyState === "none") {
+    const { failed } = await ensureBodies(detail.thread.id, [replyTarget(detail.messages, myEmails()).id]);
+    if (failed.length > 0) {
+      toast.error("Couldn't load this message to quote it. Try again.");
+      return;
+    }
+    detail = cachedThread(detail.thread.id) ?? detail;
+  }
+  if (compose.get().open) void closeCompose();
   const mine = myEmails();
   const account = accountById(detail.thread.accountId);
   const fromEmail = defaultFrom(account, replyTarget(detail.messages, mine));

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { bytes, displayName, firstName, listTime, longTime, ownAddresses } from "../lib/format.ts";
 import { pickSignal } from "../lib/signals.ts";
+import { useBodyStatus } from "../store/bodies.ts";
 import { useSession } from "../store/session.ts";
 import type { Account, Address, Message } from "../types.ts";
 import { EmailBody } from "./EmailBody.tsx";
@@ -25,6 +26,7 @@ export function MessageCard({
   codeShortcut = false,
   onToggle,
   onReply,
+  onRetry,
 }: {
   message: Message;
   expanded: boolean;
@@ -36,8 +38,11 @@ export function MessageCard({
   codeShortcut?: boolean;
   onToggle: () => void;
   onReply: (kind: "reply" | "replyAll" | "forward") => void;
+  /** Ask for the full text again after it couldn't be loaded. */
+  onRetry?: () => void;
 }) {
   const [details, setDetails] = useState(false);
+  const bodyStatus = useBodyStatus(message.id);
   const mine = ownAddresses(accounts);
   const helpers = useSession((x) => x.settings.helpers);
   const codeFresh = useCodeFresh(message.sentAt);
@@ -110,6 +115,19 @@ export function MessageCard({
       )}
       {signal && <SignalCard message={message} signal={signal} shortcut={codeShortcut} />}
       <EmailBody message={message} />
+      {message.bodyState === "none" &&
+        (bodyStatus === "failed" ? (
+          <p className="body-pending body-pending-error" role="alert">
+            Couldn't load this message{" "}
+            <button className="link-btn" onClick={onRetry}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <p className="body-pending" role="status">
+            Loading the full message…
+          </p>
+        ))}
       {files.length > 0 && (
         <ul className="attachments" aria-label="Attachments">
           {files.map((a) => (

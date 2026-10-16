@@ -64,7 +64,7 @@ export function teamRoutes(ctx: AppContext) {
     return c.json({ ok: true });
   });
 
-  app.post("/threads/:id/share", (c) => c.json({ id: shareThread(ctx, c.get("user").id, c.req.param("id")).id }));
+  app.post("/threads/:id/share", async (c) => c.json({ id: (await shareThread(ctx, c.get("user").id, c.req.param("id"))).id }));
 
   app.get("/shared", (c) => {
     const user = c.get("user");

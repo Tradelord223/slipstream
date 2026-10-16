@@ -5,6 +5,7 @@
  */
 import type { FetchMessageObject, FetchQueryObject, ListResponse, MailboxObject, SearchObject } from "imapflow";
 import type { ImapClient } from "../src/providers/imap.ts";
+import { headerBlock, partBytes, structureOf } from "./mime-fake.ts";
 
 export interface FakeMessage {
   uid: number;
@@ -40,6 +41,10 @@ export class FakeServer {
   appended: { path: string; raw: Buffer; flags: string[] }[] = [];
   failAppend = false;
   log: string[] = [];
+  /** Whole messages handed out (a FETCH asking for the source): a first sync should never need one. */
+  fullFetches = 0;
+  /** Partial text fetches (BODY[part]<0.n>), as the provider asked for them. */
+  partFetches: { key: string; maxLength: number | undefined }[] = [];
 
   constructor(opts: FakeOptions = {}) {
     this.capabilities = new Set(opts.capabilities ?? ["IMAP4rev1", "UIDPLUS", "MOVE", "ESEARCH"]);
@@ -220,7 +225,22 @@ export class FakeConn {
     if (q.labels && this.capabilities.has("X-GM-EXT-1")) out.labels = new Set(m.labels ?? []);
     if (q.threadId && m.threadId) out.threadId = m.threadId;
     if (q.internalDate) out.internalDate = m.internalDate;
-    if (q.source) out.source = m.source;
+    if (q.source) {
+      out.source = m.source;
+      this.server.fullFetches++;
+    }
+    if (q.size) out.size = m.source.length;
+    if (q.bodyStructure) out.bodyStructure = structureOf(m.source);
+    if (Array.isArray(q.headers)) out.headers = headerBlock(m.source, q.headers);
+    if (q.bodyParts?.length) {
+      out.bodyParts = new Map();
+      for (const part of q.bodyParts) {
+        const key = typeof part === "string" ? part : part.key;
+        this.server.partFetches.push({ key, maxLength: typeof part === "string" ? undefined : part.maxLength });
+        const bytes = partBytes(m.source, key);
+        if (bytes) out.bodyParts.set(key.toLowerCase(), typeof part === "string" || !part.maxLength ? bytes : bytes.subarray(0, part.maxLength));
+      }
+    }
     if (this.server.condstore) out.modseq = m.modseq;
     return out;
   }
@@ -261,6 +281,7 @@ export class FakeConn {
       if (!ranges.some(([a, b]) => m.uid >= a && m.uid <= b)) return false;
     }
     if (q.since && m.internalDate.getTime() < new Date(q.since).getTime()) return false;
+    if (q.gmraw !== undefined && !(q.gmraw === "in:inbox" ? m.labels?.has("\\Inbox") : true)) return false;
     if (q.header) {
       for (const [name, value] of Object.entries(q.header)) {
         const line = new RegExp(`^${name}:\\s*(.*)$`, "im").exec(m.source.toString("latin1"))?.[1] ?? "";

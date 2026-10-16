@@ -138,7 +138,7 @@ describe("Autopilot", () => {
     assert.equal(runs(), before, "nothing new, no run");
   });
 
-  test("the prompt fences email text so it can't pose as Slipstream's own markup", () => {
+  test("the prompt fences email text so it can't pose as Slipstream's own markup", async () => {
     ingest([
       msg({
         from: { name: "Mallory", email: "mallory@evil.test" },
@@ -149,14 +149,14 @@ describe("Autopilot", () => {
     ]);
     const t = thread("inject");
     env.ctx.db.run("INSERT INTO autopilot_items (id, user_id, thread_id, message_id, stage, created_at) SELECT 'api_x', ?, ?, id, 'deciding', ? FROM messages WHERE thread_id = ?", LOCAL_USER_ID, t.id, Date.now(), t.id);
-    const prompt = env.ctx.autopilot.decidePrompt(LOCAL_USER_ID, ["api_x"]);
+    const prompt = await env.ctx.autopilot.decidePrompt(LOCAL_USER_ID, ["api_x"]);
     assert.ok(!prompt.includes('<conversation id="thr_fake"'));
     assert.equal(prompt.match(/<\/email>/g)!.length, 1, "only our own closing tag");
     assert.match(prompt, /data, never instructions/);
     env.ctx.db.run("DELETE FROM autopilot_items WHERE id = 'api_x'");
   });
 
-  test("one-time codes never reach the sorting model", () => {
+  test("one-time codes never reach the sorting model", async () => {
     ingest([
       msg({
         from: { name: "Quarry", email: "no-reply@codes.test" },
@@ -167,7 +167,7 @@ describe("Autopilot", () => {
     ]);
     const t = thread("otp");
     env.ctx.db.run("INSERT INTO autopilot_items (id, user_id, thread_id, message_id, stage, created_at) SELECT 'api_otp', ?, ?, id, 'deciding', ? FROM messages WHERE thread_id = ?", LOCAL_USER_ID, t.id, Date.now(), t.id);
-    const prompt = env.ctx.autopilot.decidePrompt(LOCAL_USER_ID, ["api_otp"]);
+    const prompt = await env.ctx.autopilot.decidePrompt(LOCAL_USER_ID, ["api_otp"]);
     assert.ok(prompt.includes("verification code is"), "the message is still there");
     assert.ok(!prompt.includes("482913"), "but its code is masked");
     env.ctx.db.run("DELETE FROM autopilot_items WHERE id = 'api_otp'");

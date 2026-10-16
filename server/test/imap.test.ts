@@ -6,6 +6,7 @@ import {
   IMAP_PRESETS,
   ImapProvider,
   compressUids,
+  describeStructure,
   detectMailboxes,
   expandUids,
   finishBatch,
@@ -22,6 +23,7 @@ import {
   type ImapSettings,
 } from "../src/providers/imap.ts";
 import { FakeServer, type FakeConn, type FakeOptions } from "./fake-imap.ts";
+import { structureOf } from "./mime-fake.ts";
 
 const DAY = 86_400_000;
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n", "latin1");
@@ -137,18 +139,14 @@ describe("cursor", () => {
     assert.deepEqual(Object.keys(partial.boxes), ["A"]);
   });
 
-  it("advances lastUid batch by batch and closes the first sync at its ceiling", () => {
-    const st = { uidValidity: "1", lastUid: 0, initial: { since: 0, ceiling: 100 } };
+  it("advances lastUid batch by batch", () => {
+    const st = { uidValidity: "1", lastUid: 0 };
     finishBatch(st, 30, 20);
     assert.equal(st.lastUid, 30);
-    assert.ok(st.initial);
     finishBatch(st, 60, 0);
-    assert.equal(st.lastUid, 100, "UIDs between the last match and UIDNEXT are skipped, not re-fetched");
-    assert.equal("initial" in st, false);
-    finishBatch(st, 130, 0);
-    assert.equal(st.lastUid, 130);
+    assert.equal(st.lastUid, 60);
     finishBatch(st, undefined, 0);
-    assert.equal(st.lastUid, 130);
+    assert.equal(st.lastUid, 60);
   });
 
   it("compresses UID windows", () => {
@@ -345,7 +343,7 @@ describe("ImapProvider ownership", () => {
 });
 
 describe("ImapProvider sync (generic server)", () => {
-  it("fetches recent mail in batches of 50, with folders, flags and ids", async () => {
+  it("opens with the newest 100 inbox summaries, then the rest of the window newest first, with folders, flags and ids", async () => {
     const s = genericServer();
     s.deliver("INBOX", mail({ id: "ancient", date: new Date(Date.now() - 400 * DAY) }), { date: new Date(Date.now() - 400 * DAY) });
     for (let i = 0; i < 120; i++) s.deliver("INBOX", mail({ id: `in${i}` }), { flags: i === 0 ? ["\\Flagged", "\\Seen"] : [] });
@@ -356,20 +354,30 @@ describe("ImapProvider sync (generic server)", () => {
     const r = rig(s);
 
     const first = await r.provider.sync(null);
-    assert.equal(first.messages.length, 50);
+    // The draft is the newest UID: it takes a place in the page and is skipped, leaving 99 summaries.
+    assert.equal(first.messages.length, 99);
     assert.equal(first.done, false);
-    assert.equal(first.messages[0]!.remoteId, "INBOX:1:2", "the 400 day old message (uid 1) is outside the window");
+    assert.deepEqual(first.progress, { stage: "inbox", total: 100, count: 100, last: true });
+    assert.deepEqual(first.messages.map((m) => m.remoteId).slice(0, 2), ["INBOX:1:23", "INBOX:1:24"], "newest 100 UIDs, oldest first within the page");
+    assert.equal(first.messages.at(-1)!.remoteId, "INBOX:1:121");
+    assert.ok(first.messages.every((m) => m.bodyComplete === false), "summaries, not messages");
 
     const all = await drain(r.provider, first.cursor);
-    const inbox = [first.messages, ...all.pages.map((p) => p.messages)].flat().filter((m) => m.remoteId.startsWith("INBOX:"));
-    assert.equal(inbox.length, 120, "drafts and out-of-window mail are skipped");
-    assert.deepEqual(all.pages.slice(0, 2).map((p) => p.messages.length), [50, 20]);
+    const ids = [first.messages, ...all.pages.map((p) => p.messages)].flat().map((m) => m.remoteId);
+    assert.equal(new Set(ids).size, ids.length, "nothing arrives twice");
+    assert.equal(ids.filter((id) => id.startsWith("INBOX:")).length, 120, "drafts and out-of-window mail are skipped");
+    const history = all.pages.filter((p) => p.progress);
+    assert.deepEqual(history.map((p) => p.progress!.stage), ["history", "history", "history", "history"]);
+    assert.deepEqual(history.map((p) => p.progress!.count), [21, 1, 1, 1], "the rest of the inbox, then Sent, Trash and Junk");
+    assert.ok(history.every((p) => p.progress!.total === 24), "counted up front: 21 + 1 + 1 + 1");
+    assert.deepEqual(history.map((p) => p.progress!.last), [false, false, false, true]);
 
     const byId = new Map(all.messages.map((m) => [m.messageIdHeader, m]));
+    assert.deepEqual(all.messages.slice(0, 2).map((m) => m.remoteId), ["INBOX:1:2", "INBOX:1:3"]);
     assert.deepEqual(first.messages[0]!.folders, { inbox: true, sent: false, trash: false, spam: false });
-    assert.equal(first.messages[0]!.unread, false);
-    assert.equal(first.messages[0]!.starred, true);
-    assert.equal(first.messages[1]!.unread, true);
+    assert.equal(first.messages[0]!.unread, true);
+    assert.equal(all.messages[0]!.unread, false, "in0 was read and starred");
+    assert.equal(all.messages[0]!.starred, true);
     const out = byId.get("<out1@example.com>")!;
     assert.deepEqual(out.folders, { inbox: false, sent: true, trash: false, spam: false });
     assert.equal(out.outgoing, true);
@@ -381,7 +389,69 @@ describe("ImapProvider sync (generic server)", () => {
     const cursor = parseCursor(all.cursor);
     assert.equal(cursor.boxes["INBOX"]!.lastUid, 122);
     assert.equal(cursor.boxes["INBOX"]!.initial, undefined);
+    assert.equal(s.fullFetches, 0, "a first sync never downloads a whole message");
     noLocksLeft(r);
+  });
+
+  it("reads headers, structure and the first 2 KB of the text part, never the message", async () => {
+    const s = genericServer();
+    const html = `<html><body><p>${"Caf\u00e9 ".repeat(1000)}</p></body></html>`;
+    s.deliver(
+      "INBOX",
+      [
+        "Message-ID: <m1@example.com>",
+        "From: =?utf-8?B?SsOpcsO0bWU=?= <jerome@example.com>",
+        "To: me@example.com",
+        "Subject: Menu",
+        `Date: ${new Date().toUTCString()}`,
+        "References: <r0@example.com> <r1@example.com>",
+        "List-Unsubscribe: <https://news.example.com/u/1>",
+        "Received: from far.away.example.com by mx.example.com; with a long routing trail",
+        "MIME-Version: 1.0",
+        'Content-Type: multipart/alternative; boundary="alt"',
+        "",
+        "--alt",
+        "Content-Type: text/plain; charset=iso-8859-1",
+        "Content-Transfer-Encoding: quoted-printable",
+        "",
+        "Caf=E9 menu, with an equals sign =3D and a soft =",
+        "break",
+        "--alt",
+        "Content-Type: text/html; charset=utf-8",
+        "",
+        html,
+        "--alt--",
+        "",
+      ].join("\r\n"),
+    );
+    s.deliver(
+      "INBOX",
+      [
+        "Message-ID: <m2@example.com>",
+        "From: Dora <dora@example.com>",
+        "To: me@example.com",
+        "Subject: Only html",
+        `Date: ${new Date().toUTCString()}`,
+        "Content-Type: text/html; charset=utf-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        Buffer.from(`<p>${"Hello <b>there</b> ".repeat(300)}</p>`).toString("base64"),
+        "",
+      ].join("\r\n"),
+    );
+    const r = rig(s);
+    const st = await drain(r.provider, null);
+    const [m1, m2] = st.messages.sort((a, b) => a.remoteId.localeCompare(b.remoteId));
+    assert.equal(m1!.from.name, "Jérôme");
+    assert.deepEqual(m1!.references, ["<r0@example.com>", "<r1@example.com>"]);
+    assert.equal(m1!.listUnsubscribe, "https://news.example.com/u/1");
+    assert.equal(m1!.bodyText, "Café menu, with an equals sign = and a soft break", "the plain part, undone from quoted-printable and Latin-1");
+    assert.equal(m1!.bodyHtml, undefined);
+    assert.ok(m1!.size! > 5000);
+    assert.match(m2!.bodyText, /^Hello there Hello there/, "html-only mail previews as text, from base64");
+    assert.ok(m2!.bodyText.length <= 2000);
+    assert.equal(s.fullFetches, 0);
+    assert.ok(s.partFetches.length > 0 && s.partFetches.every((f) => f.maxLength === 2048), "previews are capped at 2048 bytes");
   });
 
   it("sends only new mail once the first sync is done, and nothing when idle", async () => {
@@ -496,17 +566,21 @@ describe("ImapProvider sync (generic server)", () => {
     assert.equal(parseCursor(st.cursor).boxes["INBOX"]!.uidValidity, "7");
   });
 
-  it("resumes the first sync from the cursor after a restart", async () => {
+  it("resumes the first sync from the cursor after a restart, below what was already handed over", async () => {
     const s = genericServer();
-    for (let i = 0; i < 120; i++) s.deliver("INBOX", mail({ id: `m${i}` }));
+    for (let i = 0; i < 250; i++) s.deliver("INBOX", mail({ id: `m${i}` }));
     const r1 = rig(s);
     const p1 = await r1.provider.sync(null);
-    assert.equal(p1.messages.length, 50);
+    assert.equal(p1.messages.length, 100);
+    const p2 = await r1.provider.sync(p1.cursor);
+    assert.equal(p2.messages.length, 100);
+    assert.deepEqual(parseCursor(p2.cursor!).boxes["INBOX"]!.initial?.low, 51);
 
     const r2 = rig(s); // a new provider has no in-memory queue
-    const rest = await drain(r2.provider, p1.cursor);
-    assert.deepEqual(rest.messages.map((m) => m.remoteId).slice(0, 2), ["INBOX:1:51", "INBOX:1:52"]);
-    assert.equal(rest.messages.length, 70);
+    const rest = await drain(r2.provider, p2.cursor);
+    assert.deepEqual(rest.messages.map((m) => m.remoteId).slice(0, 2), ["INBOX:1:1", "INBOX:1:2"]);
+    assert.equal(rest.messages.length, 50, "only what is below the lowest UID handed over");
+    assert.equal(rest.pages.find((p) => p.progress)!.progress!.total, 50, "a restarted run counts what is left");
   });
 
   it("reconnects when the server drops the connection", async () => {
@@ -736,9 +810,16 @@ describe("ImapProvider actions (generic server)", () => {
     const uid = s.deliver("INBOX", raw);
     const r = rig(s);
     const st = await drain(r.provider, null);
-    const att = st.messages[0]!.attachments[0]!;
+    const summary = st.messages[0]!.attachments[0]!;
+    assert.deepEqual([summary.filename, summary.mimeType, summary.remoteId, summary.inline], ["invoice.pdf", "application/pdf", "part:2", false]);
+    assert.ok(Math.abs(summary.size - PDF.length) <= 2, "the size is the decoded one, worked out from the base64");
+    assert.equal(summary.content, undefined, "bytes stay on the server until asked for");
+    assert.equal(s.fullFetches, 0);
+    const full = await r.provider.fetchBody(`INBOX:1:${uid}`);
+    assert.equal(s.fullFetches, 1, "only opening the message downloads it");
+    assert.equal(full.text.trim(), "See attached.");
+    const att = full.attachments[0]!;
     assert.equal(att.remoteId, "idx:0");
-    assert.equal(att.content, undefined, "bytes stay on the server until asked for");
     const bytes = await r.provider.fetchAttachment(`INBOX:1:${uid}`, att.remoteId!);
     assert.ok(bytes.equals(PDF));
 
@@ -891,5 +972,96 @@ describe("ImapProvider send", () => {
       refuse({ code: "ETIMEDOUT" }).provider.apply({ kind: "send", message: out() }),
       (err: Error) => !(err instanceof PermanentProviderError) && /didn't answer/.test(err.message),
     );
+  });
+});
+
+describe("ImapProvider summaries", () => {
+  it("describes a message's structure without downloading it", () => {
+    const raw = [
+      "From: a@example.com",
+      "Content-Type: multipart/mixed; boundary=m",
+      "",
+      "--m",
+      'Content-Type: multipart/alternative; boundary="a"',
+      "",
+      "--a",
+      "Content-Type: text/plain; charset=utf-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      "aGk=",
+      "--a",
+      "Content-Type: text/html",
+      "",
+      "<p>hi</p>",
+      "--a--",
+      "--m",
+      'Content-Type: image/png; name="logo.png"',
+      "Content-Disposition: inline",
+      "Content-ID: <logo@x>",
+      "Content-Transfer-Encoding: base64",
+      "",
+      "iVBORw0KGgo=",
+      "--m",
+      "Content-Type: text/calendar",
+      "",
+      "BEGIN:VCALENDAR",
+      "--m--",
+      "",
+    ].join("\r\n");
+    const d = describeStructure(structureOf(Buffer.from(raw)));
+    assert.deepEqual(d.text, { key: "1.1", type: "text/plain", encoding: "base64", charset: "utf-8" });
+    assert.deepEqual(d.attachments.map((a) => [a.filename, a.mimeType, a.remoteId, a.inline, a.contentId]), [
+      ["logo.png", "image/png", "part:2", true, "logo@x"],
+      ["attachment", "text/calendar", "part:3", false, undefined],
+    ]);
+    assert.deepEqual(describeStructure(structureOf(Buffer.from("Subject: x\r\n\r\nhello"))).text?.key, "1", "a single-part message is part 1");
+    assert.deepEqual(describeStructure(undefined), { attachments: [] });
+  });
+
+  it("on Gmail, reads the inbox's newest mail from All Mail first, then the rest of the window", async () => {
+    const s = gmailServer();
+    s.add("[Gmail]/Important", "\\Important");
+    // 30 inbox messages from a while ago, then 150 newer ones that were archived: a plain newest-first read would show no inbox at all.
+    for (let i = 0; i < 30; i++) s.deliver("[Gmail]/All Mail", mail({ id: `inbox${i}` }), { labels: ["\\Inbox"], threadId: `i${i}` });
+    for (let i = 0; i < 150; i++) s.deliver("[Gmail]/All Mail", mail({ id: `archived${i}` }), { labels: [], threadId: `a${i}` });
+    const r = rig(s, { settings: { imapHost: "imap.gmail.com" } });
+
+    const first = await r.provider.sync(null);
+    assert.deepEqual(first.progress, { stage: "inbox", total: 30, count: 30, last: true });
+    assert.equal(first.messages.length, 30);
+    assert.ok(first.messages.every((m) => m.folders.inbox && m.remoteThreadId?.startsWith("i")), "only inbox mail, with Gmail's thread ids");
+    assert.ok(s.log.some((l) => l.includes('"gmraw":"in:inbox"')), "Gmail's own search finds the inbox");
+
+    const rest = await drain(r.provider, first.cursor);
+    const ids = rest.messages.map((m) => m.remoteId);
+    assert.equal(ids.length, 150, "the inbox page isn't fetched twice");
+    assert.deepEqual(rest.pages.filter((p) => p.progress).map((p) => [p.progress!.count, p.progress!.total]), [[100, 150], [50, 150]]);
+    assert.equal(parseCursor(rest.cursor).boxes["[Gmail]/All Mail"]!.initial, undefined);
+    assert.equal(s.fullFetches, 0);
+  });
+
+  it("opens the full message by id, and finds it by Message-ID when the id has gone stale", async () => {
+    const s = genericServer();
+    const uid = s.deliver("INBOX", mail({ id: "moving", body: "The whole text" }));
+    s.deliver("INBOX", mail({ id: "stayer" }));
+    const r = rig(s);
+    await drain(r.provider, null);
+    const id = `INBOX:1:${uid}`;
+    assert.equal((await r.provider.fetchBody(id)).text.trim(), "The whole text");
+
+    // Another client archives it: a new UID in another mailbox, the old one gone.
+    s.add("Archive", "\\Archive");
+    s.deliver("Archive", s.find("INBOX", uid)!.source);
+    s.expunge("INBOX", uid);
+    await assert.rejects(r.provider.fetchBody(id), /no longer in that mailbox/);
+    const found = await r.provider.fetchBody(id, { messageIdHeader: "<moving@example.com>" });
+    assert.equal(found.text.trim(), "The whole text");
+
+    // The server renumbers a mailbox: the old ids mean nothing, but the Message-ID still does.
+    s.boxes.get("Archive")!.uidValidity = 5n;
+    await assert.rejects(r.provider.fetchBody("Archive:1:1"), /no longer in that mailbox/);
+    assert.equal((await r.provider.fetchBody("Archive:1:1", { messageIdHeader: "<moving@example.com>" })).text.trim(), "The whole text");
+    await assert.rejects(r.provider.fetchBody("not an id"), /Unrecognized/);
+    noLocksLeft(r);
   });
 });

@@ -12,7 +12,7 @@ import { triageCommandName } from "../commands/catalog.ts";
 import { listIdentities } from "../mail/identities.ts";
 import { extractCode } from "../mail/signals.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
-import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, shapeRow, type SplitRow, type ThreadListRow } from "../mail/views.ts";
+import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, messageAttachments, shapeRow, touchThread, type SplitRow, type ThreadListRow } from "../mail/views.ts";
 import type { AccountRow } from "../mail/store.ts";
 
 const triageBody = z.object({
@@ -30,6 +30,8 @@ const triageBody = z.object({
 const INTERNAL_SETTINGS = new Set(["cloudAgent", "engines", "agentBudgets", "autopilot"]);
 export function mailRoutes(ctx: AppContext) {
   const { db, triage, store, events, sync } = ctx;
+  /** Largest number of messages one /bodies request will fetch. */
+  const MAX_BODY_IDS = 50;
   const app = new Hono<Env>();
 
   const userAccounts = (userId: string) =>
@@ -44,20 +46,62 @@ export function mailRoutes(ctx: AppContext) {
 
   app.get("/counts", (c) => c.json(counts(ctx, c.get("user").id)));
 
-  app.get("/threads/:id", (c) => c.json(getThread(ctx, c.get("user").id, c.req.param("id"))));
+  app.get("/threads/:id", (c) => {
+    const thread = getThread(ctx, c.get("user").id, c.req.param("id"));
+    // Reading keeps a conversation's cached bodies on hand; messages that only have a preview are fetched by /bodies.
+    touchThread(ctx, c.req.param("id"));
+    return c.json(thread);
+  });
+
+  /**
+   * Full text for messages that were synced as previews. A message the provider can't return comes back in `failed`
+   * with a plain reason; the request itself never fails for one bad message.
+   */
+  app.get("/threads/:id/bodies", async (c) => {
+    const user = c.get("user");
+    const threadId = c.req.param("id");
+    if (!db.get("SELECT 1 AS x FROM threads t JOIN accounts a ON a.id = t.account_id WHERE t.id = ? AND a.user_id = ?", threadId, user.id)) {
+      throw new HttpError(404, "Conversation not found");
+    }
+    const wanted = [...new Set((c.req.query("ids") ?? "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, MAX_BODY_IDS);
+    const inThread = new Set(
+      wanted.length === 0
+        ? []
+        : db
+            .all<{ id: string }>(`SELECT id FROM messages WHERE thread_id = ? AND id IN (${wanted.map(() => "?").join(",")})`, threadId, ...wanted)
+            .map((r) => r.id),
+    );
+    const outside = wanted.filter((id) => !inThread.has(id)).map((id) => ({ id, error: "This message isn't in that conversation" }));
+    const result = await sync.bodies.load(wanted.filter((id) => inThread.has(id)));
+    const now = Date.now();
+    const messages = result.loaded.map((id) => {
+      db.run("UPDATE messages SET last_viewed_at = ? WHERE id = ?", now, id);
+      const m = db.get<{ body_text: string; body_html: string | null }>("SELECT body_text, body_html FROM messages WHERE id = ?", id)!;
+      return { id, text: m.body_text, html: m.body_html, attachments: messageAttachments(ctx, id) };
+    });
+    c.header("Cache-Control", "no-store");
+    return c.json({ messages, failed: [...result.failed, ...outside] });
+  });
 
   /**
    * A one-time code, found again in the message when a person asks. People only: an agent never gets
    * one (the command registry masks codes for agents, and agent tokens can't reach /api/messages anyway).
    */
-  app.get("/messages/:id/code", (c) => {
+  app.get("/messages/:id/code", async (c) => {
     if (c.get("actor").kind !== "human") throw new HttpError(403, "Only a person can read a sign-in code.");
-    const m = db.get<{ subject: string; body_text: string }>(
-      `SELECT m.subject, m.body_text FROM messages m JOIN accounts a ON a.id = m.account_id
-       WHERE m.id = ? AND a.user_id = ? AND m.outgoing = 0`,
-      c.req.param("id"),
-      c.get("user").id,
-    );
+    const find = () =>
+      db.get<{ subject: string; body_text: string; body_state: string }>(
+        `SELECT m.subject, m.body_text, m.body_state FROM messages m JOIN accounts a ON a.id = m.account_id
+         WHERE m.id = ? AND a.user_id = ? AND m.outgoing = 0`,
+        c.req.param("id"),
+        c.get("user").id,
+      );
+    let m = find();
+    // A message that only has a preview may carry its code further down.
+    if (m?.body_state === "none") {
+      await sync.bodies.load([c.req.param("id")]);
+      m = find();
+    }
     const code = m ? extractCode(m.subject, m.body_text) : null;
     if (!code) throw new HttpError(404, "No code in that message");
     c.header("Cache-Control", "no-store");
@@ -65,8 +109,16 @@ export function mailRoutes(ctx: AppContext) {
   });
 
   /** The freshest code in a conversation, so a list row can copy it without opening the thread. */
-  app.get("/threads/:id/code", (c) => {
+  app.get("/threads/:id/code", async (c) => {
     if (c.get("actor").kind !== "human") throw new HttpError(403, "Only a person can read a sign-in code.");
+    // The newest messages that only have a preview are fetched first: a code further down has no signal until they are.
+    const preview = db.all<{ id: string }>(
+      `SELECT m.id FROM messages m JOIN accounts a ON a.id = m.account_id
+       WHERE m.thread_id = ? AND a.user_id = ? AND m.outgoing = 0 AND m.body_state = 'none' ORDER BY m.sent_at DESC LIMIT 3`,
+      c.req.param("id"),
+      c.get("user").id,
+    );
+    if (preview.length > 0) await sync.bodies.load(preview.map((r) => r.id));
     const rows = db.all<{ subject: string; body_text: string }>(
       `SELECT m.subject, m.body_text FROM messages m JOIN accounts a ON a.id = m.account_id
        WHERE m.thread_id = ? AND a.user_id = ? AND m.outgoing = 0 AND m.signals LIKE '%"kind":"code"%'
@@ -169,22 +221,33 @@ export function mailRoutes(ctx: AppContext) {
 
   app.get("/attachments/:id", async (c) => {
     const user = c.get("user");
-    const att = db.get<{
-      id: string;
-      filename: string;
-      mime_type: string;
-      blob_sha256: string | null;
-      remote_id: string | null;
-      message_remote_id: string;
-      account_id: string;
-    }>(
-      `SELECT at.id, at.filename, at.mime_type, at.blob_sha256, at.remote_id, m.remote_id AS message_remote_id, m.account_id
-       FROM attachments at JOIN messages m ON m.id = at.message_id JOIN accounts a ON a.id = m.account_id
-       WHERE at.id = ? AND a.user_id = ?`,
-      c.req.param("id"),
-      user.id,
-    );
+    const find = () =>
+      db.get<{
+        id: string;
+        filename: string;
+        mime_type: string;
+        blob_sha256: string | null;
+        remote_id: string | null;
+        message_id: string;
+        message_remote_id: string;
+        account_id: string;
+        body_state: string;
+      }>(
+        `SELECT at.id, at.filename, at.mime_type, at.blob_sha256, at.remote_id, m.id AS message_id, m.remote_id AS message_remote_id, m.account_id, m.body_state
+         FROM attachments at JOIN messages m ON m.id = at.message_id JOIN accounts a ON a.id = m.account_id
+         WHERE at.id = ? AND a.user_id = ?`,
+        c.req.param("id"),
+        user.id,
+      );
+    let att = find();
     if (!att) throw new HttpError(404, "Attachment not found");
+    // A summary only knows an attachment by name; fetching the message gives every attachment the handle downloads use.
+    if (att.body_state === "none" && !att.blob_sha256) {
+      const result = await sync.bodies.load([att.message_id]);
+      if (result.failed[0]) throw new HttpError(502, `Couldn't load this message: ${result.failed[0].error}`);
+      att = find();
+      if (!att) throw new HttpError(404, "Attachment not found");
+    }
     let content = att.blob_sha256 ? store.readBlob(att.blob_sha256) : null;
     if (!content && att.remote_id) {
       const account = db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", att.account_id)!;
@@ -259,6 +322,7 @@ export function mailRoutes(ctx: AppContext) {
       syncError: a.sync_error,
       lastSyncedAt: a.last_synced_at,
       firstSyncedAt: a.first_synced_at,
+      progress: sync.progressOf(a.id),
       importing: ctx.imports.has(a.id),
       imported: ctx.imports.get(a.id)?.imported ?? 0,
       identities: listIdentities(db, a.id),

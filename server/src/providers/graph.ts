@@ -1,9 +1,11 @@
 import type { Config } from "../config.ts";
+import { parseHeaderBlock } from "../mail/mime.ts";
 import {
   PermanentProviderError,
   ProviderAuthError,
   type FlagUpdate,
   type Folders,
+  type FullBody,
   type IncomingAttachment,
   type IncomingMessage,
   type MailProvider,
@@ -11,12 +13,13 @@ import {
   type ProviderContext,
   type RemoteAction,
   type SyncPage,
+  type SyncStageProgress,
 } from "../mail/types.ts";
 import { jsonBody, OAuthSession } from "./oauth.ts";
 
 const ROOT = "https://graph.microsoft.com/v1.0";
 const ME = `${ROOT}/me`;
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 100;
 const BATCH_MAX = 20;
 const ATTACHMENT_CONCURRENCY = 4;
 
@@ -33,7 +36,7 @@ const SELECT = [
   "flag",
   "conversationId",
   "internetMessageId",
-  "body",
+  "internetMessageHeaders",
   "bodyPreview",
   "hasAttachments",
   "categories",
@@ -80,6 +83,8 @@ interface GraphMessage {
   flag?: { flagStatus?: string };
   conversationId?: string;
   internetMessageId?: string;
+  /** Only when asked for in $select, and every header comes with it, so the few the summary needs are picked out. */
+  internetMessageHeaders?: { name: string; value: string }[];
   body?: { contentType?: string; content?: string };
   bodyPreview?: string;
   hasAttachments?: boolean;
@@ -134,6 +139,9 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 
 const enc = encodeURIComponent;
 
+/** The headers Graph's own fields don't carry; the rest of a summary comes from those fields. */
+const LIST_HEADERS = new Set(["in-reply-to", "references", "list-unsubscribe", "list-id", "precedence", "auto-submitted"]);
+
 const address = (a: GraphAddress) => ({ name: a.emailAddress?.name ?? "", email: (a.emailAddress?.address ?? "").toLowerCase() });
 
 interface SubResult {
@@ -146,6 +154,10 @@ export class GraphProvider implements MailProvider {
 
   private ctx: ProviderContext;
   private http: OAuthSession;
+  /** The first sync's window start, fixed so the counts and the delta queries agree on it. */
+  private since?: string;
+  /** Messages the window holds beyond the inbox's first page, when Graph could count them. */
+  private historyTotal?: number | null;
 
   constructor(ctx: ProviderContext, config?: Config) {
     this.ctx = ctx;
@@ -173,6 +185,8 @@ export class GraphProvider implements MailProvider {
     const messages: IncomingMessage[] = [];
     const flagUpdates: FlagUpdate[] = [];
     const deleted: string[] = [];
+    // A cursor with no folders is a brand new sync: its first inbox page is the "inbox ready" moment.
+    const fresh = Object.keys(cursor.folders).length === 0;
 
     // A first pass over each folder goes one page per call; once every folder has a delta link, each is polled once.
     const unfinished = FOLDERS.find((f) => {
@@ -180,30 +194,68 @@ export class GraphProvider implements MailProvider {
       return !s || (s.kind === "next" && !s.missing);
     });
     const polling = unfinished ? [unfinished] : FOLDERS.filter((f) => cursor.folders[f.name]?.kind === "delta");
+    if (unfinished && !fresh) this.historyTotal ??= await this.countWindow();
 
+    let handled = 0;
     for (const folder of polling) {
       const out = await this.deltaPage(folder, cursor.folders[folder.name]?.link ?? this.initialUrl(folder.name), cursor);
       messages.push(...out.messages);
       flagUpdates.push(...out.flagUpdates);
       deleted.push(...out.deleted);
+      handled += out.handled;
     }
     const more = FOLDERS.some((f) => {
       const s = cursor.folders[f.name];
       return !s || s.kind === "next";
     });
 
+    let progress: SyncStageProgress | undefined;
+    if (unfinished && fresh) {
+      this.historyTotal = undefined;
+      this.inboxCount = handled;
+      progress = { stage: "inbox", total: handled, count: handled, last: true };
+    } else if (unfinished) {
+      progress = { stage: "history", total: this.historyTotal ?? null, count: handled, last: !more };
+    }
     return {
       messages,
       flagUpdates,
       deletedRemoteIds: deleted,
       cursor: JSON.stringify(cursor),
       done: !more,
+      progress,
     };
   }
 
+  /** How many messages the window holds across the folders, less the inbox's first page, which was reported as its own stage. */
+  private async countWindow(): Promise<number | null> {
+    try {
+      const counts = await Promise.all(
+        FOLDERS.map(async (f) => {
+          const res = await this.request(`${ME}/mailFolders/${f.name}/messages?$filter=${enc(`receivedDateTime ge ${this.windowStart()}`)}&$count=true&$top=1&$select=id`);
+          if (res.status === 404) return 0;
+          const body = await jsonBody<{ "@odata.count"?: number }>(res);
+          if (!res.ok || typeof body?.["@odata.count"] !== "number") throw new Error("no count");
+          return body["@odata.count"];
+        }),
+      );
+      return Math.max(0, counts.reduce((a, b) => a + b, 0) - this.inboxCount);
+    } catch {
+      // A count is only a nicety for the progress bar; without one the total stays unknown.
+      return null;
+    }
+  }
+
+  private inboxCount = 0;
+
+  private windowStart(): string {
+    this.since ??= new Date(Date.now() - this.ctx.initialSyncDays * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    return this.since;
+  }
+
   private initialUrl(folder: string): string {
-    const since = new Date(Date.now() - this.ctx.initialSyncDays * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
-    return `${ME}/mailFolders/${folder}/messages/delta?$select=${SELECT}&$filter=${enc(`receivedDateTime ge ${since}`)}`;
+    // Newest first, so the first page of the inbox is the mail a person most wants to see.
+    return `${ME}/mailFolders/${folder}/messages/delta?$select=${SELECT}&$filter=${enc(`receivedDateTime ge ${this.windowStart()}`)}&$orderby=${enc("receivedDateTime desc")}`;
   }
 
   /** Reads one delta page of one folder and records where to continue in `cursor`. */
@@ -211,8 +263,8 @@ export class GraphProvider implements MailProvider {
     folder: (typeof FOLDERS)[number],
     url: string,
     cursor: Cursor,
-  ): Promise<{ messages: IncomingMessage[]; flagUpdates: FlagUpdate[]; deleted: string[] }> {
-    const empty = { messages: [], flagUpdates: [], deleted: [] };
+  ): Promise<{ messages: IncomingMessage[]; flagUpdates: FlagUpdate[]; deleted: string[]; handled: number }> {
+    const empty = { messages: [], flagUpdates: [], deleted: [], handled: 0 };
     const res = await this.request(url, {}, `odata.maxpagesize=${PAGE_SIZE}`);
     const body = await jsonBody<DeltaResponse>(res);
     if (res.status === 404 && folder.name === "archive") {
@@ -247,7 +299,7 @@ export class GraphProvider implements MailProvider {
     if (body?.["@odata.nextLink"]) cursor.folders[folder.name] = { link: body["@odata.nextLink"], kind: "next" };
     else if (body?.["@odata.deltaLink"]) cursor.folders[folder.name] = { link: body["@odata.deltaLink"], kind: "delta" };
     else throw new Error("Microsoft Graph returned neither a next link nor a delta link");
-    return { messages, flagUpdates, deleted };
+    return { messages, flagUpdates, deleted, handled: items.length };
   }
 
   private async exists(id: string): Promise<boolean> {
@@ -257,18 +309,21 @@ export class GraphProvider implements MailProvider {
     return true;
   }
 
+  /** A summary: Graph's own fields, its 255 character preview, and the list headers; the body comes later. */
   private async toIncoming(m: GraphMessage, folder: (typeof FOLDERS)[number]): Promise<IncomingMessage> {
     const from = m.from ? address(m.from) : { name: "", email: "" };
-    const html = m.body?.contentType?.toLowerCase() === "html";
-    const content = m.body?.content ?? "";
     const folders: Folders = { inbox: false, sent: false, trash: false, spam: false };
     if (folder.flag) folders[folder.flag] = true;
     const received = Date.parse(m.receivedDateTime ?? "");
     const sentAt = Date.parse(m.sentDateTime ?? "");
+    const lists = (m.internetMessageHeaders ?? []).filter((h) => LIST_HEADERS.has(h.name.toLowerCase())).map((h) => `${h.name}: ${h.value}`);
+    const extra = lists.length ? await parseHeaderBlock(lists.join("\r\n"), { remoteId: m.id }) : undefined;
     return {
       remoteId: m.id,
       remoteThreadId: m.conversationId,
       messageIdHeader: m.internetMessageId,
+      inReplyTo: extra?.inReplyTo,
+      references: extra?.references,
       from,
       to: (m.toRecipients ?? []).map(address),
       cc: (m.ccRecipients ?? []).map(address),
@@ -277,16 +332,27 @@ export class GraphProvider implements MailProvider {
       subject: m.subject ?? "",
       sentAt: Number.isNaN(sentAt) ? (Number.isNaN(received) ? Date.now() : received) : sentAt,
       snippet: m.bodyPreview,
-      bodyText: html ? "" : content,
-      bodyHtml: html ? content : undefined,
+      bodyText: m.bodyPreview ?? "",
+      bodyComplete: false,
       unread: m.isRead === false,
       starred: m.flag?.flagStatus === "flagged",
       folders,
       labels: (m.categories ?? []).map((name) => ({ remoteId: `cat:${name}`, name })),
+      listUnsubscribe: extra?.listUnsubscribe,
+      bulk: extra?.bulk,
       // Ours means "in Sent Items" (aliases included), never "the From header says so": anyone can write a From.
       outgoing: folders.sent,
       attachments: m.hasAttachments ? await this.attachments(m.id) : [],
     };
+  }
+
+  /** The whole message, for one that was synced as a summary. Graph lists every attachment, inline ones included. */
+  async fetchBody(messageRemoteId: string): Promise<FullBody> {
+    const m = await this.json<GraphMessage>(`${ME}/messages/${enc(messageRemoteId)}?$select=body,hasAttachments`);
+    const html = m.body?.contentType?.toLowerCase() === "html";
+    const content = m.body?.content ?? "";
+    const attachments = m.hasAttachments || (html && /cid:/i.test(content)) ? await this.attachments(messageRemoteId) : [];
+    return { text: html ? "" : content, html: html ? content : undefined, attachments };
   }
 
   private async attachments(messageId: string): Promise<IncomingAttachment[]> {

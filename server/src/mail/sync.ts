@@ -1,16 +1,25 @@
 import type { Config } from "../config.ts";
 import type { Db } from "../db/index.ts";
-import type { Events } from "../events.ts";
+import type { Events, ServerEvent } from "../events.ts";
 import type { SecretBox } from "../lib/crypto.ts";
 import { createProvider } from "../providers/index.ts";
+import { BodyLoader } from "./bodies.ts";
 import { buildOutgoing } from "./compose.ts";
 import { resolveFrom, syncProviderIdentities } from "./identities.ts";
 import type { AccountRow, MailStore } from "./store.ts";
 import { PermanentProviderError, ProviderAuthError, type Address, type MailProvider, type RemoteAction } from "./types.ts";
 
 const MAX_ATTEMPTS = 6;
+/** The first sync reaches back this far; older mail stays at the provider until someone asks for it. */
+const INITIAL_SYNC_DAYS = 30;
+/** Newest inbox messages whose full text is kept on hand, so recent mail opens instantly and codes are found in the whole message. */
+const RECENT_BODIES = 50;
+/** Bodies fetched at once for that cache: low, so it never crowds out what the person is doing. */
+const RECENT_CONCURRENCY = 3;
 /** How often an account's send-as list is read from its provider. */
 const IDENTITY_REFRESH_MS = 6 * 3_600_000;
+
+type SyncProgress = NonNullable<Extract<ServerEvent, { type: "sync" }>["progress"]>;
 
 interface DraftRow {
   id: string;
@@ -38,6 +47,10 @@ export class SyncEngine {
   private identitiesReadAt = new Map<string, number>();
   private timers: NodeJS.Timeout[] = [];
   private draining = false;
+  /** Where each account's latest first sync is, so a reloaded dashboard shows the same numbers. */
+  private progress = new Map<string, SyncProgress>();
+  /** Full text for messages that were synced as summaries; shared by every reader of a body. */
+  readonly bodies: BodyLoader;
 
   private config: Config;
   private db: Db;
@@ -51,6 +64,12 @@ export class SyncEngine {
     this.store = store;
     this.events = events;
     this.secrets = secrets;
+    this.bodies = new BodyLoader(db, store, events, (account) => this.provider(account));
+  }
+
+  /** The latest first-sync progress for an account, or null if this server hasn't run one. */
+  progressOf(accountId: string): SyncProgress | null {
+    return this.progress.get(accountId) ?? null;
   }
 
   start(): void {
@@ -88,7 +107,7 @@ export class SyncEngine {
           auth: account.auth_enc ? this.secrets.open(account.auth_enc) : null,
           saveAuth: (auth) =>
             this.db.run("UPDATE accounts SET auth_enc = ? WHERE id = ?", this.secrets.seal(auth), account.id),
-          initialSyncDays: 120,
+          initialSyncDays: INITIAL_SYNC_DAYS,
         },
         this.config,
       );
@@ -146,14 +165,30 @@ export class SyncEngine {
       this.events.emitToUser(account.user_id, { type: "sync", accountId, status, error });
     };
     setStatus("syncing");
+    const run = { stage: null as SyncProgress["stage"] | null, done: 0 };
+    const report = (next: SyncProgress["stage"], d: number, t: number | null) => {
+      // The total follows the count if an estimate turned out low.
+      run.stage = next;
+      run.done = d;
+      const p: SyncProgress = { stage: next, done: d, total: t === null ? null : Math.max(t, d) };
+      this.progress.set(accountId, p);
+      this.events.emitToUser(account.user_id, { type: "sync", accountId, status: "syncing", progress: p });
+    };
     try {
       const provider = this.provider(account);
       let cursor = account.sync_cursor;
       let caughtUp = false;
       let fetched = 0;
+      let recentDone = false;
+      if (account.first_synced_at === null && account.provider !== "archive") report("signin", 0, null);
       for (let pages = 0; pages < 500; pages++) {
         const page = await provider.sync(cursor);
         const touched = this.store.ingest(account, page);
+        // The inbox opens before the rest of the window is in, and that mail is stored after the account was marked ready.
+        // It is history, not news, so the mark moves past it right away, before delivery tidying can look at it.
+        if (page.progress?.stage === "history" && account.provider !== "archive") {
+          this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NOT NULL", Date.now(), accountId);
+        }
         cursor = page.cursor;
         this.db.run("UPDATE accounts SET sync_cursor = ? WHERE id = ?", cursor, accountId);
         if (touched.length) this.events.emitToUser(account.user_id, { type: "threads", accountId, threadIds: touched });
@@ -161,6 +196,18 @@ export class SyncEngine {
         if (page.messages.length > 0) {
           fetched += page.messages.length;
           this.events.emitToUser(account.user_id, { type: "sync", accountId, status: "syncing", fetched });
+        }
+        const sp = page.progress;
+        if (sp) {
+          // A stage's page counts add up; the last page of a stage settles its total.
+          const reached = (run.stage === sp.stage ? run.done : 0) + sp.count;
+          report(sp.stage, reached, sp.last ? reached : sp.total);
+          if (sp.stage === "inbox" && sp.last) {
+            // The newest inbox mail is in: the dashboard can open now, while the rest of the window keeps arriving.
+            if (account.provider !== "archive") this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
+            await this.cacheRecent(account, report);
+            recentDone = true;
+          }
         }
         if (page.done) {
           caughtUp = true;
@@ -170,6 +217,9 @@ export class SyncEngine {
       // The first sync that reaches the end of the mailbox: mail stored before it is history, not news.
       // An archive has nothing to fetch, so reaching its end proves nothing; its import stamps it when the file is read.
       if (caughtUp && account.provider !== "archive") this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
+      // New mail arrives as summaries; the newest of it is fetched in full for the same reason the first inbox page is.
+      if (fetched > 0 && !recentDone) await this.cacheRecent(account);
+      if (run.stage !== null) report("done", run.done, run.done);
       await this.refreshIdentities(account, provider);
       setStatus("idle");
     } catch (err) {
@@ -178,6 +228,29 @@ export class SyncEngine {
       console.error(`[slipstream] sync ${account.email}:`, err instanceof Error ? err.message : err);
     } finally {
       this.running.delete(accountId);
+    }
+  }
+
+  /**
+   * Fetch the full text of the newest inbox messages that only have a preview, a few at a time. A message that can't be
+   * fetched now is simply opened later; nothing here fails a sync.
+   */
+  private async cacheRecent(account: AccountRow, report?: (stage: SyncProgress["stage"], done: number, total: number | null) => void): Promise<void> {
+    const rows = this.db.all<{ id: string; body_state: string }>(
+      `SELECT id, body_state FROM messages
+       WHERE account_id = ? AND in_inbox = 1 AND in_trash = 0 AND in_spam = 0 AND orphaned_at IS NULL
+       ORDER BY sent_at DESC LIMIT ?`,
+      account.id,
+      RECENT_BODIES,
+    );
+    const missing = rows.filter((r) => r.body_state === "none").map((r) => r.id);
+    let done = rows.length - missing.length;
+    report?.("recent", done, rows.length);
+    for (let i = 0; i < missing.length; i += RECENT_CONCURRENCY) {
+      const chunk = missing.slice(i, i + RECENT_CONCURRENCY);
+      await this.bodies.load(chunk, { concurrency: RECENT_CONCURRENCY });
+      done += chunk.length;
+      report?.("recent", done, rows.length);
     }
   }
 

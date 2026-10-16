@@ -360,7 +360,7 @@ export class Autopilot {
     try {
       await this.ctx.cloud.startLocal(userId, engine.id, {
         instruction: `Sort ${batch.length === 1 ? "1 new conversation" : `${batch.length} new conversations`}`,
-        message: this.decidePrompt(userId, ids),
+        message: await this.decidePrompt(userId, ids),
         principal: this.principal(userId),
         origin: "autopilot",
         // Reading the batch and recording decisions is all a sorting run can do.
@@ -446,7 +446,12 @@ export class Autopilot {
     });
   }
 
-  decidePrompt(userId: string, itemIds: string[]): string {
+  async decidePrompt(userId: string, itemIds: string[]): Promise<string> {
+    // The model sorts on the message itself, not a preview: mail synced as a summary is fetched first.
+    const marks = itemIds.map(() => "?").join(",");
+    await this.ctx.sync.bodies.load(
+      this.ctx.db.all<{ message_id: string }>(`SELECT message_id FROM autopilot_items WHERE user_id = ? AND id IN (${marks})`, userId, ...itemIds).map((r) => r.message_id),
+    );
     const user = this.ctx.users.get(userId)!;
     const s = this.settings(userId);
     const labels = this.labelNames(userId);
@@ -619,7 +624,7 @@ export class Autopilot {
     try {
       await this.ctx.cloud.startLocal(userId, engine.id, {
         instruction: `Draft ${items.length === 1 ? "a reply" : `${items.length} replies`}`,
-        message: this.draftPrompt(userId, items),
+        message: await this.draftPrompt(userId, items),
         principal: this.principal(userId),
         origin: "autopilot",
         // Reading these conversations and replying to them through autopilot.draftReply, which picks the recipients itself.
@@ -631,25 +636,33 @@ export class Autopilot {
     }
   }
 
-  draftPrompt(userId: string, items: ItemRow[]): string {
+  async draftPrompt(userId: string, items: ItemRow[]): Promise<string> {
     const user = this.ctx.users.get(userId)!;
     const s = this.settings(userId);
-    const sections = items.map((it) => {
+    const sections: string[] = [];
+    for (const it of items) {
       const m = this.ctx.db.get<{ from_email: string; from_name: string; subject: string }>("SELECT from_email, from_name, subject FROM messages WHERE id = ?", it.message_id)!;
-      const past = this.ctx.db
-        .all<{ body_text: string; subject: string }>(
-          `SELECT body_text, subject FROM messages WHERE outgoing = 1 AND account_id IN (SELECT id FROM accounts WHERE user_id = ?) AND to_json LIKE ? ORDER BY sent_at DESC LIMIT 2`,
+      const pastIds = this.ctx.db
+        .all<{ id: string }>(
+          `SELECT id FROM messages WHERE outgoing = 1 AND account_id IN (SELECT id FROM accounts WHERE user_id = ?) AND to_json LIKE ? ORDER BY sent_at DESC LIMIT 2`,
           userId,
           `%"${m.from_email.replace(/[%_"]/g, "")}"%`,
         )
+        .map((r) => r.id);
+      // How the user writes is read from whole messages: sent mail synced as a summary is fetched first.
+      await this.ctx.sync.bodies.load(pastIds);
+      const past = pastIds
+        .map((id) => this.ctx.db.get<{ body_text: string }>("SELECT body_text FROM messages WHERE id = ?", id)!)
         .map((p) => `<email>\n${fence(ownText(p.body_text)).slice(0, 700)}\n</email>`);
-      return [
-        `Conversation ${it.thread_id}: "${fence(maskCodes({ subject: m.subject }).subject)}" from ${fence(m.from_name)} ‹${fence(m.from_email)}›`,
-        past.length ? `How the user last wrote to ${fence(m.from_email)}:\n${past.join("\n")}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    });
+      sections.push(
+        [
+          `Conversation ${it.thread_id}: "${fence(maskCodes({ subject: m.subject }).subject)}" from ${fence(m.from_name)} ‹${fence(m.from_email)}›`,
+          past.length ? `How the user last wrote to ${fence(m.from_email)}:\n${past.join("\n")}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
     return [
       `You are Autopilot, drafting replies for ${user.name} <${user.email}> to review. Nothing you write is sent; the user reads and sends it.`,
       "",
@@ -679,6 +692,8 @@ export class Autopilot {
     const outcome = await create.run(this.ctx, actor, create.input.parse({ threadId, body, replyAll: false }));
     const draft = outcome.result as { id: string };
     const d = JSON.parse(it.decision) as Decision;
+    // The link check reads the whole conversation, not previews.
+    await this.ctx.sync.bodies.load(this.ctx.db.all<{ id: string }>("SELECT id FROM messages WHERE thread_id = ? AND body_state = 'none'", threadId).map((r) => r.id));
     const thread = this.ctx.db.all<{ body_text: string; body_html: string | null }>("SELECT body_text, body_html FROM messages WHERE thread_id = ?", threadId).map((m) => `${m.body_text}\n${m.body_html ?? ""}`).join("\n");
     const newLinks = [...body.matchAll(/https?:\/\/[^\s<>"')]+/g)].map((x) => x[0]).filter((u) => !thread.includes(u));
     if (newLinks.length) d.warnings = [...(d.warnings ?? []), `The draft has links that aren't in the conversation: ${newLinks.slice(0, 3).join(", ")}`];
@@ -691,11 +706,13 @@ export class Autopilot {
 
   /** Study the person's sent mail and save how they write. */
   async learnVoice(userId: string) {
-    const sent = this.ctx.db
-      .all<{ body_text: string }>(
-        "SELECT body_text FROM messages WHERE outgoing = 1 AND account_id IN (SELECT id FROM accounts WHERE user_id = ?) ORDER BY sent_at DESC LIMIT 60",
-        userId,
-      )
+    const sentIds = this.ctx.db
+      .all<{ id: string }>("SELECT id FROM messages WHERE outgoing = 1 AND account_id IN (SELECT id FROM accounts WHERE user_id = ?) ORDER BY sent_at DESC LIMIT 60", userId)
+      .map((r) => r.id);
+    // Mail you sent is usually stored whole; what was synced as a summary is fetched so the voice comes from real text.
+    await this.ctx.sync.bodies.load(sentIds);
+    const sent = sentIds
+      .map((id) => this.ctx.db.get<{ body_text: string }>("SELECT body_text FROM messages WHERE id = ?", id)!)
       .map((m) => ownText(m.body_text).slice(0, 600))
       .filter((t) => t.length > 20)
       .slice(0, 30);

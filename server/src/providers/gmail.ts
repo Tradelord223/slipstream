@@ -1,11 +1,14 @@
 import type { Config } from "../config.ts";
 import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
-import { extractAttachment, parseRaw } from "../mail/mime.ts";
+import { decodeEntities } from "../lib/text.ts";
+import { extractAttachment, parseHeaderBlock, parseRaw } from "../mail/mime.ts";
 import {
   PermanentProviderError,
   ProviderAuthError,
   type FlagUpdate,
   type Folders,
+  type FullBody,
+  type IncomingAttachment,
   type IncomingMessage,
   type MailProvider,
   type OutgoingMessage,
@@ -18,6 +21,8 @@ import { jsonBody, OAuthSession } from "./oauth.ts";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const LIST_PAGE = 500;
+/** First-sync pages: small, so the dashboard sees mail after the first few requests and progress moves. */
+const INITIAL_PAGE = 100;
 const FETCH_CONCURRENCY = 8;
 /** History pages read per sync call before handing control back to the engine. */
 const HISTORY_PAGES_PER_CALL = 20;
@@ -34,13 +39,40 @@ interface GmailLabel {
   type?: string;
 }
 
+interface GmailPart {
+  partId?: string;
+  mimeType?: string;
+  filename?: string;
+  headers?: { name: string; value: string }[];
+  body?: { size?: number; attachmentId?: string };
+  parts?: GmailPart[];
+}
+
 interface GmailMessage {
   id: string;
   threadId: string;
   labelIds?: string[];
   raw?: string;
   internalDate?: string;
+  snippet?: string;
+  sizeEstimate?: number;
+  payload?: GmailPart;
 }
+
+/**
+ * What a summary asks Gmail for: format=full with a field mask that leaves out every byte of body data. The mask can't
+ * pick headers by name, so the top-level headers come whole (a few KB) and are filtered here; the part tree is only
+ * what attachments need (type, name, size, id, headers), nested as deep as real mail goes.
+ */
+const PART_FIELDS = "partId,mimeType,filename,headers(name,value),body(size,attachmentId)";
+const nestedParts = (depth: number): string => (depth === 0 ? PART_FIELDS : `${PART_FIELDS},parts(${nestedParts(depth - 1)})`);
+export const SUMMARY_FIELDS = `id,threadId,labelIds,snippet,sizeEstimate,internalDate,payload(mimeType,filename,headers(name,value),body(size,attachmentId),parts(${nestedParts(4)}))`;
+
+/** The headers a summary keeps; everything else (Received, DKIM, ARC) is routing noise. */
+const SUMMARY_HEADERS = new Set([
+  "from", "to", "cc", "bcc", "reply-to", "subject", "date", "message-id", "in-reply-to", "references",
+  "list-unsubscribe", "list-id", "precedence", "auto-submitted",
+]);
 
 interface GmailSendAs {
   sendAsEmail?: string;
@@ -63,6 +95,10 @@ interface Cursor {
   phase: "initial" | "incremental";
   historyId: string;
   pageToken?: string;
+  /** The newest inbox mail has been handed over; what remains is the rest of the window. */
+  top?: true;
+  /** Gmail's estimate of the window's size, from the first list page, so progress keeps one total. */
+  total?: number;
 }
 
 class GmailHttpError extends Error {
@@ -128,6 +164,8 @@ export class GmailProvider implements MailProvider {
   private ctx: ProviderContext;
   private http: OAuthSession;
   private labelCache: GmailLabel[] | null = null;
+  /** Inbox mail the first sync has already fetched, so the rest of the window doesn't fetch it twice. */
+  private handled = new Set<string>();
 
   constructor(ctx: ProviderContext, config?: Config) {
     this.ctx = ctx;
@@ -157,21 +195,47 @@ export class GmailProvider implements MailProvider {
   private async initialPage(cursor: Cursor | null): Promise<SyncPage> {
     // Record the history position before listing, so mail arriving mid-sync is replayed by the first incremental pass.
     const historyId = cursor?.historyId ?? (await this.api<{ historyId: string }>("GET", "/profile")).historyId;
-    const list = await this.api<{ messages?: { id: string }[]; nextPageToken?: string }>(
+    return cursor?.top ? this.historyPage(cursor, historyId) : this.inboxPage(historyId);
+  }
+
+  /** The newest inbox mail in the window, first: this is all the dashboard needs to open. */
+  private async inboxPage(historyId: string): Promise<SyncPage> {
+    const list = await this.api<{ messages?: { id: string }[] }>(
+      "GET",
+      withQuery("/messages", { q: `in:inbox newer_than:${this.ctx.initialSyncDays}d`, maxResults: INITIAL_PAGE }),
+    );
+    const ids = (list.messages ?? []).map((m) => m.id);
+    const messages = await this.fetchSummaries(ids);
+    this.handled = new Set(ids);
+    return {
+      messages,
+      cursor: JSON.stringify({ phase: "initial", historyId, top: true }),
+      done: false,
+      progress: { stage: "inbox", total: ids.length, count: ids.length, last: true },
+    };
+  }
+
+  /** The rest of the window, newest first. */
+  private async historyPage(cursor: Cursor, historyId: string): Promise<SyncPage> {
+    const list = await this.api<{ messages?: { id: string }[]; nextPageToken?: string; resultSizeEstimate?: number }>(
       "GET",
       withQuery("/messages", {
         q: `newer_than:${this.ctx.initialSyncDays}d -in:chats`,
-        maxResults: LIST_PAGE,
+        maxResults: INITIAL_PAGE,
         includeSpamTrash: "true",
-        pageToken: cursor?.pageToken,
+        pageToken: cursor.pageToken,
       }),
     );
-    const messages = await this.fetchRaw((list.messages ?? []).map((m) => m.id));
+    const ids = (list.messages ?? []).map((m) => m.id);
+    // Gmail's count is an estimate, and only the first page's is read, so the total stays put as the pages go by.
+    const total = cursor.total ?? list.resultSizeEstimate ?? null;
+    const messages = await this.fetchSummaries(ids.filter((id) => !this.handled.has(id)));
     const next = list.nextPageToken;
     return {
       messages,
-      cursor: JSON.stringify(next ? { phase: "initial", historyId, pageToken: next } : { phase: "incremental", historyId }),
+      cursor: JSON.stringify(next ? { phase: "initial", historyId, top: true, pageToken: next, total: total ?? undefined } : { phase: "incremental", historyId }),
       done: !next,
+      progress: { stage: "history", total, count: ids.length, last: !next },
     };
   }
 
@@ -203,7 +267,7 @@ export class GmailProvider implements MailProvider {
 
     const toFetch = [...added].filter((id) => !deleted.has(id));
     const toFlag = [...changed].filter((id) => !deleted.has(id) && !added.has(id));
-    const messages = await this.fetchRaw(toFetch);
+    const messages = await this.fetchSummaries(toFetch);
     const flagUpdates = (await mapLimit(toFlag, FETCH_CONCURRENCY, (id) => this.fetchFlags(id))).filter((f): f is FlagUpdate => f !== null);
 
     return {
@@ -217,17 +281,17 @@ export class GmailProvider implements MailProvider {
     };
   }
 
-  /** Fetches and parses messages. A message that vanished between listing and fetching is skipped. */
-  private async fetchRaw(ids: string[]): Promise<IncomingMessage[]> {
+  /** Fetches message summaries (headers, preview, attachment names). A message that vanished between listing and fetching is skipped. */
+  private async fetchSummaries(ids: string[]): Promise<IncomingMessage[]> {
     const parsed = await mapLimit(ids, FETCH_CONCURRENCY, async (id) => {
       let m: GmailMessage;
       try {
-        m = await this.api<GmailMessage>("GET", withQuery(`/messages/${enc(id)}`, { format: "raw" }));
+        m = await this.api<GmailMessage>("GET", withQuery(`/messages/${enc(id)}`, { format: "full", fields: SUMMARY_FIELDS }));
       } catch (err) {
         if (err instanceof GmailHttpError && err.status === 404) return null;
         throw err;
       }
-      return this.toIncoming(m);
+      return this.toSummary(m);
     });
     return parsed.filter((m): m is IncomingMessage => m !== null);
   }
@@ -245,10 +309,11 @@ export class GmailProvider implements MailProvider {
     return { remoteId: m.id, unread, starred, folders, labels };
   }
 
-  private async toIncoming(m: GmailMessage): Promise<IncomingMessage | null> {
-    if (!m.raw || isSkipped(m.labelIds)) return null;
+  private async toSummary(m: GmailMessage): Promise<IncomingMessage | null> {
+    if (!m.payload || isSkipped(m.labelIds)) return null;
     const { folders, unread, starred, labels } = await this.mapLabels(m.labelIds ?? []);
-    const { message } = await parseRaw(Buffer.from(m.raw, "base64url"), {
+    const head = (m.payload.headers ?? []).filter((h) => SUMMARY_HEADERS.has(h.name.toLowerCase())).map((h) => `${h.name}: ${h.value}`);
+    const message = await parseHeaderBlock(head.join("\r\n"), {
       remoteId: m.id,
       remoteThreadId: m.threadId,
       folders,
@@ -260,6 +325,11 @@ export class GmailProvider implements MailProvider {
     });
     // Ours means "carries the SENT label" (aliases included), never "the From header says so": anyone can write a From.
     message.outgoing = folders.sent;
+    // Gmail's snippet is HTML-escaped text; it stands in for the body until the message is opened.
+    message.bodyText = decodeEntities(m.snippet ?? "");
+    message.bodyComplete = false;
+    if (m.sizeEstimate) message.size = m.sizeEstimate;
+    message.attachments = gmailAttachments(m.payload);
     return message;
   }
 
@@ -428,11 +498,47 @@ export class GmailProvider implements MailProvider {
     return { remoteId: sent.id };
   }
 
+  /** The whole message, for one that was synced as a summary. */
+  async fetchBody(messageRemoteId: string): Promise<FullBody> {
+    const m = await this.api<GmailMessage>("GET", withQuery(`/messages/${enc(messageRemoteId)}`, { format: "raw" }));
+    if (!m.raw) throw new Error("Gmail returned no message source");
+    const { message } = await parseRaw(Buffer.from(m.raw, "base64url"), { remoteId: messageRemoteId });
+    return { text: message.bodyText, html: message.bodyHtml, attachments: message.attachments };
+  }
+
   async fetchAttachment(messageRemoteId: string, attachmentRemoteId: string): Promise<Buffer> {
     const m = await this.api<GmailMessage>("GET", withQuery(`/messages/${enc(messageRemoteId)}`, { format: "raw" }));
     if (!m.raw) throw new Error("Gmail returned no message source");
     return extractAttachment(Buffer.from(m.raw, "base64url"), attachmentRemoteId);
   }
+}
+
+/**
+ * Attachments from the part tree: a part with a filename, or a non-text part Gmail stored separately (an inline image
+ * with no name). The handle is the part id until the full message is fetched and brings its own.
+ */
+function gmailAttachments(root: GmailPart): IncomingAttachment[] {
+  const out: IncomingAttachment[] = [];
+  const header = (p: GmailPart, name: string) => p.headers?.find((h) => h.name.toLowerCase() === name)?.value;
+  const walk = (p: GmailPart) => {
+    const mime = p.mimeType ?? "application/octet-stream";
+    const stored = Boolean(p.body?.attachmentId) && !/^(text\/(plain|html)|multipart\/)/i.test(mime);
+    if (p.filename || stored) {
+      const contentId = header(p, "content-id")?.replace(/^<|>$/g, "").trim() || undefined;
+      out.push({
+        remoteId: `part:${p.partId ?? out.length}`,
+        filename: p.filename || "attachment",
+        mimeType: mime,
+        size: p.body?.size ?? 0,
+        contentId,
+        inline: /^\s*inline/i.test(header(p, "content-disposition") ?? "") && Boolean(contentId),
+      });
+      return;
+    }
+    for (const child of p.parts ?? []) walk(child);
+  };
+  for (const child of root.parts ?? []) walk(child);
+  return out;
 }
 
 /** Drafts and Hangouts chat transcripts aren't mail Slipstream shows. */

@@ -10,7 +10,7 @@ import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDr
 import { listIdentities, ownAddresses, replyIdentity, resolveFrom } from "../mail/identities.ts";
 import { isPersonalMailDomain } from "../mail/logos.ts";
 import { maskCodes } from "../mail/signals.ts";
-import { counts, getThread, listThreads } from "../mail/views.ts";
+import { counts, getThread, getThreadWithBodies, listThreads } from "../mail/views.ts";
 import { createSnippet, createSplit, deleteSplit, listSnippets, listSplits } from "../prefs.ts";
 import { createLabel, createRule, deleteLabel, deleteRule, listLabels, listRules, ruleMatches, updateLabel, updateRule } from "../mail/labels.ts";
 import { addComment, shareThread } from "../team.ts";
@@ -245,8 +245,8 @@ export function buildCatalog(): Command[] {
       scope: "read",
       readOnly: true,
       input: z.object({ threadId: z.string().max(100) }),
-      run: (ctx, actor, i) => {
-        const t = getThread(ctx, actor.user.id, i.threadId, { hideCodes: actor.kind === "agent" });
+      run: async (ctx, actor, i) => {
+        const t = await getThreadWithBodies(ctx, actor.user.id, i.threadId, { hideCodes: actor.kind === "agent" });
         return {
           result: {
             thread: t.thread,
@@ -260,6 +260,8 @@ export function buildCatalog(): Command[] {
               sentAt: new Date(m.sentAt).toISOString(),
               subject: m.subject,
               text: stripQuoted(m.text || (m.html ? htmlToText(m.html) : "")).slice(0, 50_000),
+              // Only when the provider couldn't return the message just now: the text is then its preview.
+              ...(m.bodyState === "none" ? { previewOnly: true } : {}),
               attachments: m.attachments.filter((a) => !a.inline).map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size })),
               canUnsubscribe: m.canUnsubscribe,
             })),
@@ -368,7 +370,7 @@ export function buildCatalog(): Command[] {
         const stored = ctx.db.get<{ value: string }>("SELECT value FROM settings WHERE user_id = ? AND key = 'secret:anthropic'", actor.user.id);
         const key = stored ? ctx.secrets.open<string>(JSON.parse(stored.value) as string) : ctx.config.anthropicApiKey;
         if (!key) throw new HttpError(400, "No Anthropic API key is set in Settings → AI.");
-        const t = getThread(ctx, actor.user.id, i.threadId, { hideCodes: true });
+        const t = await getThreadWithBodies(ctx, actor.user.id, i.threadId, { hideCodes: true });
         try {
           const summary = await summarizeThread(
             key,
@@ -700,8 +702,8 @@ export function buildCatalog(): Command[] {
       description: "Share a conversation with the user's team so teammates can read and comment on it.",
       scope: "draft",
       input: z.object({ threadId: z.string() }),
-      run: (ctx, actor, i) => {
-        const s = shareThread(ctx, actor.user.id, i.threadId);
+      run: async (ctx, actor, i) => {
+        const s = await shareThread(ctx, actor.user.id, i.threadId);
         return { result: { sharedId: s.id }, summary: `Shared "${s.subject}" with the team`, threadIds: [i.threadId] };
       },
     }),

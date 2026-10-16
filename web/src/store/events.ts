@@ -98,13 +98,16 @@ function handle(e: ServerEvent) {
               syncStatus: e.status,
               syncError: e.error ?? null,
               lastSyncedAt: e.status === "idle" ? Date.now() : a.lastSyncedAt,
+              progress: e.progress ?? a.progress,
             }
           : a,
       );
       session.set({ accounts });
       // An idle event doesn't mean the first sync is complete (a run can end early), so first-run setup waits for the
       // server's own firstSyncedAt, picked up here once a run settles.
-      if (session.get().status === "onboarding" && e.status !== "syncing") void refreshSession();
+      // The inbox opens as soon as its newest mail is in (the stages after "inbox"), while the rest of the window keeps arriving.
+      const inboxReady = e.progress !== undefined && e.progress.stage !== "signin" && e.progress.stage !== "inbox";
+      if (session.get().status === "onboarding" && (e.status !== "syncing" || inboxReady)) void refreshSession();
       break;
     }
     case "drafts":

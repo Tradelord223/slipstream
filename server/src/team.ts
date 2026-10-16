@@ -23,7 +23,7 @@ export function sharedIn(ctx: AppContext, workspaceId: string, id: string) {
 }
 
 /** Share (or re-share, refreshing the snapshot) one of the user's conversations with their team. */
-export function shareThread(ctx: AppContext, userId: string, threadId: string): { id: string; subject: string } {
+export async function shareThread(ctx: AppContext, userId: string, threadId: string): Promise<{ id: string; subject: string }> {
   const { db, events } = ctx;
   const ws = requireWorkspace(ctx, userId);
   const thread = db.get<{ id: string; subject: string }>(
@@ -32,6 +32,8 @@ export function shareThread(ctx: AppContext, userId: string, threadId: string): 
     userId,
   );
   if (!thread) throw new HttpError(404, "Conversation not found");
+  // A snapshot carries what was said, not previews: messages synced as summaries are fetched first.
+  await ctx.sync.bodies.load(db.all<{ id: string }>("SELECT id FROM messages WHERE thread_id = ? AND body_state = 'none'", threadId).map((r) => r.id));
   const messages = db.all<{ from_name: string; from_email: string; to_json: string; cc_json: string; sent_at: number; body_text: string; body_html: string | null; subject: string }>(
     "SELECT from_name, from_email, to_json, cc_json, sent_at, body_text, body_html, subject FROM messages WHERE thread_id = ? ORDER BY sent_at",
     threadId,

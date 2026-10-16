@@ -6,6 +6,7 @@
  */
 import net from "node:net";
 import type { FakeBox, FakeMessage, FakeServer } from "./fake-imap.ts";
+import { headerBlock, partBytes, structureOf, structureWire } from "./mime-fake.ts";
 
 type Token = string | Token[];
 
@@ -55,9 +56,35 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const imapDate = (d: Date) =>
   `${String(d.getUTCDate()).padStart(2, "0")}-${MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()} ${d.toISOString().slice(11, 19)} +0000`;
 
+/** The data items of a FETCH command line, split at the top level so `BODY.PEEK[HEADER.FIELDS (A B)]<0.2048>` stays one item. */
+function fetchItems(line: string): string[] {
+  const open = line.indexOf("(", line.toUpperCase().indexOf("FETCH"));
+  const items: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (let i = open; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === "(" || ch === "[") {
+      depth++;
+      if (depth === 1 && ch === "(") continue;
+    } else if (ch === ")" || ch === "]") {
+      depth--;
+      if (depth === 0 && ch === ")") break;
+    }
+    if (ch === " " && depth === 1) {
+      if (current) items.push(current);
+      current = "";
+    } else current += ch;
+  }
+  if (current) items.push(current);
+  return items;
+}
+
 export interface MiniImap {
   port: number;
   commands: string[];
+  /** The data items of every FETCH, as the client wrote them. */
+  fetches: string[][];
   /** Hang up on every connected client, as a server timing out idle sessions does. */
   dropAll(): void;
   close(): Promise<void>;
@@ -65,6 +92,7 @@ export interface MiniImap {
 
 export async function startMiniImap(data: FakeServer, creds = { user: "me@example.com", pass: "pw" }): Promise<MiniImap> {
   const commands: string[] = [];
+  const fetches: string[][] = [];
   const sockets = new Set<net.Socket>();
   const gmail = data.capabilities.has("X-GM-EXT-1");
 
@@ -73,6 +101,7 @@ export async function startMiniImap(data: FakeServer, creds = { user: "me@exampl
     socket.on("close", () => sockets.delete(socket));
     socket.on("error", () => {});
     let buf = Buffer.alloc(0);
+    let commandText = "";
     let selected: FakeBox | undefined;
     let authed = false;
     // A command whose line ended in a literal marker waits here for the literal's bytes.
@@ -115,6 +144,10 @@ export async function startMiniImap(data: FakeServer, creds = { user: "me@exampl
               return value === "" ? Boolean(line) : line.toLowerCase().includes(value.toLowerCase());
             };
           }
+          case "X-GM-RAW": {
+            const query = String(tokens[i++]);
+            return (m) => (query === "in:inbox" ? Boolean(m.labels?.has("\\Inbox")) : true);
+          }
           case "OR": {
             const a = key();
             const b = key();
@@ -134,25 +167,38 @@ export async function startMiniImap(data: FakeServer, creds = { user: "me@exampl
     }
 
     function fetchLine(m: FakeMessage, seq: number, items: string[], forceUid: boolean): Buffer {
-      const parts: (string | Buffer)[] = [];
-      const wanted = new Set(items.map((s) => s.toUpperCase()));
+      const parts: (string | { name: string; data: Buffer })[] = [];
+      const wanted = new Set(items.map((x) => x.toUpperCase()));
       if (forceUid || wanted.has("UID")) parts.push(`UID ${m.uid}`);
       if (wanted.has("FLAGS")) parts.push(`FLAGS (${flagList(m)})`);
       if (wanted.has("INTERNALDATE")) parts.push(`INTERNALDATE "${imapDate(m.internalDate)}"`);
       if (wanted.has("RFC822.SIZE")) parts.push(`RFC822.SIZE ${m.source.length}`);
+      if (wanted.has("BODYSTRUCTURE")) parts.push(`BODYSTRUCTURE ${structureWire(structureOf(m.source))}`);
       if (wanted.has("X-GM-LABELS")) parts.push(`X-GM-LABELS (${[...(m.labels ?? [])].map((l) => (l.startsWith("\\") ? l : `"${l}"`)).join(" ")})`);
       if (wanted.has("X-GM-THRID")) parts.push(`X-GM-THRID ${m.threadId ?? "0"}`);
       if (wanted.has("X-GM-MSGID")) parts.push(`X-GM-MSGID ${1000 + m.uid}`);
       if (wanted.has("MODSEQ") && data.condstore) parts.push(`MODSEQ (${m.modseq})`);
-      const body = items.find((s) => /^BODY(\.PEEK)?\[\]$/i.test(s));
-      const out: Buffer[] = [];
-      let head = `* ${seq} FETCH (${parts.map((p) => (typeof p === "string" ? p : "")).join(" ")}`;
-      if (body) {
-        head += `${parts.length ? " " : ""}BODY[] {${m.source.length}}\r\n`;
-        out.push(Buffer.from(head, "latin1"), m.source, Buffer.from(")\r\n"));
-      } else {
-        out.push(Buffer.from(`${head})\r\n`, "latin1"));
+      for (const item of items) {
+        const body = /^BODY(?:\.PEEK)?\[(.*?)\](?:<(\d+)(?:\.(\d+))?>)?$/i.exec(item);
+        if (!body) continue;
+        const section = body[1]!;
+        const field = /^HEADER\.FIELDS\s*\((.*)\)$/i.exec(section);
+        let bytes: Buffer | undefined;
+        if (section === "") bytes = m.source;
+        else if (field) bytes = headerBlock(m.source, field[1]!.split(/\s+/).filter(Boolean));
+        else bytes = partBytes(m.source, section);
+        if (!bytes) continue;
+        const start = body[2] ? Number(body[2]) : 0;
+        const slice = body[3] ? bytes.subarray(start, start + Number(body[3])) : bytes.subarray(start);
+        parts.push({ name: `BODY[${section}]${body[2] ? `<${start}>` : ""}`, data: slice });
       }
+      const out: Buffer[] = [Buffer.from(`* ${seq} FETCH (`, "latin1")];
+      parts.forEach((p, i) => {
+        if (i > 0) out.push(Buffer.from(" "));
+        if (typeof p === "string") out.push(Buffer.from(p, "latin1"));
+        else out.push(Buffer.from(`${p.name} {${p.data.length}}\r\n`, "latin1"), p.data);
+      });
+      out.push(Buffer.from(")\r\n"));
       return Buffer.concat(out);
     }
 
@@ -252,7 +298,8 @@ export async function startMiniImap(data: FakeServer, creds = { user: "me@exampl
           }
           case "FETCH": {
             const set = String(rest[0]);
-            const items = (rest[1] as string[]).filter((s): s is string => typeof s === "string");
+            const items = fetchItems(commandText);
+            fetches.push(items);
             const mods = rest[2] as string[] | undefined;
             const since = mods?.[0]?.toUpperCase() === "CHANGEDSINCE" ? BigInt(mods[1]!) : undefined;
             const inSet = uidSet(set, max(useUid ? "uid" : "seq"));
@@ -325,6 +372,7 @@ export async function startMiniImap(data: FakeServer, creds = { user: "me@exampl
           continue;
         }
         const full = state.text + line;
+        commandText = full;
         const [tag, command, ...rest] = tokenize(full) as string[] & Token[];
         handle(String(tag), String(command), rest as Token[], state.literals);
       }
@@ -341,6 +389,7 @@ export async function startMiniImap(data: FakeServer, creds = { user: "me@exampl
   return {
     port,
     commands,
+    fetches,
     dropAll: () => {
       for (const s of sockets) s.destroy();
     },

@@ -3,7 +3,7 @@ import type {
   Address, Bootstrap, ContactInfo, Contact, Counts, Discovery, Draft, Identity, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
   ThreadPage, TriageKind, TriageResult, SharedComment,
   CloudConnectInput, CloudRun, CloudStatus, LabelInfo, LabelRule, Routine, RoutineInput,
-  AutopilotOverview, AutopilotPatch, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction,
+  AutopilotOverview, AutopilotPatch, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction, MessageBodies,
 } from "./types.ts";
 
 export class ApiError extends Error {
@@ -91,6 +91,8 @@ export const api = {
   threads: (p: ListParams, signal?: AbortSignal) =>
     get<ThreadPage>(`/api/threads${qs({ view: p.view, split: p.split, q: p.q, account: p.account, before: p.before, limit: p.limit })}`, signal),
   thread: (id: string, signal?: AbortSignal) => get<ThreadDetail>(`/api/threads/${encodeURIComponent(id)}`, signal),
+  /** Full text for messages that were synced as previews. */
+  threadBodies: (id: string, messageIds: string[]) => get<MessageBodies>(`/api/threads/${encodeURIComponent(id)}/bodies${qs({ ids: messageIds.join(",") })}`),
   /** A one-time code, read from the message only when asked. */
   messageCode: (id: string) => get<{ code: string }>(`/api/messages/${encodeURIComponent(id)}/code`),
   threadCode: (id: string) => get<{ code: string }>(`/api/threads/${encodeURIComponent(id)}/code`),

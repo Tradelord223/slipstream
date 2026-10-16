@@ -1,4 +1,5 @@
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
+import { htmlToText } from "../lib/text.ts";
 import type { Address, Folders, IncomingMessage } from "./types.ts";
 
 function addresses(field: AddressObject | AddressObject[] | undefined): Address[] {
@@ -23,12 +24,14 @@ function header(parsed: ParsedMail, name: string): string | undefined {
   return String(v);
 }
 
+/** mailparser files every List-* header under one "list" key: { unsubscribe: { url, mail }, id: { name } }. */
+function listHeaders(parsed: ParsedMail): { unsubscribe?: { url?: string; mail?: string }; id?: unknown } {
+  return (parsed.headers.get("list") ?? {}) as { unsubscribe?: { url?: string; mail?: string }; id?: unknown };
+}
+
 function listUnsubscribe(parsed: ParsedMail): string | undefined {
-  const raw = parsed.headers.get("list-unsubscribe");
-  if (!raw) return undefined;
-  if (typeof raw === "string") return raw;
-  // mailparser parses this header into { url, mail } objects
-  const obj = raw as { url?: string; mail?: string };
+  const obj = listHeaders(parsed).unsubscribe;
+  if (!obj) return undefined;
   return [obj.url, obj.mail && `mailto:${obj.mail}`].filter(Boolean).join(", ") || undefined;
 }
 
@@ -62,6 +65,41 @@ export async function parseRaw(
 }
 
 /**
+ * A message a provider sent as headers only (the summaries-first sync). The header block goes through the same parser
+ * as a full message, so addresses, dates and the list headers read exactly as they will once the body arrives.
+ */
+export async function parseHeaderBlock(headers: Buffer | string, opts: ParseOptions): Promise<IncomingMessage> {
+  const text = (Buffer.isBuffer(headers) ? headers.toString("utf8") : headers).replace(/\s+$/, "");
+  return (await parseRaw(Buffer.from(`${text}\r\n\r\n`, "utf8"), opts)).message;
+}
+
+/** The preview of a message from the first bytes of one MIME part: undo its transfer encoding and charset, then strip markup. */
+export function previewFromPart(data: Buffer, part: { type: string; encoding?: string; charset?: string }, max = 2000): string {
+  let bytes = data;
+  const encoding = part.encoding?.toLowerCase();
+  if (encoding === "base64") {
+    const b64 = data.toString("latin1").replace(/[^A-Za-z0-9+/]/g, "");
+    bytes = Buffer.from(b64.slice(0, b64.length - (b64.length % 4)), "base64");
+  } else if (encoding === "quoted-printable") {
+    const qp = data
+      .toString("latin1")
+      .replace(/=\r?\n/g, "")
+      .replace(/=([0-9A-Fa-f]{2})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    bytes = Buffer.from(qp, "latin1");
+  }
+  let text: string;
+  try {
+    text = new TextDecoder(part.charset || "utf-8").decode(bytes);
+  } catch {
+    text = new TextDecoder("utf-8").decode(bytes);
+  }
+  // The fetch stopped mid-character: a replacement mark at the very end isn't in the message.
+  text = text.replace(/�$/, "");
+  if (/^text\/html$/i.test(part.type)) text = htmlToText(text);
+  return text.replace(/\r\n?/g, "\n").trim().slice(0, max);
+}
+
+/**
  * Attachment bytes by the index handle parseRaw assigns ("idx:N"). Providers that only keep raw
  * messages remotely (Gmail raw, IMAP) re-fetch the source and call this for downloads.
  */
@@ -79,7 +117,7 @@ function toIncoming(parsed: ParsedMail, opts: ParseOptions): IncomingMessage {
   const precedence = header(parsed, "precedence")?.toLowerCase();
   const autoSubmitted = header(parsed, "auto-submitted")?.toLowerCase();
   const bulk =
-    Boolean(header(parsed, "list-id")) ||
+    Boolean(listHeaders(parsed).id) ||
     precedence === "bulk" ||
     precedence === "list" ||
     precedence === "junk" ||

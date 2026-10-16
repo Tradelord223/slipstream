@@ -33,7 +33,6 @@ function msg(id: string, extra: Record<string, unknown> = {}) {
     flag: { flagStatus: "notFlagged" },
     conversationId: `conv-${id}`,
     internetMessageId: `<${id}@example.org>`,
-    body: { contentType: "html", content: `<p>Body of ${id}</p>` },
     bodyPreview: `Body of ${id}`,
     hasAttachments: false,
     categories: [],
@@ -84,18 +83,25 @@ describe("Graph delta sync", () => {
     const initial = stub.calls[0]!;
     assert.equal(initial.url.searchParams.get("$select")?.includes("conversationId"), true);
     assert.match(initial.url.searchParams.get("$filter") ?? "", /^receivedDateTime ge \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
-    assert.equal(initial.headers.get("prefer"), 'IdType="ImmutableId", odata.maxpagesize=50');
+    assert.equal(initial.headers.get("prefer"), 'IdType="ImmutableId", odata.maxpagesize=100');
+    // Summaries only: the body is never selected, the preview and the list headers are, and the newest mail comes first.
+    const selected = initial.url.searchParams.get("$select")!.split(",");
+    assert.ok(!selected.includes("body") && !selected.includes("uniqueBody"));
+    assert.ok(selected.includes("bodyPreview") && selected.includes("internetMessageHeaders") && selected.includes("hasAttachments"));
+    assert.equal(initial.url.searchParams.get("$orderby"), "receivedDateTime desc");
+    assert.deepEqual(first.progress, { stage: "inbox", total: 1, count: 1, last: true }, "the inbox's first page is the inbox stage");
     assert.deepEqual(JSON.parse(first.cursor!).folders.inbox, { link: `${ME}/mailFolders/inbox/messages/delta?$skiptoken=s2`, kind: "next" });
 
     const second = await graph.sync(first.cursor);
     assert.equal(second.done, false);
     assert.deepEqual(second.messages.map((m) => m.remoteId), ["m2"]);
     // The next link is followed as given: no filter again, same headers.
-    const follow = stub.calls[1]!;
+    const follow = stub.callsTo("GET", delta("inbox"))[1]!;
     assert.equal(follow.url.searchParams.get("$skiptoken"), "s2");
     assert.equal(follow.url.searchParams.has("$filter"), false);
-    assert.equal(follow.headers.get("prefer"), 'IdType="ImmutableId", odata.maxpagesize=50');
+    assert.equal(follow.headers.get("prefer"), 'IdType="ImmutableId", odata.maxpagesize=100');
     assert.equal(JSON.parse(second.cursor!).folders.inbox.kind, "delta");
+    assert.deepEqual(second.progress, { stage: "history", total: null, count: 1, last: false }, "no count route here: the total stays unknown");
 
     const rest = await syncAll(graph, second.cursor);
     assert.equal(rest.pages.at(-1)!.done, true);
@@ -130,12 +136,20 @@ describe("Graph delta sync", () => {
           hasAttachments: true,
           replyTo: [{ emailAddress: { name: "Reply", address: "reply@example.org" } }],
           ccRecipients: [{ emailAddress: { name: "Bob", address: "bob@example.org" } }],
+          internetMessageHeaders: [
+            { name: "Received", value: "from mx.example.org" },
+            { name: "From", value: "Ann <ann@example.org>" },
+            { name: "In-Reply-To", value: "<m0@example.org>" },
+            { name: "References", value: "<m-1@example.org> <m0@example.org>" },
+            { name: "List-Unsubscribe", value: "<https://news.example.org/u/1>" },
+            { name: "List-Id", value: "<news.example.org>" },
+          ],
         }),
       ],
       sentitems: [
         msg("s1", {
           from: { emailAddress: { name: "Me", address: "me@example.com" } },
-          body: { contentType: "text", content: "plain words" },
+          bodyPreview: "plain words",
         }),
       ],
       deleteditems: [msg("d1")],
@@ -161,9 +175,14 @@ describe("Graph delta sync", () => {
     assert.equal(m1.replyTo, "reply@example.org");
     assert.equal(m1.subject, "Subject m1");
     assert.equal(m1.sentAt, Date.parse("2026-10-06T09:00:00Z"));
-    assert.equal(m1.bodyHtml, "<p>Body of m1</p>");
-    assert.equal(m1.bodyText, "");
+    assert.equal(m1.bodyHtml, undefined);
+    assert.equal(m1.bodyText, "Body of m1", "the preview stands in for the body");
+    assert.equal(m1.bodyComplete, false);
     assert.equal(m1.snippet, "Body of m1");
+    assert.equal(m1.inReplyTo, "<m0@example.org>");
+    assert.deepEqual(m1.references, ["<m-1@example.org>", "<m0@example.org>"]);
+    assert.equal(m1.listUnsubscribe, "https://news.example.org/u/1");
+    assert.equal(m1.bulk, true);
     assert.equal(m1.unread, false);
     assert.equal(m1.starred, true);
     assert.equal(m1.outgoing, false);
@@ -185,10 +204,56 @@ describe("Graph delta sync", () => {
     assert.equal(s1.outgoing, true);
     assert.equal(s1.bodyText, "plain words");
     assert.equal(s1.bodyHtml, undefined);
+    assert.equal(s1.inReplyTo, undefined, "no list headers came with it");
     assert.deepEqual(s1.folders, { inbox: false, sent: true, trash: false, spam: false });
     assert.equal(byId("d1").folders.trash, true);
     assert.equal(byId("j1").folders.spam, true);
     assert.equal(stub.callsTo("GET", `${ME}/messages/s1/attachments`).length, 0);
+  });
+
+  it("counts the window once the inbox page is out, so the history stage has a total", async () => {
+    stub = new FetchStub();
+    stub.on("GET", delta("inbox"), (call: Call) =>
+      call.url.searchParams.get("$skiptoken") === "s2"
+        ? json({ value: [msg("m3")], "@odata.deltaLink": `${ME}/mailFolders/inbox/messages/delta?$deltatoken=inbox-1` })
+        : json({ value: [msg("m1"), msg("m2")], "@odata.nextLink": `${ME}/mailFolders/inbox/messages/delta?$skiptoken=s2` }),
+    );
+    for (const f of ["sentitems", "deleteditems", "junkemail"]) {
+      stub.on("GET", delta(f), { value: f === "sentitems" ? [msg("s1")] : [], "@odata.deltaLink": `${ME}/mailFolders/${f}/messages/delta?$deltatoken=${f}-1` });
+    }
+    stub.on("GET", delta("archive"), json({ error: { code: "ErrorFolderNotFound", message: "Folder not found" } }, 404));
+    const counts: Record<string, number> = { inbox: 3, sentitems: 1, deleteditems: 0, junkemail: 0 };
+    stub.on("GET", new RegExp(`^${ME}/mailFolders/[a-z]+/messages$`), (call: Call) => {
+      const folder = call.url.pathname.split("/").at(-2)!;
+      assert.equal(call.url.searchParams.get("$count"), "true");
+      assert.match(call.url.searchParams.get("$filter") ?? "", /^receivedDateTime ge /);
+      return folder in counts ? json({ "@odata.count": counts[folder], value: [] }) : json({ error: { code: "ErrorFolderNotFound", message: "no" } }, 404);
+    });
+    const { graph } = newProvider();
+    const { pages } = await syncAll(graph);
+    const stages = pages.flatMap((p) => (p.progress ? [p.progress] : []));
+    assert.deepEqual(stages[0], { stage: "inbox", total: 2, count: 2, last: true });
+    // Two messages went out as the inbox stage; the other two in the window are the history.
+    assert.ok(stages.slice(1).every((p) => p.stage === "history" && p.total === 2));
+    assert.equal(stages.slice(1).reduce((n, p) => n + p.count, 0), 2, "the rest of the inbox, then Sent Items; the empty folders count nothing");
+    assert.equal(pages.at(-1)!.progress?.last, true);
+  });
+
+  it("fetches a whole message, with every attachment listed, when asked", async () => {
+    stub = new FetchStub();
+    stub.on("GET", `${ME}/messages/m1`, (call: Call) => {
+      assert.equal(call.url.searchParams.get("$select"), "body,hasAttachments");
+      return json({ id: "m1", body: { contentType: "html", content: '<p>Hi</p><img src="cid:logo@x">' }, hasAttachments: false });
+    });
+    stub.on("GET", `${ME}/messages/m1/attachments`, { value: [{ id: "att2", name: "logo.png", contentType: "image/png", size: 99, isInline: true, contentId: "logo@x" }] });
+    stub.on("GET", `${ME}/messages/m2`, { id: "m2", body: { contentType: "text", content: "plain words" }, hasAttachments: false });
+    const { graph } = newProvider();
+    const full = await graph.fetchBody("m1");
+    assert.equal(full.html, '<p>Hi</p><img src="cid:logo@x">');
+    assert.deepEqual(full.attachments.map((a) => [a.remoteId, a.inline, a.contentId]), [["att2", true, "logo@x"]], "an inline-only message has hasAttachments false, but its cid image is listed");
+    const plain = await graph.fetchBody("m2");
+    assert.deepEqual([plain.text, plain.html, plain.attachments], ["plain words", undefined, []]);
+    assert.equal(stub.callsTo("GET", `${ME}/messages/m2/attachments`).length, 0);
   });
 
   it("polls every delta link once and handles removals", async () => {
