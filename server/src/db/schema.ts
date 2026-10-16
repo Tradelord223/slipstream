@@ -566,4 +566,12 @@ export const migrations: string[] = [
   -- The IMAP preset an account was connected with (gmail, icloud, fastmail, yahoo, zoho, proton), for its label in Settings.
   ALTER TABLE accounts ADD COLUMN preset TEXT;
   `,
+  /* 18: one-time jobs that have run on this install */ `
+  -- A job that must run once per install, such as trimming the mail cache after the sync stopped downloading everything.
+  -- The row is written when the job finishes, so one that was interrupted starts again.
+  CREATE TABLE maintenance (
+    task TEXT PRIMARY KEY,
+    ran_at INTEGER NOT NULL
+  );
+  `,
 ];

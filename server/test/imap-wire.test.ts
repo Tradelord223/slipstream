@@ -291,6 +291,19 @@ describe("ImapProvider over a real IMAP connection", () => {
     assert.ok(bytes.equals(PDF));
   });
 
+  it("fetches many whole messages with one UID FETCH naming all their UIDs", async () => {
+    const data = generic();
+    for (let i = 0; i < 7; i++) data.deliver("INBOX", mail(`w${i}`));
+    const { mini, provider } = await start(data);
+    const st = await drain(provider, null);
+    mini.fetches.length = 0;
+    const got = await provider.fetchBodies(st.messages.map((m) => ({ remoteId: m.remoteId })));
+    assert.equal(got.size, 7);
+    assert.ok([...got.values()].every((b) => /Body of w\d/.test(b.text)));
+    const whole = mini.fetches.filter((items) => items.some((i) => /^BODY(\.PEEK)?\[\]$/i.test(i)));
+    assert.equal(whole.length, 1, "one FETCH for all seven");
+  });
+
   it("reconnects after the server hangs up", async () => {
     const data = generic();
     data.deliver("INBOX", mail("a"));

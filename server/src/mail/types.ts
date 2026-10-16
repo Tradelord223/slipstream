@@ -192,6 +192,12 @@ export interface MailProvider {
    */
   fetchBody?(messageRemoteId: string, hint?: { messageIdHeader?: string | null }): Promise<FullBody>;
   /**
+   * `fetchBody` for many messages in as few round trips as the provider allows, keyed by remote id. A message it can't
+   * return is left out of the map; a failure of the whole request throws. Providers without a cheaper way leave this out
+   * and callers fetch one message at a time.
+   */
+  fetchBodies?(refs: { remoteId: string; messageIdHeader?: string | null }[]): Promise<Map<string, FullBody>>;
+  /**
    * Previews for messages a page listed in `previewIds`, in as few round trips as the provider allows, keyed by remote id.
    * A message it can't preview is left out; nothing here may download a whole message.
    */

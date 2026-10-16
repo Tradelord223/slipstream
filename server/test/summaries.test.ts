@@ -7,7 +7,9 @@ import type { FullBody, IncomingMessage, MailProvider, SyncPage } from "../src/m
 import { bundleDeliveries } from "../src/mail/signal-jobs.ts";
 import { getThreadWithBodies } from "../src/mail/views.ts";
 import { DEMO_IDENTITY, DemoProvider } from "../src/providers/demo.ts";
+import { ImapProvider } from "../src/providers/imap.ts";
 import { shareThread } from "../src/team.ts";
+import { FakeServer } from "./fake-imap.ts";
 import { addAccount, makeEnv, msg, type TestEnv } from "./helpers.ts";
 import { FetchStub } from "./stub.ts";
 
@@ -659,6 +661,154 @@ describe("the sync engine", () => {
     assert.deepEqual(progress.filter((p) => p.stage === "history").map((p) => without(p, "rate")), [{ stage: "history", done: 5, total: 5 }]);
     assert.equal(row<{ sync_status: string }>(r.env, "SELECT sync_status FROM accounts WHERE id = ?", r.accountId).sync_status, "idle");
     assert.equal(row<{ n: number }>(r.env, "SELECT count(*) AS n FROM messages WHERE body_state = 'none' AND remote_id LIKE 'in%'").n, 1, "the one that failed stays a preview");
+  });
+
+  test("the recent cache is one request when the provider can batch, and its progress counts every message exactly, failures included", async () => {
+    const r = rig();
+    script(r, 60, [1], 61);
+    const fake = r.env.ctx.sync.provider(r.account) as MailProvider;
+    r.bodies.delete("in20");
+    const calls: string[][] = [];
+    fake.fetchBodies = async (refs) => {
+      calls.push(refs.map((x) => x.remoteId));
+      await new Promise((resolve) => setImmediate(resolve));
+      return new Map(refs.flatMap((x) => (r.bodies.get(x.remoteId) ? [[x.remoteId, r.bodies.get(x.remoteId) as FullBody] as const] : [])));
+    };
+    fake.fetchBody = async () => {
+      throw new Error("one by one is the slow way");
+    };
+    const events: ServerEvent[] = [];
+    r.env.ctx.events.subscribe([`user:${LOCAL_USER_ID}`], (e) => events.push(e));
+    await r.env.ctx.sync.syncAccount(r.accountId);
+
+    assert.equal(calls.length, 1, "one request for the newest 50");
+    assert.deepEqual(calls[0], Array.from({ length: 50 }, (_, i) => `in${59 - i}`), "newest first");
+    const recent = events.flatMap((e) => (e.type === "sync" && e.progress?.stage === "recent" ? [e.progress] : []));
+    assert.deepEqual(recent.map((p) => p.done), Array.from({ length: 51 }, (_, i) => i), "0 to 50, one at a time, never back");
+    assert.ok(recent.every((p) => p.total === 50));
+    assert.equal(row<{ n: number }>(r.env, "SELECT count(*) AS n FROM messages WHERE body_state = 'cached'").n, 49);
+    assert.equal(row<{ body_state: string }>(r.env, "SELECT body_state FROM messages WHERE remote_id = 'in20'").body_state, "none", "the one the provider left out stays a preview");
+    assert.equal(row<{ sync_status: string }>(r.env, "SELECT sync_status FROM accounts WHERE id = ?", r.accountId).sync_status, "idle");
+  });
+
+  test("a reader who opens a message while its batch is in flight shares that fetch, and a request that fails fails each message alone", async () => {
+    const r = rig();
+    r.env.ctx.store.ingest(r.account, {
+      messages: ["a", "b", "c"].map((id) => summary({ remoteId: id, from: ana, remoteThreadId: `th-${id}`, bodyText: `preview ${id}` })),
+      cursor: null,
+      done: true,
+    });
+    const ids = ["a", "b", "c"].map((id) => idOf(r.env, id));
+    const provider = r.env.ctx.sync.provider(r.account) as MailProvider;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const calls: string[][] = [];
+    let fail = false;
+    provider.fetchBodies = async (refs) => {
+      calls.push(refs.map((x) => x.remoteId));
+      await gate;
+      if (fail) throw new Error("connection reset");
+      return new Map(refs.map((x) => [x.remoteId, { text: `whole ${x.remoteId}`, attachments: [] }]));
+    };
+    const first = r.env.ctx.sync.bodies.load(ids);
+    const second = r.env.ctx.sync.bodies.load([ids[1]!]);
+    release();
+    assert.deepEqual((await Promise.all([first, second])).map((x) => x.loaded.sort()), [[...ids].sort(), [ids[1]!]]);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(r.fetched, [], "nobody fetched a message on its own");
+
+    r.env.ctx.db.run("UPDATE messages SET body_state = 'none' WHERE remote_id IN ('a', 'b')");
+    fail = true;
+    const failed = await r.env.ctx.sync.bodies.load([ids[0]!, ids[1]!]);
+    assert.deepEqual(failed.loaded, []);
+    assert.deepEqual(failed.failed.map((f) => f.error), ["connection reset", "connection reset"]);
+  });
+
+  test("history previews: the newest few hundred in one pass, the rest wait until opened", async () => {
+    const r = rig();
+    const inboxFolders = { inbox: true, sent: false, trash: false, spam: false };
+    const page = (tag: string, n: number, last: boolean, folders = inboxFolders): SyncPage => ({
+      messages: Array.from({ length: n }, (_, i) => summary({ remoteId: `${tag}${i}`, from: ana, remoteThreadId: `th-${tag}${i}`, bodyText: "", folders })),
+      cursor: tag,
+      done: last,
+      previewIds: Array.from({ length: n }, (_, i) => `${tag}${i}`),
+      progress: { stage: "history", total: 500, count: n, last },
+    });
+    const pages: SyncPage[] = [
+      { messages: [summary({ remoteId: "i0", from: ana, remoteThreadId: "th-i0", bodyText: "", folders: inboxFolders })], cursor: "0", done: false, previewIds: ["i0"], progress: { stage: "inbox", total: 1, count: 1, last: true } },
+      ...[0, 1, 2, 3, 4].map((k) => page(`h${k}-`, 100, k === 4, { ...inboxFolders, inbox: false })),
+    ];
+    const passes: { ids: string[]; stored: number }[] = [];
+    const fake = {
+      kind: "imap",
+      sync: async () => pages.shift()!,
+      fetchPreviews: async (ids: string[]) => {
+        passes.push({ ids, stored: row<{ n: number }>(r.env, "SELECT count(*) AS n FROM messages").n });
+        return new Map(ids.map((id) => [id, `preview of ${id}`]));
+      },
+      fetchBody: async (id: string) => ({ text: `whole ${id}`, attachments: [] }),
+    } as unknown as MailProvider;
+    r.env.ctx.sync.provider = () => fake;
+    await r.env.ctx.sync.syncAccount(r.accountId);
+
+    assert.equal(passes.length, 1, "the inbox page is whole by the recent cache, so one pass in all, for history");
+    assert.deepEqual(passes[0]!.ids, [0, 1, 2].flatMap((k) => Array.from({ length: 100 }, (_, i) => `h${k}-${i}`)));
+    assert.equal(passes[0]!.stored, 1 + 300, "it runs once the third page is stored, not after each page");
+    assert.equal(row<{ n: number }>(r.env, "SELECT count(*) AS n FROM messages WHERE remote_id LIKE 'h%' AND snippet = ''").n, 200, "the last two pages keep empty snippets");
+    assert.equal(row<{ n: number }>(r.env, "SELECT count(*) AS n FROM messages WHERE remote_id LIKE 'h%' AND snippet != ''").n, 300);
+  });
+
+  test("history shorter than the budget gets its previews when the history ends", async () => {
+    const r = rig();
+    const inboxFolders = { inbox: true, sent: false, trash: false, spam: false };
+    const history = (tag: string, last: boolean): SyncPage => ({
+      messages: [summary({ remoteId: tag, from: ana, remoteThreadId: `th-${tag}`, bodyText: "", folders: { ...inboxFolders, inbox: false } })],
+      cursor: tag,
+      done: last,
+      previewIds: [tag],
+      progress: { stage: "history", total: 2, count: 1, last },
+    });
+    const pages = [history("h0", false), history("h1", true)];
+    const passes: string[][] = [];
+    const fake = {
+      kind: "imap",
+      sync: async () => pages.shift()!,
+      fetchPreviews: async (ids: string[]) => (passes.push(ids), new Map(ids.map((id) => [id, `preview of ${id}`]))),
+      fetchBody: async (id: string) => ({ text: `whole ${id}`, attachments: [] }),
+    } as unknown as MailProvider;
+    r.env.ctx.sync.provider = () => fake;
+    await r.env.ctx.sync.syncAccount(r.accountId);
+    assert.deepEqual(passes, [["h0", "h1"]]);
+  });
+
+  test("a first sync over IMAP: the newest 50 in one FETCH of sources, previews in two passes however long the history", async () => {
+    const r = rig();
+    const server = new FakeServer();
+    server.add("INBOX", "\\Inbox");
+    for (let i = 0; i < 600; i++) {
+      const raw = [`Message-ID: <w${i}@example.com>`, "From: Alice <alice@example.com>", "To: me@example.com", `Subject: Note ${i}`, `Date: ${new Date().toUTCString()}`, "", `Words of w${i}`, ""].join("\r\n");
+      server.deliver("INBOX", raw, { date: new Date(Date.now() - (600 - i) * 1000) });
+    }
+    const imap = new ImapProvider(
+      { accountId: r.accountId, email: "me@example.com", auth: { username: "me@example.com", password: "pw", imapHost: "imap.example.com", imapPort: 993, imapSecure: true, smtpHost: "s", smtpPort: 465, smtpSecure: true }, saveAuth() {}, initialSyncDays: 30 },
+      { createClient: () => server.connect().asClient() },
+    );
+    r.env.ctx.sync.provider = () => imap;
+    const events: ServerEvent[] = [];
+    r.env.ctx.events.subscribe([`user:${LOCAL_USER_ID}`], (e) => events.push(e));
+    await r.env.ctx.sync.syncAccount(r.accountId);
+
+    assert.deepEqual(server.sourceCommands, [50], "the recent cache is one FETCH");
+    assert.equal(server.partCommands.length, 2, "previews: the other 50 of the inbox page, then the newest 300 of the history; one kind of message, so one FETCH each");
+    assert.deepEqual(server.partCommands.map((c) => c.length), [1, 1]);
+    const counts = row<{ cached: number; previewed: number; empty: number }>(
+      r.env,
+      "SELECT sum(body_state = 'cached') AS cached, sum(body_state = 'none' AND body_text != '') AS previewed, sum(body_text = '') AS empty FROM messages",
+    );
+    assert.deepEqual({ ...counts }, { cached: 50, previewed: 350, empty: 200 });
+    const recent = events.flatMap((e) => (e.type === "sync" && e.progress?.stage === "recent" ? [e.progress.done] : []));
+    assert.deepEqual(recent, Array.from({ length: 51 }, (_, i) => i));
+    assert.equal(row<{ sync_status: string }>(r.env, "SELECT sync_status FROM accounts WHERE id = ?", r.accountId).sync_status, "idle");
   });
 
   test("new mail on a later round is cached too, quietly", async () => {

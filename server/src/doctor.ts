@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import type { Config } from "./config.ts";
 import { migrations } from "./db/schema.ts";
+import { cacheUsage, limitBytes, type Query } from "./mail/cache.ts";
 import { SecretBox } from "./lib/crypto.ts";
 
 /**
@@ -189,6 +190,32 @@ export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promi
     const stuck = (db.prepare("SELECT count(*) AS n FROM pending_actions WHERE status IN ('queued','running') AND run_after < ?").get(now - 3_600_000) as { n: number }).n;
     if (failed) add({ id: "queue", status: "warn", title: `${failed === 1 ? "1 change" : `${failed} changes`} couldn't reach your mail provider`, detail: "They're applied in Slipstream but not on the provider's side.", fix: "Check Activity for the error; reconnecting the account usually clears it." });
     if (stuck) add({ id: "queue-stuck", status: "warn", title: `${stuck === 1 ? "1 change has" : `${stuck} changes have`} been waiting over an hour to reach your provider`, fix: "Make sure Slipstream is running and online; changes go out on their own." });
+    // The cache of full message text, against each person's limit.
+    try {
+      const open = db;
+      const query: Query = (sql, ...params) => open.prepare(sql).all(...params) as never;
+      const users = db.prepare("SELECT DISTINCT user_id FROM accounts WHERE provider NOT IN ('demo', 'archive')").all() as { user_id: string }[];
+      let used = 0;
+      let allowed = 0;
+      let messages = 0;
+      let over = 0;
+      for (const { user_id: userId } of users) {
+        const usage = cacheUsage(query, join(config.dataDir, "blobs"), userId);
+        const limit = limitBytes(query, userId);
+        used += usage.total;
+        allowed += limit;
+        messages += usage.messages;
+        if (usage.total > limit) over++;
+      }
+      if (users.length)
+        add(
+          over
+            ? { id: "cache", status: "warn", title: `Mail cache is ${size(used)}, over its ${size(allowed)} limit`, detail: `${messages} messages are kept in full.`, fix: "Slipstream returns the oldest read mail to previews after each sync, so start it. If this stays, what is left was imported or sent from here and can't be fetched again." }
+            : { id: "cache", status: "ok", title: used ? `Mail cache ${size(used)} of ${size(allowed)}` : `Mail cache is empty (limit ${size(allowed)})`, detail: `${messages} messages are kept in full; the rest are fetched when you open them.` },
+        );
+    } catch {
+      // A database from before the cache existed has nothing to measure.
+    }
     const sendFailed = (db.prepare("SELECT count(*) AS n FROM drafts WHERE status = 'failed'").get() as { n: number }).n;
     if (sendFailed) add({ id: "sends", status: "warn", title: `${sendFailed === 1 ? "1 message" : `${sendFailed} messages`} failed to send`, fix: "Open Drafts to see why and send again." });
     db.close();
