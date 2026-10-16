@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { ago } from "../lib/format.ts";
 import { useNow, useDismiss } from "../lib/hooks.ts";
+import { syncDetail } from "../lib/syncEta.ts";
 import { reconnectOAuthPath } from "./connect/hosts.ts";
 import { Keys } from "./Keycap.tsx";
 import { LabelTree } from "./labels/LabelTree.tsx";
@@ -190,6 +191,9 @@ function SyncStatus() {
     );
   }
   if (scoped.some((a) => a.syncStatus === "error")) return <div className="sync-line sync-warn" role="status">Sync hit a problem</div>;
+  // The rest of a first sync, in the stage's own words. Plain text that updates: no live region, so a reader isn't told every count.
+  const detail = scoped.map(syncDetail).find((d) => d !== null);
+  if (detail) return <div className="sync-line muted num">{detail}</div>;
   if (scoped.some((a) => a.syncStatus === "syncing")) return <div className="sync-line muted" role="status">Syncing…</div>;
   const last = Math.max(...scoped.map((a) => a.lastSyncedAt ?? 0));
   return (

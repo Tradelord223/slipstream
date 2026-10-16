@@ -9,6 +9,7 @@ import { Icon } from "../../components/Icon.tsx";
 import { RichBox } from "../../components/RichBox.tsx";
 import { ago } from "../../lib/format.ts";
 import { useNow } from "../../lib/hooks.ts";
+import { syncDetail } from "../../lib/syncEta.ts";
 import { refreshCounts } from "../../store/counts.ts";
 import { reload } from "../../store/list.ts";
 import { navigate, useLocation } from "../../store/route.ts";
@@ -100,7 +101,7 @@ function AccountRow({ account: a, onReconnect }: { account: Account; onReconnect
     a.syncStatus === "reauth" ? { text: "Needs to reconnect", tone: "warn" }
     : a.syncStatus === "error" ? { text: a.syncError ? `Sync problem: ${a.syncError}` : "Sync problem", tone: "bad" }
     : a.importing ? { text: a.imported ? `Importing… ${a.imported.toLocaleString("en-US")} messages` : "Importing…", tone: "muted" }
-    : a.syncStatus === "syncing" ? { text: "Syncing…", tone: "muted" }
+    : a.syncStatus === "syncing" ? { text: syncDetail(a) ?? "Syncing…", tone: "muted" }
     : { text: `Synced ${ago(a.lastSyncedAt, now)}`, tone: "muted" };
 
   const sync = async () => {
@@ -144,7 +145,7 @@ function AccountRow({ account: a, onReconnect }: { account: Account; onReconnect
             {a.name ? ` · ${a.name}` : ""}
           </span>
         </span>
-        <span className={`account-status tone-${status.tone}`} role="status">
+        <span className={`account-status tone-${status.tone} num`} role={syncDetail(a) ? undefined : "status"}>
           {status.text}
         </span>
         {canReconnect(a) && (

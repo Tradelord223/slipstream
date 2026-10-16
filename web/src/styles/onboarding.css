@@ -405,6 +405,70 @@
   color: var(--text-2);
   font-size: 15px;
 }
+/* The steps of a first sync. Static: a check fades in once when a step finishes, nothing else moves. */
+.sync-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.sync-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 36px;
+  font-size: 15px;
+  color: var(--text-3);
+}
+.sync-step[data-state="current"] {
+  color: var(--text);
+  font-weight: 550;
+}
+.sync-step[data-state="done"] {
+  color: var(--text-2);
+}
+.sync-step-mark {
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line);
+}
+.sync-step[data-state="current"] .sync-step-mark {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 3.5px, transparent 4.5px);
+}
+.sync-step[data-state="done"] .sync-step-mark {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  animation: sync-settle 0.28s ease-out;
+}
+.sync-step-detail {
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 400;
+}
+.sync-eta {
+  min-height: 20px;
+  margin: -8px 0 0 34px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+@keyframes sync-settle {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-step[data-state="done"] .sync-step-mark {
+    animation: none;
+  }
+}
 .ob-actions {
   display: flex;
   flex-wrap: wrap;

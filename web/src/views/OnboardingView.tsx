@@ -7,11 +7,12 @@ import { ImportMail } from "../components/connect/ImportMail.tsx";
 import { Dialog } from "../components/Dialog.tsx";
 import { Icon, Logo } from "../components/Icon.tsx";
 import { claudeCodeCommand, cliCommand, stdioConfig } from "../lib/connect.ts";
+import { useEta, useNoBackwards } from "../lib/syncEta.ts";
 import { connectEvents, disconnectEvents, useImportJob, useSyncFetched } from "../store/events.ts";
 import { getRoute, navigate, useRoute } from "../store/route.ts";
 import { finishOnboarding, markOnboarding, realAccounts, refreshSession, signOut, useSession } from "../store/session.ts";
 import { toast } from "../store/toasts.ts";
-import type { Account, SyncProgress } from "../types.ts";
+import type { Account } from "../types.ts";
 
 type Phase = "connect" | "progress" | "personalize";
 
@@ -135,15 +136,32 @@ export function OnboardingView() {
 // ---- Bringing in your mail ----------------------------------------------------------------------
 
 /** The sr-only line changes only at milestones, so a screen reader isn't read every new message. */
-function milestone(count: number, archive: boolean): string {
-  if (count <= 0) return archive ? "Reading your archive." : "Connecting to your mailbox.";
-  if (count < 100) return archive ? "Your first messages are in." : "Your first messages are arriving.";
+function milestone(count: number): string {
+  if (count <= 0) return "Reading your archive.";
+  if (count < 100) return "Your first messages are in.";
   return `More than ${(Math.floor(count / 500) * 500 || 100).toLocaleString("en-US")} messages so far.`;
 }
 
+type StepState = "waiting" | "current" | "done";
+
+/** One real step of the first sync: a quiet marker, its words, and (while it runs) its exact count. */
+function Step({ state, label, detail }: { state: StepState; label: string; detail?: string }) {
+  return (
+    <li className="sync-step" data-state={state} aria-current={state === "current" ? "step" : undefined}>
+      <span className="sync-step-mark" aria-hidden="true">
+        {state === "done" && <Icon name="check" size={13} />}
+      </span>
+      <span className="sync-step-label">
+        <span className="sr-only">{state === "done" ? "Done: " : state === "current" ? "In progress: " : "Waiting: "}</span>
+        {label}
+      </span>
+      {detail && <span className="sync-step-detail num">{detail}</span>}
+    </li>
+  );
+}
+
 function Arriving({ accountId, onOpen, onStartOver, onSwitch }: { accountId: string; onOpen: () => void; onStartOver: () => void; onSwitch: (accountId: string) => void }) {
-  // `progress` is the server's own count for the stage a sync is in; the account type doesn't carry it yet.
-  const account = useSession((s) => s.accounts.find((a) => a.id === accountId)) as (Account & { progress?: SyncProgress | null }) | undefined;
+  const account = useSession((s) => s.accounts.find((a) => a.id === accountId));
   const fetched = useSyncFetched(accountId);
   const job = useImportJob();
   const [retrying, setRetrying] = useState(false);
@@ -172,7 +190,35 @@ function Arriving({ accountId, onOpen, onStartOver, onSwitch }: { accountId: str
   // The server's own count (kept current by the stream and by the poll below) when it sends one, else what the stream reported.
   const count = archive ? (mine?.imported ?? account?.imported ?? 0) : account?.progress ? account.progress.done : fetched;
   const shown = running ? count : 0;
-  const ready = !problem && (done || count > 0);
+
+  // The steps of a mailbox sync, from the server's own stage. "Inbox ready" is the server's word (firstSyncedAt) or any
+  // stage after the inbox's: the rest of the window keeps arriving once the inbox is open.
+  const progress = account?.progress ?? null;
+  const stage = progress?.stage ?? null;
+  const inboxReady = !archive && !problem && Boolean(done || (stage !== null && stage !== "signin" && stage !== "inbox"));
+  const signedIn = stage !== null ? stage !== "signin" : fetched > 0;
+  const reading = signedIn && !inboxReady;
+  // Counts are exact and a late answer can carry older numbers, so a count never goes down within its stage.
+  const inboxDone = useNoBackwards(`${accountId}:${stage}`, stage === "inbox" ? progress!.done : 0);
+  const inboxCount = reading && stage === "inbox" && progress && progress.total !== null ? `${inboxDone.toLocaleString("en-US")} of ${progress.total.toLocaleString("en-US")}` : undefined;
+  const eta = useEta(accountId, !archive && !problem && stage === "inbox" ? progress : null);
+  const where = providerLabel(account ?? { provider: "" });
+  const provider = where === "Email account" ? "your mailbox" : where;
+  const ready = !problem && (archive ? done || count > 0 : inboxReady || (!progress && count > 0));
+
+  // The inbox opens on its own a moment after the last step is ticked, so that tick is seen. Once, and never if
+  // something went wrong, the person chose first, or this screen is already gone.
+  const opened = useRef(false);
+  const open = useRef(onOpen);
+  open.current = onOpen;
+  useEffect(() => {
+    if (!inboxReady || opened.current) return;
+    const t = setTimeout(() => {
+      opened.current = true;
+      open.current();
+    }, 400);
+    return () => clearTimeout(t);
+  }, [inboxReady]);
 
   // The event stream is the fast path; asking now and then covers a stream that dropped. The answer carries the
   // progress numbers too, so the count keeps moving without it.
@@ -239,7 +285,7 @@ function Arriving({ accountId, onOpen, onStartOver, onSwitch }: { accountId: str
           <span>Slipstream</span>
         </div>
         <h1 className="ob-title" tabIndex={-1} data-heading>
-          {problem ? "That didn't work" : done ? "Your mail is here" : archive ? "Importing your mail" : "Bringing in your mail"}
+          {problem ? "That didn't work" : archive ? (done ? "Your mail is here" : "Importing your mail") : inboxReady ? "Your inbox is ready" : "Bringing in your mail"}
         </h1>
       </header>
 
@@ -278,33 +324,52 @@ function Arriving({ accountId, onOpen, onStartOver, onSwitch }: { accountId: str
         </>
       ) : (
         <>
-          {!done && (
-            <div className="ob-count" aria-hidden="true">
-              {shown > 0 ? (
-                <>
-                  {archive && <span className="ob-count-label">Importing…</span>}
-                  <span className="ob-count-num num">{shown.toLocaleString("en-US")}</span>
-                  <span className="ob-count-label">{archive ? "messages" : "messages so far"}</span>
-                </>
-              ) : (
-                <span className="ob-count-label">{archive ? "Importing…" : "Connecting to your mailbox…"}</span>
-              )}
-            </div>
+          {archive ? (
+            !done && (
+              <div className="ob-count" aria-hidden="true">
+                {shown > 0 ? (
+                  <>
+                    <span className="ob-count-label">Importing…</span>
+                    <span className="ob-count-num num">{shown.toLocaleString("en-US")}</span>
+                    <span className="ob-count-label">{progress?.total ? `of ${progress.total.toLocaleString("en-US")} messages` : "messages"}</span>
+                  </>
+                ) : (
+                  <span className="ob-count-label">Importing…</span>
+                )}
+              </div>
+            )
+          ) : (
+            <>
+              <ol className="sync-steps" role="list" aria-label="Progress">
+                <Step state={signedIn ? "done" : "current"} label={signedIn ? `Signed in to ${provider}` : `Signing in to ${provider}`} />
+                <Step state={inboxReady ? "done" : reading ? "current" : "waiting"} label="Reading your inbox" detail={inboxCount} />
+                <Step state={inboxReady ? "done" : "waiting"} label="Inbox ready" />
+              </ol>
+              {!inboxReady && <p className="sync-eta">{eta}</p>}
+            </>
           )}
           <p className="sr-only" role="status" aria-live="polite">
-            {done ? "Your mail is here." : milestone(shown, archive)}
+            {archive ? (done ? "Your mail is here." : milestone(shown)) : inboxReady ? "Your inbox is ready." : signedIn ? "Reading your inbox." : `Signing in to ${provider}.`}
           </p>
           <p className="ob-lead">
-            {done
-              ? archive
+            {archive
+              ? done
                 ? "Everything in the file is in."
-                : "Everything is in. New mail will keep arriving on its own."
-              : archive
-                ? "You can start now; the rest keeps coming in as the file is read."
-                : "Your newest mail comes first. You can start now; the rest keeps arriving in the background."}
+                : "You can start now; the rest keeps coming in as the file is read."
+              : inboxReady
+                ? "The rest of your mail keeps arriving in the background."
+                : "Your newest mail comes first."}
           </p>
           <div className="ob-actions">
-            <button className="btn btn-primary btn-lg" onClick={onOpen} disabled={!ready} data-autofocus>
+            <button
+              className="btn btn-primary btn-lg"
+              onClick={() => {
+                opened.current = true;
+                onOpen();
+              }}
+              disabled={!ready}
+              data-autofocus
+            >
               Open my inbox
             </button>
             {differentAccount}

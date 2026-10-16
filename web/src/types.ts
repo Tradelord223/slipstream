@@ -679,8 +679,10 @@ export interface MessageBodies {
 
 /** Where a sync is, for the onboarding progress screen and the rail. Counts are exact; `total` is null until known. */
 export interface SyncProgress {
-  stage: "signin" | "inbox" | "recent" | "history" | "done";
+  stage: "signin" | "inbox" | "previews" | "recent" | "history" | "done";
   done: number;
   total: number | null;
+  /** Items per second measured in the current stage; missing until the stage has run long enough to measure. */
+  rate?: number;
 }
 
