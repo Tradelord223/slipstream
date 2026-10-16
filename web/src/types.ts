@@ -26,6 +26,19 @@ export interface Account {
   syncStatus: "idle" | "syncing" | "error" | "reauth" | string;
   syncError: string | null;
   lastSyncedAt: number | null;
+  /** Other addresses this account can send as (aliases, custom domains). */
+  identities: Identity[];
+}
+
+export interface Identity {
+  id: string;
+  email: string;
+  name: string;
+  replyTo: string | null;
+  /** Sanitized HTML; null uses the general signature. */
+  signatureHtml: string | null;
+  /** "provider": read from Gmail's send-as list; "manual": added in Settings. */
+  source: "provider" | "manual";
 }
 
 export interface Split {
@@ -46,7 +59,35 @@ export interface Settings {
   defaultRemindHour: number;
   showTips: boolean;
   unifiedInbox: boolean;
+  /** Built-in assistant (sidebar, ⌘.). Off until someone chooses a model or turns it on. */
+  assistant: "on" | "off";
+  /** Company logos for automated senders, fetched by the server from the sender's own domain. */
+  senderLogos: boolean;
+  helpers: Helpers;
 }
+
+/** Everyday helpers that run on simple rules, no model. */
+export interface Helpers {
+  /** One-time codes: show a copy chip on fresh codes. */
+  codes: boolean;
+  /** Delivery updates: "latest" moves older updates for the same package out of the inbox (undoable). */
+  deliveries: "latest" | "all";
+  /** Sign-in alerts get a chip; they are never moved automatically. */
+  securityAlerts: boolean;
+  /** Flag mail from people about legal notices, overdue bills and deadlines. */
+  urgent: boolean;
+}
+
+export type SignalKind = "code" | "delivery" | "security" | "urgent";
+
+export type DeliveryStatus = "ordered" | "shipped" | "in_transit" | "out_for_delivery" | "delivered" | "delayed" | "customs";
+
+/** What a rule spotted in a message. One-time code values are never included; the dashboard asks /api/messages/:id/code. */
+export type Signal =
+  | { kind: "code" }
+  | { kind: "delivery"; status: DeliveryStatus; tracking?: string; carrier?: string }
+  | { kind: "security"; service?: string }
+  | { kind: "urgent"; reason: string };
 
 export interface Features {
   ai: boolean;
@@ -89,6 +130,11 @@ export interface Thread {
   inInbox: boolean;
   inTrash: boolean;
   labels: string[];
+  /** Top signal of the latest incoming message, and that message's time. */
+  signal: SignalKind | null;
+  signalAt: number | null;
+  /** Detail for the row chip (delivery status, urgent reason). */
+  signalDetail: Signal | null;
 }
 
 export interface ThreadPage {
@@ -120,6 +166,9 @@ export interface Message {
   unread: boolean;
   outgoing: boolean;
   canUnsubscribe: boolean;
+  /** Sent by a list or automated system. */
+  isBulk: boolean;
+  signals: Signal[];
   attachments: Attachment[];
 }
 
@@ -171,6 +220,8 @@ export interface Draft {
   status: "draft" | "scheduled" | "sending" | "sent" | "failed" | string;
   error: string | null;
   updatedAt: number;
+  /** The address it's sent from: the account's own or one of its identities. */
+  fromEmail: string;
   attachments: DraftAttachment[];
 }
 

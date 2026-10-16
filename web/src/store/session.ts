@@ -15,6 +15,9 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultRemindHour: 8,
   showTips: true,
   unifiedInbox: true,
+  assistant: "off",
+  senderLogos: true,
+  helpers: { codes: true, deliveries: "latest", securityAlerts: true, urgent: true },
 };
 
 export interface Session {
