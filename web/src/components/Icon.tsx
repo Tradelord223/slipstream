@@ -81,7 +81,7 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
 export function Logo({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M6 12h13a4 4 0 1 0-4-4M6 20h17a4 4 0 1 1-4 4M6 16h9" fill="none" stroke="var(--accent)" strokeWidth="2.6" strokeLinecap="round" />
+      <path d="M5.6 11.6H18.6a3.8 3.8 0 1 0-3.8-3.8M5.6 20.4H22.6a3.8 3.8 0 1 1-3.8 3.8M5.6 16H14.6" fill="none" stroke="var(--accent)" strokeWidth="2.6" strokeLinecap="round" />
     </svg>
   );
 }

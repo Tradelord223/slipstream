@@ -219,7 +219,7 @@ try {
   await page.goto(base + "/");
   await page.waitForSelector(".row");
   await page.getByRole("tab", { name: /^Other/ }).click();
-  await page.waitForSelector(".row .sig");
+  await page.locator(".row .sig:visible").first().waitFor();
   await sleep(700);
   await shot(page, "helpers-dark");
   await page.locator(".row", { hasText: "sign-in code" }).first().click();

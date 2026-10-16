@@ -1,8 +1,35 @@
-# Slipstream
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/wordmark-dark.svg">
+    <img src="docs/brand/wordmark-light.svg" alt="Slipstream" width="360">
+  </picture>
+</p>
 
-**Email at the speed of thought, for you and your agents.** Slipstream is an open-source, keyboard-first email client. It works with Gmail, Outlook and any IMAP server, keeps your mail in a local database so every keystroke is instant, and runs on your laptop or on your team's own server. Your AI agents get the same powers you have, through MCP, an HTTP API and a CLI. You see everything they do, approve what matters, and undo the rest.
+<p align="center"><strong>Email at the speed of thought, for you and your agents.</strong></p>
 
-![Slipstream inbox](docs/screenshots/inbox-dark.png)
+<p align="center">
+  <a href="https://www.npmjs.com/package/slipstream-mail"><img src="https://img.shields.io/npm/v/slipstream-mail?label=npm&color=0b7f66" alt="npm version"></a>
+  <a href="https://github.com/Tradelord223/slipstream/actions/workflows/ci.yml"><img src="https://github.com/Tradelord223/slipstream/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-0b7f66" alt="License: AGPL-3.0"></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A522.18-0b7f66" alt="Node.js 22.18 or newer">
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#what-it-does">Features</a> ·
+  <a href="#built-for-agents">Agents</a> ·
+  <a href="#run-it-for-a-team">Self-host</a> ·
+  <a href="#privacy-and-security">Privacy</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/inbox-dark.png" alt="The Slipstream inbox: a split inbox with one-key triage" width="900">
+</p>
+
+Slipstream is an open-source, keyboard-first email client. It works with Gmail, Outlook and any IMAP server, and keeps your mail in a local database so every keystroke is instant. It runs on your laptop or on your team's own server. Your AI agents get the same powers you have, through MCP, an HTTP API and a CLI. You see everything they do, approve what matters, and undo the rest. And if you don't want AI at all, it stays out of your way.
+
+## Quick start
 
 ```bash
 npx slipstream-mail
@@ -10,7 +37,7 @@ npx slipstream-mail
 
 Slipstream opens at <http://127.0.0.1:4380> with a demo inbox you can fly through before connecting anything. It needs Node.js 22.18 or newer. To keep the `slipstream` command around for the CLI and MCP bridge, install it once with `npm install -g slipstream-mail`.
 
-## Why
+## Why Slipstream
 
 Premium "fast email" clients proved that email can feel calm and quick: one key to finish a conversation, reminders that bring mail back when you need it, an inbox you actually clear. They also typically cost $25–40 a seat every month, connect only to Gmail and Microsoft 365, and run your mail through their own servers. Some add read-receipt tracking pixels to the mail you send.
 
@@ -24,33 +51,66 @@ Slipstream keeps the speed and drops the rest.
 | Inboxes | One unified inbox across every account, or one at a time |
 | Tracking | None. Remote images and tracking pixels are held back until you choose to see them |
 | Hostile email | Cleaned, then shown in a frame that can't run scripts. `npm run test:render` renders 19 hostile emails and fails if any reach the network |
-| Shortcuts | Every one remappable |
 | AI | Off until you turn it on. Bring your own agent over MCP or the CLI, or let agents and Autopilot run on your ChatGPT plan, your own Claude Code or Codex, or your key for Claude, OpenAI, Gemini or OpenRouter. Quick summaries use a Claude key |
 | Agents | MCP, HTTP API, CLI and webhooks, with scoped tokens, approvals, attribution and undo |
 | Price | Free, AGPL-3.0 |
 
 ## What it does
 
-- **Triage with one key.** `E` done, `H` remind me, `#` trash, `S` star, `U` unread, `J`/`K` to move, `Z` to undo anything. `Cmd+K` finds every command; `?` shows every shortcut.
-- **Split Inbox.** Important (people) and Other (newsletters, notifications) out of the box; add splits for VIPs, a client, a project, anything you can search for.
+**Get through mail fast**
+
+- **Triage with one key.** `E` done, `H` remind me, `#` trash, `S` star, `U` unread, `J`/`K` to move, `Z` to undo anything. `Cmd+K` finds every command; `?` shows every shortcut, and every one is remappable.
+- **Split Inbox.** Important (people) and Other (newsletters, notifications) out of the box. Add splits for VIPs, a client, a project, anything you can search for.
 - **Remind Me.** Type "tomorrow 9am" or "next week". The conversation leaves your inbox and comes back to the top when it's time, or as soon as someone replies.
-- **Send Later, Undo Send, follow-up reminders.** Schedule mail, take it back within ten seconds, and get nudged if nobody replies in three days.
-- **Snippets with variables.** Type `;` in a draft to insert one; `{first_name}` fills itself in. Share them with your team.
-- **Instant Intro.** On an introduction, `Cmd+Shift+I` thanks the introducer and moves them to Bcc.
-- **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `is:code`, `is:delivery`, `after:`, `label:` and more, over everything you've synced or imported.
-- **Everyday helpers, no AI needed.** Sign-in codes get a Copy chip right in the list (`Shift+C`), so you never open the email. Package updates show their status, and when a newer update arrives the older ones step out of your inbox (undoable). Sign-in alerts and urgent mail from people, like legal notices, overdue bills and deadlines, get flagged so they don't drown. Turn each one on or off in Settings → Helpers.
-- **Send from any of your addresses.** Gmail aliases appear on their own; add custom-domain and Outlook or IMAP addresses by hand, each with its own name, reply-to and signature. Replies go out from the address the email was sent to.
-- **Company logos, if you want them.** Off by default. When on, Slipstream fetches each company's logo itself, at a random time about once a month, never from your browser and never tied to a message.
 - **Get Me To Zero.** Clear the whole backlog, or everything older than a week or a month, in one undoable step.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.
+- **Search that's instant and offline.** Full-text search with `from:`, `to:`, `has:attachment`, `is:unread`, `is:code`, `is:delivery`, `after:`, `label:` and more, over everything you've synced or imported.
+
+**Everyday helpers, no AI needed**
+
+- **Sign-in codes, one key away.** A Copy chip appears right in the list, and `Shift+C` copies the code without opening the email.
+- **Package updates that don't pile up.** Each update shows its status. When a newer one arrives, the older ones step out of your inbox, and you can undo it.
+- **Mail that matters doesn't drown.** Sign-in alerts and urgent mail from people, like legal notices, overdue bills and deadlines, get flagged. Turn each helper on or off in Settings → Helpers.
+
+**Write and send**
+
+- **Send Later, Undo Send, follow-up reminders.** Schedule mail, take it back within ten seconds, and get nudged if nobody replies in three days.
+- **Send from any of your addresses.** Gmail aliases appear on their own. Add custom-domain, Outlook and IMAP addresses by hand, each with its own name, reply-to and signature. Replies go out from the address the email was sent to.
+- **Snippets with variables.** Type `;` in a draft to insert one; `{first_name}` fills itself in. Share them with your team.
+- **Instant Intro.** On an introduction, `Cmd+Shift+I` thanks the introducer and moves them to Bcc.
+
+**Organize and share**
+
 - **Labels.** Colors, nesting ("Clients/Kettleby"), and auto-label rules that file new mail as it arrives. Labels you apply sync to Gmail labels, Outlook categories and IMAP keywords; renames and deletes sync to Gmail.
 - **Teams.** Shared snippets, shared conversations with comments, assignment and resolve, invite links. Everyone's own mailboxes stay private.
-- **AI only if you want it.** Slipstream works fully without AI, and the assistant stays hidden until you turn it on. Then you get one-key summaries and reply suggestions, the assistant sidebar and Autopilot. **Settings → Privacy & safety** says in plain words what is stored where and what any model sees.
-- **Agent-native.** Every action is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks. Agents get scoped tokens. Sending waits in your **Review** queue, and every agent action shows up attributed, with Undo. See [docs/agent-api.md](docs/agent-api.md).
+- **Company logos, if you want them.** Off by default. When on, Slipstream fetches each company's logo itself, at a random time about once a month, never from your browser and never tied to a message.
+
+**AI, only if you want it**
+
+- **Off by default.** Slipstream works fully without AI, and the assistant stays hidden until you turn it on. Then you get one-key summaries and reply suggestions, the assistant sidebar and Autopilot.
 - **Autopilot.** New mail is sorted as it arrives: what needs you stays, receipts and notices are labelled and cleared, later things come back when they matter, and replies are drafted in your voice for you to send. Every decision shows its reason and can be undone, and it learns from what you change. It can't send. See [docs/autopilot.md](docs/autopilot.md).
 - **Any model you already have.** Sign in with ChatGPT, use your own Claude Code or Codex, or paste a Claude, OpenAI, Gemini or OpenRouter key. Pick per conversation; every model works through the same commands, approvals and undo. See [docs/models.md](docs/models.md).
 - **A cloud agent with one API key.** Paste an Anthropic key and Claude works your inbox on Anthropic's Managed Agents, through Slipstream's own actions. Ask it anything, or give it routines ("weekdays at 8: triage and draft replies", "when client mail arrives: draft a reply"). It has hard budgets per run and per month, and sending still waits for you.
-- **claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI.
+
+## Built for agents
+
+Every action in Slipstream is a command your agents can call: over MCP (Claude Code, Claude Desktop, Cursor), over `/api/v1` with an OpenAPI spec, from the `slipstream` CLI, or on webhooks.
+
+- **Scoped tokens.** Each agent gets only the scopes you choose.
+- **Review queue.** Sending waits in **Review** for your approval.
+- **Attribution and undo.** Every agent action shows up under the agent's name, with Undo.
+- **No code harvesting.** One-time codes are masked in the mail agents read, so an injected instruction can't make an agent read one out.
+
+```bash
+# Claude Code, Cursor and other HTTP MCP clients (token from Settings → Agents)
+claude mcp add --transport http slipstream http://127.0.0.1:4380/mcp \
+  --header "Authorization: Bearer ss_agent_…"
+
+# Or from any script
+slipstream mail.search --query "is:unread from:@client.com" --limit 5
+```
+
+**claude.ai and ChatGPT, without hosting.** Turn on Tailscale Funnel from Settings and paste the MCP URL into claude.ai or ChatGPT. You approve the connection in Review with a pairing code. Only the MCP endpoint is ever exposed, never your inbox UI. Full guide: [docs/agent-api.md](docs/agent-api.md).
 
 ## See it
 
@@ -62,12 +122,12 @@ Slipstream keeps the speed and drops the rest.
 | ![The cloud agent: chats, routines and budget](docs/screenshots/agent-dark.png) | ![Labels with colors, nesting and auto-label rules](docs/screenshots/labels-dark.png) |
 | ![Conversation](docs/screenshots/thread-dark.png) | ![Compose with snippets](docs/screenshots/compose-dark.png) |
 | ![Remind me](docs/screenshots/remind-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |
-| ![Connect an assistant over MCP](docs/screenshots/connect-dark.png) | ![Light theme](docs/screenshots/inbox-light.png) |
 | ![Privacy & safety: what's stored where and what any model sees](docs/screenshots/privacy-dark.png) | ![Send from your aliases and custom domains](docs/screenshots/settings-accounts-dark.png) |
+| ![Connect an assistant over MCP](docs/screenshots/connect-dark.png) | ![Light theme](docs/screenshots/inbox-light.png) |
 
 ## Connect your mail
 
-Settings → Accounts. Gmail works in two minutes with an app password over IMAP; Google and Microsoft OAuth take a one-time setup because each install brings its own OAuth app. Full guide: [docs/connect-accounts.md](docs/connect-accounts.md).
+Settings → Accounts. Gmail works in two minutes with an app password over IMAP. Google and Microsoft OAuth take a one-time setup, because each install brings its own OAuth app. Full guide: [docs/connect-accounts.md](docs/connect-accounts.md).
 
 ## Run it for a team
 
@@ -78,7 +138,7 @@ fly secrets set SLIPSTREAM_SECRET="$(openssl rand -base64 32)"
 fly deploy
 ```
 
-Fly.io is the recommended host: one always-on machine with a volume, about $4 a month at October 2026 prices. Docker Compose works on any server; Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](docs/self-hosting.md).
+Fly.io is the recommended host: one always-on machine with a volume, about $4 a month at October 2026 prices. Docker Compose works on any server (the compose file is 19 lines), and Render and Railway configs are included. Continuous backups go to any S3-compatible bucket with Litestream. See [docs/self-hosting.md](docs/self-hosting.md).
 
 ## Fast, measured
 
@@ -98,21 +158,50 @@ Fly.io is the recommended host: one always-on machine with a volume, about $4 a 
 
 Provider round-trips never block you: actions apply locally first and reach Gmail, Outlook or your IMAP server a few seconds later, after the undo window.
 
+## Privacy and security
+
+- **Nothing in an email can run code.** Messages are cleaned before you see them. Designed mail sits in a locked frame that can't run scripts, with a strict content policy behind it.
+- **Images wait for you.** Remote images and tracking pixels load only when you choose. After that, only https pictures load: never fonts, style sheets or frames.
+- **Your copy stays yours.** Mail stays in Slipstream's own data folder on your computer or server. Account sign-ins and keys are encrypted.
+- **No surprise AI.** No model sees your mail until you turn a feature on, and then only what that feature needs.
+
+**Settings → Privacy & safety** says all of this in plain words, and [docs/security.md](docs/security.md) has the details. Found a problem? Please report it privately; see [SECURITY.md](SECURITY.md).
+
+## Documentation
+
+| Guide | What's in it |
+|---|---|
+| [Connect accounts](docs/connect-accounts.md) | Gmail, Outlook, IMAP, aliases and imports |
+| [Agents and the API](docs/agent-api.md) | MCP, the HTTP API, the CLI, webhooks, remote access |
+| [Choose a model](docs/models.md) | ChatGPT sign-in, Claude Code, Codex, API keys |
+| [Autopilot](docs/autopilot.md) | How new mail is sorted, and how to evaluate it |
+| [Self-hosting](docs/self-hosting.md) | Fly.io, Docker, Render, Railway, backups, settings |
+| [Security](docs/security.md) | Rendering, storage, encryption, what models see |
+| [Architecture](docs/architecture.md) | How the server, store and web app fit together |
+| [How it was built](docs/reverse-engineering.md) | The clean-room approach, from public material only |
+| [Roadmap](ROADMAP.md) | What's next, and what isn't verified yet |
+
 ## Develop
 
 ```bash
 git clone https://github.com/Tradelord223/slipstream && cd slipstream
 npm install
-npm run dev        # server on :4392 with a demo inbox + web app on :5180
-npm test           # server tests (node:test)
+npm run dev             # server on :4392 with a demo inbox + web app on :5180
+npm test                # server tests (node:test)
 npm run test:contract   # black-box API + MCP contract suite against a live server
-npm run test:render     # shows hostile email in headless Chrome and proves nothing runs or leaks (needs Chrome; see docs/security.md)
+npm run test:render     # shows hostile email in headless Chrome and proves nothing runs or leaks
 npm run typecheck
 npm run build && npm start
 ```
 
-The server is TypeScript run directly by Node (no build step in development), Hono for HTTP, `node:sqlite` with FTS5 for storage. The web app is React + Vite with plain CSS. The server has no native npm dependencies (SQLite comes with Node). More in [docs/architecture.md](docs/architecture.md); agents, MCP and remote access in [docs/agent-api.md](docs/agent-api.md); the security model is in [docs/security.md](docs/security.md); how the product was reverse-engineered (clean-room, from public material) is in [docs/reverse-engineering.md](docs/reverse-engineering.md).
+- **Server:** TypeScript run directly by Node, with no build step in development. Hono for HTTP, `node:sqlite` with FTS5 for storage. No native npm dependencies: SQLite comes with Node.
+- **Web app:** React and Vite, with plain CSS.
+
+Contributions are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) explains how to get a change in.
 
 ## License
 
-Slipstream is licensed under the [GNU AGPL v3.0](LICENSE). Use it, run it for your company, change it. If you run a modified Slipstream for other people over a network, the AGPL asks you to offer them its source; set `SLIPSTREAM_SOURCE_URL` so the app's source link points at your version. Bundled third-party software and fonts keep their own licenses, listed in `THIRD_PARTY_LICENSES.txt` in every build.
+Slipstream is licensed under the [GNU AGPL v3.0](LICENSE). Use it, run it for your company, change it.
+
+- **Running a modified version:** if you run it for other people over a network, the AGPL asks you to offer them its source. Set `SLIPSTREAM_SOURCE_URL` so the app's source link points at your version.
+- **Third-party software:** bundled software and fonts keep their own licenses, listed in `THIRD_PARTY_LICENSES.txt` in every build.
