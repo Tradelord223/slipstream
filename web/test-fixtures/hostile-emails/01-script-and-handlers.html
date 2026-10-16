@@ -1,0 +1,12 @@
+<p onclick="top.__pwned='p-onclick'">Script and event handlers.</p>
+<script>top.__pwned = 'script'; parent.__pwned = 'script'; window.__pwned = 'script'; alert('script');</script>
+<script src="https://evil.fernpoint.co/s/external.js"></script>
+<img src="https://pixel.fernpoint.co/h/img-onerror.gif" onerror="top.__pwned='onerror'; alert('onerror')" onload="top.__pwned='onload'; alert('onload')">
+<img src="https://pixel.fernpoint.co/h/img-onmouseover.gif" onmouseover="top.__pwned='mouseover'" onclick="top.__pwned='click'" alt="">
+<a href="https://evil.fernpoint.co/s/link" onclick="top.__pwned='a-onclick'" onmouseover="top.__pwned='a-over'" onfocus="top.__pwned='focus'" autofocus>A link</a>
+<details open ontoggle="top.__pwned='toggle'; alert('toggle')"><summary onclick="top.__pwned='summary'">More</summary>Hidden</details>
+<div style="width:expression(top.__pwned='expression')">expression()</div>
+<p style="behavior:url(https://evil.fernpoint.co/s/behavior.htc)">behavior</p>
+<noscript><img src="https://pixel.fernpoint.co/h/noscript.gif"></noscript>
+<img src="https://pixel.fernpoint.co/h/img-duplicate-handler.gif" onerror=top.__pwned=1 onerror=alert(1)>
+<body onload="top.__pwned='body-onload'; alert('body')"></body>

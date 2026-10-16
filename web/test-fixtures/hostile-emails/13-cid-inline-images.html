@@ -1,0 +1,9 @@
+<p>Inline images by content id.</p>
+<img src="cid:logo@fernpoint.co" width="20" height="20" alt="logo">
+<img src="CID:LOGO@FERNPOINT.CO" width="20" height="20" alt="logo, other case">
+<img src="cid:%3Clogo@fernpoint.co%3E" width="20" height="20" alt="logo, encoded">
+<img src="cid:missing@fernpoint.co" width="20" height="20" alt="no such part">
+<img src="cid:logo@fernpoint.co" onerror="top.__pwned='cid-onerror'" alt="with handler">
+<img src="https://images.fernpoint.co/i/remote-next-to-cid.png" alt="remote next to cid">
+<a href="cid:logo@fernpoint.co">cid link</a>
+<table><tr><td style="font-family:Arial;background:url(cid:logo@fernpoint.co)">cid in css</td></tr></table>

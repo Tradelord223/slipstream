@@ -26,7 +26,8 @@ function ensureHooks() {
   if (hooksReady) return;
   hooksReady = true;
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-    if (node.tagName === "A") {
+    // <area> (a clickable image map) navigates like a link, so it gets the same treatment.
+    if (node.tagName === "A" || node.tagName === "AREA") {
       const href = node.getAttribute("href") ?? "";
       if (!/^(https?:|mailto:|tel:)/i.test(href)) node.removeAttribute("href");
       node.setAttribute("target", "_blank");
@@ -200,7 +201,8 @@ export function sanitizeDraftHtml(html: string): string {
   return DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["script", "style", "form", "input", "button", "textarea", "select", "iframe", "object", "embed", "link", "meta", "base", "svg", "math", "img"],
-    FORBID_ATTR: ["srcset", "style"],
+    // `background` (on tables and cells) would fetch the sender's image the moment a reply or forward opens its quote.
+    FORBID_ATTR: ["srcset", "style", "background"],
     ALLOW_DATA_ATTR: false,
   });
 }

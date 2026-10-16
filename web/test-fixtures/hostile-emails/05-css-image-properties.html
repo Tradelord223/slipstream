@@ -1,0 +1,26 @@
+<style>
+.content::before { content: url(https://images.fernpoint.co/p/content-before.png); }
+.content::after { content: "x" url(https://images.fernpoint.co/p/content-after.png); }
+.list { list-style-image: url(https://images.fernpoint.co/p/list-style-image.png); }
+.list2 { list-style: square url(https://images.fernpoint.co/p/list-style-shorthand.png) inside; }
+.cursor { cursor: url(https://images.fernpoint.co/p/cursor.cur), pointer; }
+.border { border-image: url(https://images.fernpoint.co/p/border-image.png) 30 round; }
+.border2 { border-image-source: url(https://images.fernpoint.co/p/border-image-source.png); border: 10px solid; }
+.mask { -webkit-mask-image: url(https://images.fernpoint.co/p/webkit-mask-image.png); mask-image: url(https://images.fernpoint.co/p/mask-image.png); }
+.mask2 { mask: url(https://images.fernpoint.co/p/mask.svg#m); -webkit-mask-box-image: url(https://images.fernpoint.co/p/mask-box.png); }
+.shape { float: left; shape-outside: url(https://images.fernpoint.co/p/shape-outside.png); }
+.filter { filter: url(https://images.fernpoint.co/p/filter.svg#f); }
+.backdrop { backdrop-filter: url(https://images.fernpoint.co/p/backdrop.svg#f); }
+.clip { clip-path: url(https://images.fernpoint.co/p/clip-path.svg#c); }
+.marker::marker { content: url(https://images.fernpoint.co/p/marker.png); }
+.ph::placeholder { background: url(https://images.fernpoint.co/p/placeholder.png); }
+.sel::selection { background: url(https://images.fernpoint.co/p/selection.png); }
+.var { --bg: url(https://images.fernpoint.co/p/custom-property.png); background: var(--bg); }
+.img-function { background: image(url(https://images.fernpoint.co/p/image-fn.png)); background: cross-fade(url(https://images.fernpoint.co/p/cross-fade.png), url(https://images.fernpoint.co/p/cross-fade-2.png), 50%); }
+.gradient { background: linear-gradient(red, blue), url(https://images.fernpoint.co/p/gradient-layer.png); }
+</style>
+<p class="content">content</p><ul class="list"><li>list</li></ul><ul class="list2"><li>list2</li></ul>
+<p class="cursor">cursor</p><p class="border">border</p><p class="border2">border2</p><p class="mask">mask</p><p class="mask2">mask2</p>
+<p class="shape">shape</p><p class="filter">filter</p><p class="backdrop">backdrop</p><p class="clip">clip</p>
+<ol class="marker"><li>marker</li></ol><p class="sel">selection</p><p class="var">var</p><p class="img-function">fn</p><p class="gradient">gradient</p>
+<p style="color:#222; list-style-image:url(https://images.fernpoint.co/p/inline-list-style.png); cursor:url(https://images.fernpoint.co/p/inline-cursor.cur),auto; border-image:url(https://images.fernpoint.co/p/inline-border-image.png) 10; -webkit-mask-image:url(https://images.fernpoint.co/p/inline-mask.png); content:url(https://images.fernpoint.co/p/inline-content.png)">inline style properties</p>
