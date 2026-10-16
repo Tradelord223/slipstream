@@ -95,6 +95,8 @@ export type RemoteAction =
 
 export interface OutgoingMessage {
   from: Address;
+  /** Where replies should go, when it isn't the From address. */
+  replyTo?: string;
   to: Address[];
   cc: Address[];
   bcc: Address[];
@@ -122,12 +124,23 @@ export interface ProviderContext {
   signal?: AbortSignal;
 }
 
+/** An extra address the account can send as, as the provider lists it. */
+export interface ProviderIdentity {
+  email: string;
+  name: string;
+  replyTo?: string;
+  /** Sanitized HTML. */
+  signatureHtml?: string;
+}
+
 export interface MailProvider {
   readonly kind: ProviderKind;
   /** Pull one page of changes. `cursor` is null for the first sync. */
   sync(cursor: string | null): Promise<SyncPage>;
   apply(action: RemoteAction): Promise<{ remoteId?: string } | void>;
   fetchAttachment?(messageRemoteId: string, attachmentRemoteId: string): Promise<Buffer>;
+  /** The account's send-as aliases (Gmail). Throws when the provider can't say; callers keep what they have. */
+  listIdentities?(): Promise<ProviderIdentity[]>;
   /** Rename a label at the provider (labels whose remoteId is still a local "name:" placeholder are skipped). */
   renameLabel?(label: { remoteId: string; name: string }, newName: string): Promise<void>;
   /** Delete a label at the provider; messages keep existing, they just lose the label. */

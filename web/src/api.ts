@@ -1,6 +1,6 @@
 import type {
   ActivityItem, AgentInfo, AgentInput, Approval, ExecuteResult, RemoteMode, RemoteStatus, Webhook,
-  Address, Bootstrap, ContactInfo, Contact, Counts, Draft, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
+  Address, Bootstrap, ContactInfo, Contact, Counts, Draft, Identity, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
   ThreadPage, TriageKind, TriageResult, SharedComment,
   CloudConnectInput, CloudRun, CloudStatus, LabelInfo, LabelRule, Routine, RoutineInput,
   AutopilotOverview, AutopilotPatch, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction,
@@ -138,6 +138,10 @@ export const api = {
   connectImap: (body: Record<string, unknown>) => post<{ id: string }>("/api/accounts/imap", body),
   syncAccount: (id: string) => post<{ ok: true }>(`/api/accounts/${id}/sync`),
   removeAccount: (id: string) => del<{ ok: true }>(`/api/accounts/${id}`),
+  addIdentity: (accountId: string, body: IdentityInput) => post<Identity>(`/api/accounts/${accountId}/identities`, body),
+  updateIdentity: (accountId: string, id: string, body: Partial<IdentityInput>) =>
+    patch<Identity>(`/api/accounts/${accountId}/identities/${encodeURIComponent(id)}`, body),
+  removeIdentity: (accountId: string, id: string) => del<{ ok: true }>(`/api/accounts/${accountId}/identities/${encodeURIComponent(id)}`),
   importMail: (file: File, email: string) => {
     const f = new FormData();
     f.append("file", file);
@@ -219,6 +223,8 @@ export const api = {
 
 export interface DraftInput {
   accountId: string;
+  /** One of the account's identities; leave out to keep the draft's current address (new drafts use the account's own). */
+  fromEmail?: string | null;
   threadId?: string | null;
   replyToMessageId?: string | null;
   to: Address[];
@@ -226,6 +232,14 @@ export interface DraftInput {
   bcc: Address[];
   subject: string;
   bodyHtml: string;
+}
+
+/** What Settings sends to add or change a send-as address. Names default to the account's; signatures are sanitized by the server. */
+export interface IdentityInput {
+  email: string;
+  name?: string;
+  replyTo?: string | null;
+  signatureHtml?: string | null;
 }
 
 export interface SnippetInput {

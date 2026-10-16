@@ -3,6 +3,7 @@ import { HttpError } from "../auth/users.ts";
 import type { AppContext } from "../context.ts";
 import { newId } from "../lib/crypto.ts";
 import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
+import { resolveFrom } from "./identities.ts";
 
 /** Drafts, Undo Send and Send Later, shared by the dashboard and agents. */
 
@@ -17,6 +18,8 @@ export const draftInput = z.object({
   bcc: z.array(address).max(500).default([]),
   subject: z.string().max(998).default(""),
   bodyHtml: z.string().max(5_000_000).default(""),
+  /** One of the account's send-as addresses. Absent keeps the draft's current choice (a new draft uses the account's own address). */
+  fromEmail: z.string().trim().toLowerCase().max(320).nullable().optional(),
 });
 export type DraftInput = z.infer<typeof draftInput>;
 
@@ -35,6 +38,8 @@ export type SendOptions = z.infer<typeof sendOptions>;
 export interface DraftRow {
   id: string;
   account_id: string;
+  /** NULL: the account's own address. */
+  from_email: string | null;
   thread_id: string | null;
   reply_to_message_id: string | null;
   to_json: string;
@@ -58,6 +63,7 @@ export function shapeDraft(ctx: AppContext, d: DraftRow) {
   return {
     id: d.id,
     accountId: d.account_id,
+    fromEmail: d.from_email ?? ctx.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ?", d.account_id)!.email,
     threadId: d.thread_id,
     replyToMessageId: d.reply_to_message_id,
     to: JSON.parse(d.to_json) as { name: string; email: string }[],
@@ -92,8 +98,16 @@ export function listDrafts(ctx: AppContext, userId: string) {
 }
 
 function assertAccount(ctx: AppContext, userId: string, accountId: string) {
-  const acc = ctx.db.get<{ provider: string }>("SELECT provider FROM accounts WHERE id = ? AND user_id = ?", accountId, userId);
+  const acc = ctx.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ? AND user_id = ?", accountId, userId);
   if (!acc) throw new HttpError(400, "Unknown sending account");
+  return acc;
+}
+
+/** What goes in drafts.from_email: NULL for the account's own address, else the identity's address. Throws when it isn't theirs. */
+function storedFrom(ctx: AppContext, accountId: string, accountEmail: string, fromEmail: string | null | undefined): string | null {
+  if (!fromEmail) return null;
+  const sender = resolveFrom(ctx.db, accountId, fromEmail);
+  return sender.email.toLowerCase() === accountEmail.toLowerCase() ? null : sender.email;
 }
 
 function assertThread(ctx: AppContext, userId: string, threadId: string | null | undefined) {
@@ -103,13 +117,14 @@ function assertThread(ctx: AppContext, userId: string, threadId: string | null |
 }
 
 export function createDraft(ctx: AppContext, userId: string, body: DraftInput) {
-  assertAccount(ctx, userId, body.accountId);
+  const account = assertAccount(ctx, userId, body.accountId);
   assertThread(ctx, userId, body.threadId);
+  const from = storedFrom(ctx, body.accountId, account.email, body.fromEmail);
   const id = newId("drf");
   ctx.db.run(
-    `INSERT INTO drafts (id, user_id, account_id, thread_id, reply_to_message_id, to_json, cc_json, bcc_json, subject, body_html, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    id, userId, body.accountId, body.threadId ?? null, body.replyToMessageId ?? null,
+    `INSERT INTO drafts (id, user_id, account_id, from_email, thread_id, reply_to_message_id, to_json, cc_json, bcc_json, subject, body_html, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    id, userId, body.accountId, from, body.threadId ?? null, body.replyToMessageId ?? null,
     JSON.stringify(body.to), JSON.stringify(body.cc), JSON.stringify(body.bcc), body.subject, body.bodyHtml, Date.now(),
   );
   ctx.events.emitToUser(userId, { type: "drafts", draftId: id, status: "draft" });
@@ -119,10 +134,21 @@ export function createDraft(ctx: AppContext, userId: string, body: DraftInput) {
 export function updateDraft(ctx: AppContext, userId: string, id: string, body: DraftInput) {
   const d = draftRow(ctx, userId, id);
   if (d.status === "sending" || d.status === "sent") throw new HttpError(409, "This message was already sent");
-  assertAccount(ctx, userId, body.accountId);
+  const account = assertAccount(ctx, userId, body.accountId);
+  let from: string | null;
+  if (body.fromEmail !== undefined) from = storedFrom(ctx, body.accountId, account.email, body.fromEmail);
+  else if (body.accountId === d.account_id) from = d.from_email;
+  else {
+    // Moved to another account without choosing an address: keep the old one only if that account also has it.
+    try {
+      from = storedFrom(ctx, body.accountId, account.email, d.from_email);
+    } catch {
+      from = null;
+    }
+  }
   ctx.db.run(
-    "UPDATE drafts SET account_id=?, to_json=?, cc_json=?, bcc_json=?, subject=?, body_html=?, updated_at=? WHERE id=?",
-    body.accountId, JSON.stringify(body.to), JSON.stringify(body.cc), JSON.stringify(body.bcc), body.subject, body.bodyHtml, Date.now(), d.id,
+    "UPDATE drafts SET account_id=?, from_email=?, to_json=?, cc_json=?, bcc_json=?, subject=?, body_html=?, updated_at=? WHERE id=?",
+    body.accountId, from, JSON.stringify(body.to), JSON.stringify(body.cc), JSON.stringify(body.bcc), body.subject, body.bodyHtml, Date.now(), d.id,
   );
   return getDraft(ctx, userId, id);
 }
@@ -139,6 +165,7 @@ export function sendDraft(ctx: AppContext, userId: string, id: string, opts: Sen
   if (d.status === "sending" || d.status === "sent") throw new HttpError(409, "This message was already sent");
   const recipients = JSON.parse(d.to_json).length + JSON.parse(d.cc_json).length + JSON.parse(d.bcc_json).length;
   if (recipients === 0) throw new HttpError(400, "Add at least one recipient");
+  resolveFrom(ctx.db, d.account_id, d.from_email); // fail now, not after the undo window, if the address was removed
   const now = Date.now();
   const sendAt = opts.sendAt && opts.sendAt > now ? opts.sendAt : opts.instant ? now : now + ctx.config.undoSendSeconds * 1000;
   ctx.db.run(
@@ -174,7 +201,7 @@ export function cancelSend(ctx: AppContext, userId: string, id: string) {
 /** Who a draft goes to, for approval previews and the "external" policy. */
 export function draftRecipients(ctx: AppContext, userId: string, id: string) {
   const d = draftRow(ctx, userId, id);
-  const account = ctx.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ?", d.account_id)!;
+  const from = d.from_email ?? ctx.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ?", d.account_id)!.email;
   const all = [...JSON.parse(d.to_json), ...JSON.parse(d.cc_json), ...JSON.parse(d.bcc_json)] as { email: string }[];
-  return { draft: d, from: account.email, emails: all.map((a) => a.email) };
+  return { draft: d, from, emails: all.map((a) => a.email) };
 }

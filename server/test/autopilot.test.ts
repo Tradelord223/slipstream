@@ -3,6 +3,7 @@ import { after, before, describe, test } from "node:test";
 import { editRatio, ownText } from "../src/agents/autopilot.ts";
 import type { Engine, EngineStatus, RunIO } from "../src/agents/engines/types.ts";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
+import { addIdentity } from "../src/mail/identities.ts";
 import type { AccountRow } from "../src/mail/store.ts";
 import { addAccount, makeEnv, msg, type TestEnv } from "./helpers.ts";
 
@@ -202,6 +203,18 @@ describe("Autopilot", () => {
     assert.deepEqual(JSON.parse(draft.to_json).map((a: { email: string }) => a.email), ["ana@kettleby.test"], "the reply goes to who wrote");
     assert.equal(env.ctx.autopilot.settings(LOCAL_USER_ID).voice, "", "a drafting run can't rewrite the voice profile");
     env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sensible, draft: drafter }));
+  });
+
+  test("a reply is drafted from the address the person wrote to", async () => {
+    addIdentity(env.ctx.db, LOCAL_USER_ID, account, { email: "help@fernpoint.test", name: "Fernpoint Help" });
+    ingest([
+      msg({ from: { name: "Ana Reyes", email: "ana@kettleby.test" }, to: [{ name: "Fernpoint Help", email: "help@fernpoint.test" }], subject: "Is this in stock?", bodyText: "Do you have it in blue?", remoteThreadId: "alias-q" }),
+      msg({ from: { name: "Ben Ortiz", email: "ben@kettleby.test" }, subject: "Lunch Friday?", bodyText: "Are you free at noon?", remoteThreadId: "plain-q" }),
+    ]);
+    await settle();
+    const fromOf = (remote: string) => env.ctx.db.get<{ from_email: string | null }>("SELECT from_email FROM drafts WHERE id = ?", item(thread(remote).id).draft_id!)!.from_email;
+    assert.equal(fromOf("alias-q"), "help@fernpoint.test");
+    assert.equal(fromOf("plain-q"), null, "mail to the account's own address is answered from it");
   });
 
   test("corrections are kept, shown to later batches, and become a sender-rule suggestion", async () => {

@@ -7,6 +7,7 @@ import { htmlToReviewText, htmlToText, stripQuoted, textToHtml } from "../lib/te
 import type { TriageKind } from "../mail/actions.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
 import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, sendDraft, updateDraft } from "../mail/drafts.ts";
+import { listIdentities, ownAddresses, replyIdentity, resolveFrom } from "../mail/identities.ts";
 import { counts, getThread, listThreads } from "../mail/views.ts";
 import { createSnippet, createSplit, deleteSplit, listSnippets, listSplits } from "../prefs.ts";
 import { createLabel, createRule, deleteLabel, deleteRule, listLabels, listRules, ruleMatches, updateLabel, updateRule } from "../mail/labels.ts";
@@ -194,6 +195,11 @@ const draftFields = {
   subject: z.string().max(998).optional().describe("Defaults to Re: <subject> when replying"),
   body: z.string().max(200_000).optional().describe("Plain-text body (paragraphs separated by blank lines)"),
   bodyHtml: z.string().max(1_000_000).optional().describe("HTML body; used instead of body when given"),
+  fromEmail: z
+    .string()
+    .max(320)
+    .optional()
+    .describe("Send from this address: one of the account's own addresses (accounts.list). Replies default to the address the original was sent to"),
 };
 
 export function buildCatalog(): Command[] {
@@ -298,7 +304,15 @@ export function buildCatalog(): Command[] {
             "SELECT id, provider, email, name, sync_status FROM accounts WHERE user_id = ? ORDER BY created_at",
             actor.user.id,
           )
-          .map((a) => ({ id: a.id, provider: a.provider, email: a.email, name: a.name, canSend: a.provider !== "archive", syncStatus: a.sync_status })),
+          .map((a) => ({
+            id: a.id,
+            provider: a.provider,
+            email: a.email,
+            name: a.name,
+            canSend: a.provider !== "archive",
+            syncStatus: a.sync_status,
+            sendAs: listIdentities(ctx.db, a.id).map((i) => i.email),
+          })),
       }),
     }),
     defineCommand({
@@ -529,15 +543,17 @@ export function buildCatalog(): Command[] {
         let to = i.to.map(toAddr);
         let cc = i.cc.map(toAddr);
         let subject = i.subject ?? "";
+        let fromEmail = i.fromEmail;
         if (i.threadId) {
           const t = getThread(ctx, actor.user.id, i.threadId);
           const last = [...t.messages].reverse().find((m) => !m.outgoing) ?? t.messages.at(-1);
-          const self = ctx.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ?", accountId)!.email;
+          const own = ownAddresses(ctx.db, accountId);
+          const addressed = last ? [...(last.to as { name: string; email: string }[]), ...(last.cc as { name: string; email: string }[])] : [];
+          // The server picks the From for a reply: the address the original was sent to. The model never does.
+          if (fromEmail === undefined) fromEmail = replyIdentity(ctx.db, accountId, addressed.map((a) => a.email)) ?? undefined;
           if (to.length === 0 && last) to = [last.from];
           if (i.replyAll && last && cc.length === 0)
-            cc = [...(last.to as { name: string; email: string }[]), ...(last.cc as { name: string; email: string }[])].filter(
-              (a) => a.email !== self && !to.some((x) => x.email === a.email),
-            );
+            cc = addressed.filter((a) => !own.has(a.email.toLowerCase()) && !to.some((x) => x.email === a.email));
           if (!subject) subject = /^re:/i.test(t.thread.subject) ? t.thread.subject : `Re: ${t.thread.subject}`;
         }
         const draft = createDraft(ctx, actor.user.id, {
@@ -548,6 +564,7 @@ export function buildCatalog(): Command[] {
           bcc: i.bcc.map(toAddr),
           subject,
           bodyHtml: i.bodyHtml ?? textToHtml(i.body ?? ""),
+          fromEmail,
         });
         return { result: draft, summary: `Drafted "${draft.subject || "(no subject)"}"`, threadIds: i.threadId ? [i.threadId] : [], inverse: { command: "drafts.delete", input: { draftId: draft.id } } };
       },
@@ -570,6 +587,7 @@ export function buildCatalog(): Command[] {
           bcc: i.bcc.length ? i.bcc.map(toAddr) : d.bcc,
           subject: i.subject ?? d.subject,
           bodyHtml: i.bodyHtml ?? (i.body !== undefined ? textToHtml(i.body) : d.bodyHtml),
+          fromEmail: i.fromEmail,
         });
         return { result: draft, summary: `Edited the draft "${draft.subject || "(no subject)"}"` };
       },
@@ -611,7 +629,7 @@ export function buildCatalog(): Command[] {
       preview: (ctx, actor, i) => {
         const d = getDraft(ctx, actor.user.id, i.draftId);
         const list = (a: { name: string; email: string }[]) => a.map((x) => (x.name ? `${x.name} <${x.email}>` : x.email)).join(", ");
-        const from = ctx.db.get<{ email: string; name: string }>("SELECT email, name FROM accounts WHERE id = ?", d.accountId)!;
+        const from = resolveFrom(ctx.db, d.accountId, d.fromEmail);
         return [
           `From: ${from.name ? `${from.name} <${from.email}>` : from.email}`,
           `To: ${list(d.to)}`,

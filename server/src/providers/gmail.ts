@@ -1,4 +1,5 @@
 import type { Config } from "../config.ts";
+import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
 import { extractAttachment, parseRaw } from "../mail/mime.ts";
 import {
   PermanentProviderError,
@@ -9,6 +10,7 @@ import {
   type MailProvider,
   type OutgoingMessage,
   type ProviderContext,
+  type ProviderIdentity,
   type RemoteAction,
   type SyncPage,
 } from "../mail/types.ts";
@@ -38,6 +40,15 @@ interface GmailMessage {
   labelIds?: string[];
   raw?: string;
   internalDate?: string;
+}
+
+interface GmailSendAs {
+  sendAsEmail?: string;
+  displayName?: string;
+  replyToAddress?: string;
+  signature?: string;
+  isPrimary?: boolean;
+  verificationStatus?: string;
 }
 
 interface HistoryRecord {
@@ -273,6 +284,24 @@ export class GmailProvider implements MailProvider {
       this.labelCache = (await this.api<{ labels?: GmailLabel[] }>("GET", "/labels")).labels ?? [];
     }
     return this.labelCache;
+  }
+
+  /** Send-as aliases Gmail has verified. The primary address is the account itself, so it isn't one. */
+  async listIdentities(): Promise<ProviderIdentity[]> {
+    const res = await this.api<{ sendAs?: GmailSendAs[] }>("GET", "/settings/sendAs");
+    return (res.sendAs ?? []).flatMap((s) => {
+      const email = s.sendAsEmail?.trim();
+      if (!email || s.isPrimary || email.toLowerCase() === this.ctx.email.toLowerCase()) return [];
+      if (s.verificationStatus && s.verificationStatus !== "accepted") return [];
+      return [
+        {
+          email,
+          name: s.displayName?.trim() ?? "",
+          replyTo: s.replyToAddress?.trim() || undefined,
+          signatureHtml: s.signature ? sanitizeOutgoingHtml(s.signature) : undefined,
+        },
+      ];
+    });
   }
 
   // ---- actions ------------------------------------------------------------

@@ -7,6 +7,7 @@ const fmt = (a: Address) => (a.name ? { name: a.name, address: a.email } : a.ema
 
 export interface ComposeInput {
   from: Address;
+  replyTo?: string;
   to: Address[];
   cc: Address[];
   bcc: Address[];
@@ -27,6 +28,7 @@ export async function buildOutgoing(input: ComposeInput): Promise<OutgoingMessag
     // and the Sent copy should show who was Bcc'd. SMTP sends use the envelope instead.
     ...({ keepBcc: true } as object),
     from: fmt(input.from),
+    replyTo: input.replyTo,
     to: input.to.map(fmt),
     cc: input.cc.map(fmt),
     bcc: input.bcc.map(fmt),
@@ -42,6 +44,7 @@ export async function buildOutgoing(input: ComposeInput): Promise<OutgoingMessag
   const raw = await composer.compile().build();
   return {
     from: input.from,
+    replyTo: input.replyTo,
     to: input.to,
     cc: input.cc,
     bcc: input.bcc,

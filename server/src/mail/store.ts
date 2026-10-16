@@ -4,6 +4,7 @@ import type { Db } from "../db/index.ts";
 import { newId, sha256 } from "../lib/crypto.ts";
 import { baseSubject, htmlToText, makeSnippet } from "../lib/text.ts";
 import { categorize, isBulkMessage } from "./classify.ts";
+import { ownAddresses } from "./identities.ts";
 import type { Address, FlagUpdate, IncomingMessage, SyncPage, ThreadRef } from "./types.ts";
 
 export interface AccountRow {
@@ -154,7 +155,8 @@ export class MailStore {
       return existing.thread_id;
     }
 
-    const outgoing = m.outgoing ?? m.from.email.toLowerCase() === account.email.toLowerCase();
+    // Providers only know the account's main address; mail sent from an alias or custom domain is ours too.
+    const outgoing = Boolean(m.outgoing) || ownAddresses(this.db, account.id).has(m.from.email.toLowerCase());
     const threadId = this.resolveThread(account.id, m);
     const bodyText = m.bodyText || (m.bodyHtml ? htmlToText(m.bodyHtml) : "");
     const snippet = m.snippet ? makeSnippet(m.snippet) : makeSnippet(bodyText);
@@ -443,8 +445,7 @@ export class MailStore {
       return;
     }
 
-    const account = this.db.get<{ email: string }>("SELECT email FROM accounts WHERE id = ?", thread.account_id);
-    const self = account?.email.toLowerCase() ?? "";
+    const own = ownAddresses(this.db, thread.account_id);
     const first = msgs[0]!;
     const last = msgs[msgs.length - 1]!;
     const inbound = msgs.filter((m) => !m.outgoing);
@@ -460,7 +461,7 @@ export class MailStore {
         if (key && !seen.has(key)) seen.set(key, { name: p.name, email: key });
       }
     }
-    let participants = [...seen.values()].filter((p) => p.email !== self);
+    let participants = [...seen.values()].filter((p) => !own.has(p.email));
     if (participants.length === 0) participants = [...seen.values()];
 
     const known = (email: string) =>
