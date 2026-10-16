@@ -90,6 +90,11 @@ export interface SyncPage {
   done: boolean;
   /** Set on pages of a first sync, so the engine can report exact progress and knows when the inbox is ready. */
   progress?: SyncStageProgress;
+  /**
+   * Messages on this page that came without a preview and that `fetchPreviews` can supply. The engine stores the page
+   * first, so the inbox opens on headers alone, and asks for these right after.
+   */
+  previewIds?: string[];
 }
 
 /**
@@ -174,6 +179,11 @@ export interface MailProvider {
    * (IMAP after a move or renumbering) find the message again.
    */
   fetchBody?(messageRemoteId: string, hint?: { messageIdHeader?: string | null }): Promise<FullBody>;
+  /**
+   * Previews for messages a page listed in `previewIds`, in as few round trips as the provider allows, keyed by remote id.
+   * A message it can't preview is left out; nothing here may download a whole message.
+   */
+  fetchPreviews?(remoteIds: string[]): Promise<Map<string, string>>;
   /** The account's send-as aliases (Gmail). Throws when the provider can't say; callers keep what they have. */
   listIdentities?(): Promise<ProviderIdentity[]>;
   /** Rename a label at the provider (labels whose remoteId is still a local "name:" placeholder are skipped). */

@@ -1,10 +1,13 @@
-// Times the first sync of one of your connected accounts, read-only: how long until the newest 100 inbox summaries are in,
-// and how many bytes came over the wire to get them.
+// Times the first sync of one of your connected accounts, read-only: how long until the newest 100 inbox summaries are in
+// (the inbox is ready), how long their previews take after that, and how many bytes came over the wire.
 //
 // Usage: node scripts/time-first-sync.ts [gmail|outlook|imap|N] [--history] [--recent]
 //   gmail|outlook|imap|N  which account (the first of that kind, or the Nth); default the first
 //   --history             keep going through the rest of the 30-day window
 //   --recent              also fetch the full text of the newest 50 inbox messages, like the recent cache does
+//
+// For IMAP it prints each step as it finishes (connect, list, open, search, headers fetch, previews fetch, recent) with the
+// time since the start, how long the step took and a count. Steps after the previews are totalled by kind at the end.
 //
 // It reads the account from your Slipstream data folder (SLIPSTREAM_DATA_DIR, else ~/.slipstream) and runs the provider
 // in memory. Nothing is written: the database is opened read-only, no message is stored, and a refreshed sign-in token
@@ -60,13 +63,59 @@ globalThis.fetch = (async (...a: Parameters<typeof fetch>) => {
   return res;
 }) as typeof fetch;
 const imapClients: ReturnType<typeof createImapFlow>[] = [];
+
+// Steps: IMAP commands are timed by wrapping the client, one line each until the previews are in, then totalled by kind.
+const start = performance.now();
+const elapsed = () => performance.now() - start;
+let detailed = true;
+const totals = new Map<string, { n: number; ms: number; count: number }>();
+function note(name: string, ms: number, count: number | null) {
+  if (detailed) {
+    console.log(`  [${seconds(elapsed()).padStart(8)}] ${name.padEnd(14)} ${seconds(ms).padStart(8)}${count === null ? "" : `  ${count} ${count === 1 ? "item" : "items"}`}`);
+    return;
+  }
+  const t = totals.get(name) ?? { n: 0, ms: 0, count: 0 };
+  totals.set(name, { n: t.n + 1, ms: t.ms + ms, count: t.count + (count ?? 0) });
+}
+async function timed<T>(name: string, fn: () => Promise<T>, count: (r: T) => number | null = () => null): Promise<T> {
+  const t = performance.now();
+  const r = await fn();
+  note(name, performance.now() - t, count(r));
+  return r;
+}
+const sized = (r: unknown) => (Array.isArray(r) ? r.length : r === false || r === undefined ? 0 : null);
+/** The client with every command timed. Methods are bound to the real client, which keeps its state to itself. */
+function timedClient(c: ReturnType<typeof createImapFlow>): ReturnType<typeof createImapFlow> {
+  return new Proxy(c, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target) as unknown;
+      if (typeof value !== "function") return value;
+      const fn = value.bind(target) as (...a: unknown[]) => unknown;
+      switch (key) {
+        case "connect":
+          return () => timed("connect", () => fn() as Promise<unknown>);
+        case "list":
+          return (...a: unknown[]) => timed("list", () => fn(...a) as Promise<unknown[]>, sized);
+        case "getMailboxLock":
+          return (...a: unknown[]) => timed("open mailbox", () => fn(...a) as Promise<unknown>);
+        case "search":
+          return (...a: unknown[]) => timed("search", () => fn(...a) as Promise<unknown[] | false>, sized);
+        case "fetchAll":
+          return (range: unknown, query: { bodyParts?: unknown[]; headers?: unknown }, ...a: unknown[]) =>
+            timed(query.bodyParts?.length ? "previews fetch" : query.headers ? "headers fetch" : "flags fetch", () => fn(range, query, ...a) as Promise<unknown[]>, sized);
+        default:
+          return value.bind(target);
+      }
+    },
+  });
+}
 const provider: MailProvider =
   account.provider === "imap"
     ? new ImapProvider(ctx, {
         createClient: (s: ImapSettings) => {
           const c = createImapFlow(s);
           imapClients.push(c);
-          return c;
+          return timedClient(c);
         },
       })
     : createProvider(account.provider, ctx, config);
@@ -79,7 +128,6 @@ const mb = (n: number) => `${(n / 1_000_000).toFixed(2)} MB`;
 const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
 
 console.log(`Account ${index + 1} of ${accounts.length} (${account.provider}), reading the last 30 days`);
-const start = performance.now();
 process.on("uncaughtException", (err) => fail(`The sync stopped: ${scrub(err instanceof Error ? err.message : String(err))}`));
 let inbox = 0;
 const inboxMail: { id: string; at: number }[] = [];
@@ -99,7 +147,14 @@ for (let i = 0; i < 2000; i++) {
   }
   if (!ready && page.progress?.stage === "inbox" && page.progress.last) {
     ready = true;
-    console.log(`inbox ready: ${inbox} summaries in ${seconds(performance.now() - start)}, ${mb(await received())} received (${requests} HTTP requests)`);
+    console.log(`inbox ready: ${inbox} summaries in ${seconds(elapsed())}, ${mb(await received())} received (${requests} HTTP requests)`);
+    // The engine stores the page and then asks for its previews in one round trip; time that pass the same way.
+    if (provider.fetchPreviews && page.previewIds?.length) {
+      const t = performance.now();
+      const got = await provider.fetchPreviews(page.previewIds);
+      console.log(`previews: ${got.size} of ${page.previewIds.length} in ${seconds(performance.now() - t)}, ready ${seconds(elapsed())} after the start, ${mb(await received())} received in total`);
+    }
+    detailed = false;
     if (!flags.has("--history")) break;
   }
   if (page.done) break;
@@ -116,6 +171,10 @@ if (flags.has("--recent") && provider.fetchBody) {
     ok += (await Promise.allSettled(ids.slice(i, i + 3).map((id) => provider.fetchBody!(id)))).filter((r) => r.status === "fulfilled").length;
   }
   console.log(`recent cache: ${ok} of ${ids.length} full messages in ${seconds(performance.now() - t)}, ${mb((await received()) - before)} received`);
+}
+if (totals.size) {
+  console.log("after the inbox page, by kind:");
+  for (const [name, t] of totals) console.log(`  ${name.padEnd(14)} ${String(t.n).padStart(4)} x  ${seconds(t.ms).padStart(8)} in total  ${t.count} items`);
 }
 
 await provider.close?.();

@@ -260,6 +260,47 @@ export class MailStore {
   }
 
   /**
+   * The first lines of a message that was stored as headers only. They become its snippet and its preview text, are indexed
+   * for search and scanned for codes, and the thread is recomputed. A message that has its body by now (the full text wins),
+   * or is gone, is left alone. Returns the message's thread, or null when nothing changed.
+   */
+  attachPreview(messageId: string, text: string): string | null {
+    const preview = text.trim();
+    if (!preview) return null;
+    const m = this.db.get<{
+      rowid: number;
+      thread_id: string;
+      subject: string;
+      from_name: string;
+      from_email: string;
+      to_json: string;
+      cc_json: string;
+      is_bulk: number;
+      outgoing: number;
+      sent_at: number;
+    }>("SELECT rowid, thread_id, subject, from_name, from_email, to_json, cc_json, is_bulk, outgoing, sent_at FROM messages WHERE id = ? AND body_state = 'none'", messageId);
+    if (!m) return null;
+    const signals = m.outgoing
+      ? []
+      : scanSignals({ subject: m.subject, fromEmail: m.from_email, fromName: m.from_name, text: preview, isBulk: Boolean(m.is_bulk), sentAt: m.sent_at });
+    this.db.tx(() => {
+      this.db.run("UPDATE messages SET snippet = ?, body_text = ?, signals = ? WHERE id = ?", makeSnippet(preview), preview, json(signals), messageId);
+      // The search index is contentless: the old row goes by rowid and the preview takes its place.
+      this.db.run("DELETE FROM messages_fts WHERE rowid = ?", m.rowid);
+      this.db.run(
+        "INSERT INTO messages_fts (rowid, subject, body, sender, recipients) VALUES (?,?,?,?,?)",
+        m.rowid,
+        m.subject,
+        preview,
+        `${m.from_name} ${m.from_email}`,
+        [...(JSON.parse(m.to_json) as Address[]), ...(JSON.parse(m.cc_json) as Address[])].map((a) => `${a.name} ${a.email}`).join(" "),
+      );
+      this.recomputeThread(m.thread_id);
+    });
+    return m.thread_id;
+  }
+
+  /**
    * A message that was synced as a summary has now been fetched in full. Its preview gives way to the real text, which is
    * indexed for search and scanned again for codes and deliveries, and its attachment list is brought up to date.
    * Returns the message's thread, or null when the message is gone or already had its body.

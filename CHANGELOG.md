@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Faster first sync over IMAP.** The inbox opens on headers alone, and the previews are fetched right after in one round trip instead of one per kind of message (on Gmail that was about 2.6 s each). Later pages of the first sync get their previews the same way. Sync progress now includes a `previews` stage and the rate so far, for a time-remaining estimate.
 - **A real first run.** A new install opens a short setup instead of an invented mailbox. You enter your email, and Slipstream works out where it lives from the domain's own DNS, so Google Workspace and Microsoft 365 addresses on custom domains are recognised. It then walks you through the right sign-in: guided app-password steps for Gmail, iCloud, Yahoo and Fastmail, Microsoft sign-in for Outlook, or server settings only when you need them. A live count shows mail arriving, and your inbox opens as soon as the first messages land. An optional last step adds another account or chooses AI: none, your own agent, or the built-in assistant.
 - **Settings → Accounts** is simpler: your accounts and one Add account button that opens the same steps.
 - **The invented demo mailbox is for developers only:** `npm run dev`, `SLIPSTREAM_DEMO=1` or `slipstream --demo`. Outside developer demo mode a new install doesn't create one. If you upgrade from a version that gave you one, it is removed when you connect a real account; in developer demo mode it stays beside your real accounts.

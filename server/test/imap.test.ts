@@ -445,11 +445,14 @@ describe("ImapProvider sync (generic server)", () => {
     assert.equal(m1!.from.name, "Jérôme");
     assert.deepEqual(m1!.references, ["<r0@example.com>", "<r1@example.com>"]);
     assert.equal(m1!.listUnsubscribe, "https://news.example.com/u/1");
-    assert.equal(m1!.bodyText, "Café menu, with an equals sign = and a soft break", "the plain part, undone from quoted-printable and Latin-1");
     assert.equal(m1!.bodyHtml, undefined);
     assert.ok(m1!.size! > 5000);
-    assert.match(m2!.bodyText, /^Hello there Hello there/, "html-only mail previews as text, from base64");
-    assert.ok(m2!.bodyText.length <= 2000);
+    assert.equal(m1!.bodyText, "", "a page has no text; previews come in a pass of their own");
+    assert.equal(s.partFetches.length, 0);
+    const previews = await r.provider.fetchPreviews(st.pages.flatMap((p) => p.previewIds ?? []));
+    assert.equal(previews.get(m1!.remoteId), "Café menu, with an equals sign = and a soft break", "the plain part, undone from quoted-printable and Latin-1");
+    assert.match(previews.get(m2!.remoteId)!, /^Hello there Hello there/, "html-only mail previews as text, from base64");
+    assert.ok(previews.get(m2!.remoteId)!.length <= 2000);
     assert.equal(s.fullFetches, 0);
     assert.ok(s.partFetches.length > 0 && s.partFetches.every((f) => f.maxLength === 2048), "previews are capped at 2048 bytes");
   });
@@ -1038,6 +1041,105 @@ describe("ImapProvider summaries", () => {
     assert.deepEqual(rest.pages.filter((p) => p.progress).map((p) => [p.progress!.count, p.progress!.total]), [[100, 150], [50, 150]]);
     assert.equal(parseCursor(rest.cursor).boxes["[Gmail]/All Mail"]!.initial, undefined);
     assert.equal(s.fullFetches, 0);
+  });
+
+  it("opens the inbox on headers alone: only the inbox search and one header fetch come before the first page", async () => {
+    const s = gmailServer();
+    for (let i = 0; i < 30; i++) s.deliver("[Gmail]/All Mail", mail({ id: `inbox${i}` }), { labels: ["\\Inbox"], threadId: `i${i}` });
+    for (let i = 0; i < 150; i++) s.deliver("[Gmail]/All Mail", mail({ id: `archived${i}` }), { labels: [], threadId: `a${i}` });
+    s.deliver("[Gmail]/Trash", mail({ id: "t" }), { labels: [], threadId: "t1" });
+    const r = rig(s, { settings: { imapHost: "imap.gmail.com" } });
+
+    const first = await r.provider.sync(null);
+    assert.equal(first.messages.length, 30);
+    assert.ok(first.messages.every((m) => m.bodyText === ""), "no preview came with the page");
+    assert.equal(first.previewIds?.length, 30, "the page says which previews to fetch next");
+    assert.deepEqual(s.partCommands, [], "no text part was read before the page");
+    assert.equal(s.log.length, 3, `the mailbox list, the inbox search and the headers, nothing else: ${s.log.join(" | ")}`);
+    assert.equal(s.log[0], "list");
+    assert.match(s.log[1]!, /^search \[Gmail\]\/All Mail .*"gmraw":"in:inbox"/);
+    assert.equal(s.log[2], "fetch [Gmail]/All Mail 30 uids");
+
+    // The rest of the window is listed after the page, without the inbox mail, and the mailbox list isn't read again.
+    s.log.length = 0;
+    const rest = await drain(r.provider, first.cursor);
+    assert.equal(rest.messages.length, 151, "the archived mail and the Trash message, but not the inbox page again");
+    assert.ok(s.log.some((l) => l.startsWith("search [Gmail]/All Mail") && !l.includes("gmraw")), "the whole window is searched now");
+    assert.ok(!s.log.includes("list"), "one LIST for the whole first sync");
+    assert.equal(parseCursor(rest.cursor).boxes["[Gmail]/All Mail"]!.initial, undefined);
+  });
+
+  it("brings the previews of a page in one FETCH that asks for every text part the page needs", async () => {
+    const s = genericServer();
+    const head = (id: string, type: string) => [`Message-ID: <${id}@example.com>`, "From: Alice <alice@example.com>", "To: me@example.com", `Subject: ${id}`, `Date: ${new Date().toUTCString()}`, "MIME-Version: 1.0", `Content-Type: ${type}`, ""];
+    // Part "1" (a plain message), "1.1" (text first in an alternative) and "2" (text after an attachment).
+    s.deliver("INBOX", [...head("plain", "text/plain"), "Just text.", ""].join("\r\n"));
+    s.deliver(
+      "INBOX",
+      [
+        ...head("alt", 'multipart/mixed; boundary="m"'),
+        "--m",
+        'Content-Type: multipart/alternative; boundary="a"',
+        "",
+        "--a",
+        "Content-Type: text/plain",
+        "",
+        "Alternative text.",
+        "--a",
+        "Content-Type: text/html",
+        "",
+        "<p>Alternative text.</p>",
+        "--a--",
+        "--m--",
+        "",
+      ].join("\r\n"),
+    );
+    s.deliver(
+      "INBOX",
+      [...head("mixed", 'multipart/mixed; boundary="m"'), "--m", 'Content-Type: image/png; name="a.png"', "Content-Transfer-Encoding: base64", "", "iVBORw0KGgo=", "--m", "Content-Type: text/plain", "", "Text after the picture.", "--m--", ""].join("\r\n"),
+    );
+    s.deliver("INBOX", [...head("nobody", 'image/png; name="x.png"'), "Content-Transfer-Encoding: base64", "", "iVBORw0KGgo=", ""].join("\r\n"));
+    const r = rig(s);
+    const page = await r.provider.sync(null);
+    assert.equal(page.previewIds?.length, 3, "a message with no text part has no preview to fetch");
+    const byId = new Map(page.messages.map((m) => [m.messageIdHeader, m.remoteId]));
+    assert.deepEqual(s.partCommands, []);
+
+    const previews = await r.provider.fetchPreviews(page.previewIds!);
+    assert.equal(s.partCommands.length, 1, "one FETCH for the whole page");
+    assert.deepEqual([...s.partCommands[0]!].sort(), ["1", "1.1", "2"], "every distinct part in the same command");
+    assert.equal(previews.get(byId.get("<plain@example.com>")!), "Just text.");
+    assert.equal(previews.get(byId.get("<alt@example.com>")!), "Alternative text.", "each message reads only its own part");
+    assert.equal(previews.get(byId.get("<mixed@example.com>")!), "Text after the picture.");
+    assert.equal(previews.has(byId.get("<nobody@example.com>")!), false);
+    assert.equal(s.fullFetches, 0);
+
+    // Each preview is fetched once; asking again finds nothing to do.
+    assert.equal((await r.provider.fetchPreviews(page.previewIds!)).size, 0);
+    assert.equal(s.partCommands.length, 1);
+    noLocksLeft(r);
+  });
+
+  it("a history page has its own previews, one FETCH per page", async () => {
+    const s = genericServer();
+    for (let i = 0; i < 230; i++) s.deliver("INBOX", mail({ id: `in${i}` }));
+    const r = rig(s);
+    const pages: SyncPage[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 20; i++) {
+      const page = await r.provider.sync(cursor);
+      pages.push(page);
+      cursor = page.cursor;
+      const before = s.partCommands.length;
+      if (page.previewIds?.length) {
+        const got = await r.provider.fetchPreviews(page.previewIds);
+        assert.equal(got.size, page.previewIds.length);
+        assert.equal(s.partCommands.length, before + 1);
+      }
+      if (page.done) break;
+    }
+    assert.deepEqual(pages.filter((p) => p.messages.length).map((p) => p.previewIds?.length), [100, 100, 30]);
+    assert.ok(pages.every((p) => !p.messages.length || p.messages.every((m) => m.bodyText === "")), "no page carries text");
   });
 
   it("opens the full message by id, and finds it by Message-ID when the id has gone stale", async () => {

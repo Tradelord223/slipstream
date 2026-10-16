@@ -20,6 +20,8 @@ const RECENT_CONCURRENCY = 3;
 const IDENTITY_REFRESH_MS = 6 * 3_600_000;
 
 type SyncProgress = NonNullable<Extract<ServerEvent, { type: "sync" }>["progress"]>;
+/** `base`: items already done before this stage's work began. `rate: false`: the stage did no work, so it has no rate. */
+type Report = (stage: SyncProgress["stage"], done: number, total: number | null, opts?: { base?: number; rate?: boolean }) => void;
 
 interface DraftRow {
   id: string;
@@ -165,12 +167,21 @@ export class SyncEngine {
       this.events.emitToUser(account.user_id, { type: "sync", accountId, status, error });
     };
     setStatus("syncing");
-    const run = { stage: null as SyncProgress["stage"] | null, done: 0 };
-    const report = (next: SyncProgress["stage"], d: number, t: number | null) => {
+    const run = { stage: null as SyncProgress["stage"] | null, done: 0, at: Date.now(), start: Date.now(), base: 0 };
+    const report: Report = (next, d, t, opts = {}) => {
+      const now = Date.now();
+      // A stage is timed from where the one before it ended, so a stage that reports once (the inbox page) still has a duration.
+      if (run.stage !== next) {
+        run.start = run.at;
+        run.base = opts.base ?? 0;
+      }
       // The total follows the count if an estimate turned out low.
       run.stage = next;
       run.done = d;
+      run.at = now;
       const p: SyncProgress = { stage: next, done: d, total: t === null ? null : Math.max(t, d) };
+      // Items per second so far in this stage, for the client's time-remaining estimate. Not for a stage that did no work.
+      if (opts.rate !== false && d > run.base) p.rate = (d - run.base) / (Math.max(now - run.start, 1) / 1000);
       this.progress.set(accountId, p);
       this.events.emitToUser(account.user_id, { type: "sync", accountId, status: "syncing", progress: p });
     };
@@ -198,6 +209,7 @@ export class SyncEngine {
           this.events.emitToUser(account.user_id, { type: "sync", accountId, status: "syncing", fetched });
         }
         const sp = page.progress;
+        let previewed = false;
         if (sp) {
           // A stage's page counts add up; the last page of a stage settles its total.
           const reached = (run.stage === sp.stage ? run.done : 0) + sp.count;
@@ -205,10 +217,22 @@ export class SyncEngine {
           if (sp.stage === "inbox" && sp.last) {
             // The newest inbox mail is in: the dashboard can open now, while the rest of the window keeps arriving.
             if (account.provider !== "archive") this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
+            // It opened on headers alone; the previews follow in one round trip. Providers whose pages carry them have none to fetch.
+            const ids = provider.fetchPreviews ? (page.previewIds ?? []) : [];
+            if (ids.length > 0) {
+              report("previews", 0, ids.length);
+              await this.fillPreviews(account, provider, ids);
+              report("previews", ids.length, ids.length);
+            } else {
+              report("previews", page.messages.length, page.messages.length, { rate: false });
+            }
+            previewed = true;
             await this.cacheRecent(account, report);
             recentDone = true;
           }
         }
+        // Later pages (history, new mail) have their previews fetched right after they are stored, without a stage of their own.
+        if (!previewed && page.previewIds?.length) await this.fillPreviews(account, provider, page.previewIds);
         if (page.done) {
           caughtUp = true;
           break;
@@ -219,7 +243,7 @@ export class SyncEngine {
       if (caughtUp && account.provider !== "archive") this.db.run("UPDATE accounts SET first_synced_at = ? WHERE id = ? AND first_synced_at IS NULL", Date.now(), accountId);
       // New mail arrives as summaries; the newest of it is fetched in full for the same reason the first inbox page is.
       if (fetched > 0 && !recentDone) await this.cacheRecent(account);
-      if (run.stage !== null) report("done", run.done, run.done);
+      if (run.stage !== null) report("done", run.done, run.done, { rate: false });
       await this.refreshIdentities(account, provider);
       setStatus("idle");
     } catch (err) {
@@ -232,10 +256,36 @@ export class SyncEngine {
   }
 
   /**
+   * Bring the previews of messages a page stored as headers only, in the provider's one round trip, and show them in the
+   * open inbox. A preview that can't be fetched now is simply missing until the message is opened; only a sign-in problem
+   * fails the sync.
+   */
+  private async fillPreviews(account: AccountRow, provider: MailProvider, remoteIds: string[]): Promise<void> {
+    if (!provider.fetchPreviews) return;
+    let previews: Map<string, string>;
+    try {
+      previews = await provider.fetchPreviews(remoteIds);
+    } catch (err) {
+      if (err instanceof ProviderAuthError) throw err;
+      console.warn(`[slipstream] previews for ${account.email}:`, err instanceof Error ? err.message : err);
+      return;
+    }
+    const touched = new Set<string>();
+    this.db.tx(() => {
+      for (const [remoteId, text] of previews) {
+        const loc = this.db.get<{ message_id: string }>("SELECT message_id FROM message_locations WHERE account_id = ? AND remote_id = ?", account.id, remoteId);
+        const threadId = loc && this.store.attachPreview(loc.message_id, text);
+        if (threadId) touched.add(threadId);
+      }
+    });
+    if (touched.size) this.events.emitToUser(account.user_id, { type: "threads", accountId: account.id, threadIds: [...touched] });
+  }
+
+  /**
    * Fetch the full text of the newest inbox messages that only have a preview, a few at a time. A message that can't be
    * fetched now is simply opened later; nothing here fails a sync.
    */
-  private async cacheRecent(account: AccountRow, report?: (stage: SyncProgress["stage"], done: number, total: number | null) => void): Promise<void> {
+  private async cacheRecent(account: AccountRow, report?: Report): Promise<void> {
     const rows = this.db.all<{ id: string; body_state: string }>(
       `SELECT id, body_state FROM messages
        WHERE account_id = ? AND in_inbox = 1 AND in_trash = 0 AND in_spam = 0 AND orphaned_at IS NULL
@@ -245,12 +295,13 @@ export class SyncEngine {
     );
     const missing = rows.filter((r) => r.body_state === "none").map((r) => r.id);
     let done = rows.length - missing.length;
-    report?.("recent", done, rows.length);
+    const base = done;
+    report?.("recent", done, rows.length, { base });
     for (let i = 0; i < missing.length; i += RECENT_CONCURRENCY) {
       const chunk = missing.slice(i, i + RECENT_CONCURRENCY);
       await this.bodies.load(chunk, { concurrency: RECENT_CONCURRENCY });
       done += chunk.length;
-      report?.("recent", done, rows.length);
+      report?.("recent", done, rows.length, { base });
     }
   }
 

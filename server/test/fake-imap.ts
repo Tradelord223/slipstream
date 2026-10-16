@@ -45,6 +45,8 @@ export class FakeServer {
   fullFetches = 0;
   /** Partial text fetches (BODY[part]<0.n>), as the provider asked for them. */
   partFetches: { key: string; maxLength: number | undefined }[] = [];
+  /** The part keys of each FETCH command that asked for text parts, in order: one entry per round trip. */
+  partCommands: string[][] = [];
 
   constructor(opts: FakeOptions = {}) {
     this.capabilities = new Set(opts.capabilities ?? ["IMAP4rev1", "UIDPLUS", "MOVE", "ESEARCH"]);
@@ -170,6 +172,7 @@ export class FakeConn {
 
   async list(): Promise<ListResponse[]> {
     this.ensureUsable();
+    this.server.log.push("list");
     return [...this.server.boxes.values()].map((b) => {
       const parts = b.path.split("/");
       return {
@@ -264,6 +267,7 @@ export class FakeConn {
       if (!this.server.condstore) throw new Error("CHANGEDSINCE without CONDSTORE");
       picked = picked.filter(([m]) => m.modseq > BigInt(opts.changedSince!));
     }
+    if (query.bodyParts?.length) this.server.partCommands.push(query.bodyParts.map((p) => (typeof p === "string" ? p : p.key)));
     this.server.log.push(`fetch ${box.path} ${Array.isArray(range) ? range.length + " uids" : range}${opts.changedSince !== undefined ? " changedSince" : ""}`);
     return picked.map(([m, seq]) => this.toFetch(m, seq, query));
   }

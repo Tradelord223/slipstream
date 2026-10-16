@@ -502,10 +502,9 @@ export function describeStructure(root: MessageStructureObject | undefined): {
   };
 }
 
-/** A summary: headers, the first lines of the text, the attachment list and the server's size; no body. */
+/** A summary: headers, the attachment list and the server's size; no body and no preview, which `fetchPreviews` adds. */
 async function toSummary(
   fm: FetchMessageObject,
-  preview: Buffer | undefined,
   target: SyncTarget,
   validity: string,
   gmail: boolean,
@@ -523,10 +522,10 @@ async function toSummary(
     selfEmail,
     receivedAt: fm.internalDate ? new Date(fm.internalDate).getTime() : undefined,
   });
-  const { text, attachments } = describeStructure(fm.bodyStructure);
+  const { attachments } = describeStructure(fm.bodyStructure);
   // Ours means "in the Sent folder" (aliases included), never "the From header says so": anyone can write a From.
   message.outgoing = Boolean(s.folders.sent);
-  message.bodyText = text && preview ? previewFromPart(preview, text) : "";
+  message.bodyText = "";
   message.bodyComplete = false;
   message.size = fm.size;
   message.attachments = attachments;
@@ -586,9 +585,11 @@ interface StepResult {
   more: boolean;
   /** Set by pages of a first sync. */
   progress?: SyncStageProgress;
+  /** Remote ids of the messages in `messages` whose preview `fetchPreviews` can bring. */
+  previews: string[];
 }
 
-const emptyStep = (): StepResult => ({ messages: [], flagUpdates: [], deleted: [], more: false });
+const emptyStep = (): StepResult => ({ messages: [], flagUpdates: [], deleted: [], more: false, previews: [] });
 
 /** The mailbox whose newest mail is the "inbox" page: Gmail's All Mail (its inbox is a label), otherwise INBOX. */
 const isInboxTarget = (t: SyncTarget, gmail: boolean) => t.role === (gmail ? "all" : "inbox");
@@ -598,6 +599,19 @@ interface Layout {
   map: MailboxMap;
   targets: SyncTarget[];
 }
+
+/** Where to find a message's text part for its preview. */
+interface PreviewRef {
+  path: string;
+  validity: string;
+  uid: number;
+  part: { key: string; type: string; encoding?: string; charset?: string };
+}
+
+/** Summaries waiting for a preview that no pass asked for (a sync that stopped) are dropped oldest first beyond this many. */
+const PREVIEWABLE_MAX = 5000;
+/** A mailbox list is reused this long while a first sync is under way. */
+const LAYOUT_TTL_MS = 60_000;
 
 async function withMailbox<T>(c: ImapClient, path: string, readOnly: boolean, fn: (mb: MailboxObject) => Promise<T>): Promise<T> {
   const lock = await c.getMailboxLock(path, { readOnly });
@@ -621,7 +635,13 @@ export class ImapProvider implements MailProvider {
    * UIDs still to fetch, per mailbox: spares re-running a large SEARCH for every batch. The first sync's list is newest
    * first, with the inbox page (the first `top` UIDs) at the front; later mail is oldest first.
    */
-  private queued = new Map<string, { uids: number[]; top: number }>();
+  private queued = new Map<string, { uids: number[]; top: number; inboxOnly?: true }>();
+  /** Gmail: the inbox page's UIDs, kept until the rest of the window has been listed, so that list leaves them out. */
+  private handed = new Map<string, Set<number>>();
+  /** Where each summarized message's text part is, until its preview has been fetched. */
+  private previewable = new Map<string, PreviewRef>();
+  /** The mailbox list, kept while a first sync works through its pages: LIST is a round trip per page otherwise. */
+  private layoutCache?: { layout: Layout; at: number };
   /** Messages the first sync's window holds beyond the inbox page, once every mailbox has been counted. */
   private historyTotal?: number;
   /** Last flags sent per mailbox window, so an unchanged message isn't re-announced every round. */
@@ -694,6 +714,16 @@ export class ImapProvider implements MailProvider {
     if (c) await c.logout().catch(() => c.close());
   }
 
+  /** The mailbox list; a first sync reads it once rather than before every page. */
+  private async cachedLayout(c: ImapClient, cursor: Cursor): Promise<Layout> {
+    const cache = this.layoutCache;
+    const firstSync = Object.values(cursor.boxes).some((b) => b.initial);
+    if (cache && firstSync && Date.now() - cache.at < LAYOUT_TTL_MS) return cache.layout;
+    const layout = await this.layout(c);
+    this.layoutCache = { layout, at: Date.now() };
+    return layout;
+  }
+
   private async layout(c: ImapClient): Promise<Layout> {
     const gmail = c.capabilities.has("X-GM-EXT-1");
     const map = detectMailboxes(await c.list({ listOnly: true }));
@@ -704,11 +734,12 @@ export class ImapProvider implements MailProvider {
 
   async sync(cursorText: string | null): Promise<SyncPage> {
     const cursor = parseCursor(cursorText);
-    const layout = await this.run((c) => this.layout(c));
+    const layout = await this.run((c) => this.cachedLayout(c, cursor));
     const n = layout.targets.length;
     const total = n * 2;
     if (Object.keys(cursor.boxes).length === 0) {
       this.queued.clear();
+      this.handed.clear();
       this.historyTotal = undefined;
     }
     while (cursor.step < total) {
@@ -731,6 +762,7 @@ export class ImapProvider implements MailProvider {
           cursor: serializeCursor(cursor),
           done,
           progress: res.progress?.stage === "history" ? { ...res.progress, last: done } : res.progress,
+          previewIds: res.previews.length ? res.previews : undefined,
         };
       }
       cursor.step += 1;
@@ -833,6 +865,7 @@ export class ImapProvider implements MailProvider {
       };
       cursor.boxes[target.path] = st;
       this.queued.delete(target.path);
+      this.handed.delete(target.path);
     }
     const init = st.initial;
     if (!init || this.queued.has(target.path)) return st;
@@ -845,19 +878,20 @@ export class ImapProvider implements MailProvider {
       const found = (await c.search({ ...extra, uid: `1:${upper ?? "*"}`, since }, { uid: true })) || [];
       return found.filter((u) => upper === null || u <= upper).sort((a, b) => b - a);
     };
-    let uids = await search({});
-    let top = 0;
-    if (!init.top && isInboxTarget(target, gmail)) {
-      if (gmail) {
-        // Gmail's inbox is a label on All Mail, so its newest inbox mail is found with Gmail's own search.
-        const first = (await search({ gmraw: "in:inbox" })).slice(0, INBOX_PAGE);
-        const picked = new Set(first);
-        uids = [...first, ...uids.filter((u) => !picked.has(u))];
-        top = first.length;
-      } else {
-        top = Math.min(INBOX_PAGE, uids.length);
-      }
+    if (!init.top && isInboxTarget(target, gmail) && gmail) {
+      // Gmail's inbox is a label on All Mail, so its newest inbox mail is found with Gmail's own search. Only that search
+      // stands between the inbox and the first page; the whole window is listed once the page has gone.
+      const first = (await search({ gmraw: "in:inbox" })).slice(0, INBOX_PAGE);
+      this.queued.set(target.path, { uids: first, top: first.length, inboxOnly: true });
+      return st;
     }
+    let uids = await search({});
+    const handed = this.handed.get(target.path);
+    if (handed) {
+      uids = uids.filter((u) => !handed.has(u));
+      this.handed.delete(target.path);
+    }
+    const top = !init.top && isInboxTarget(target, gmail) ? Math.min(INBOX_PAGE, uids.length) : 0;
     this.queued.set(target.path, { uids, top });
     return st;
   }
@@ -884,6 +918,13 @@ export class ImapProvider implements MailProvider {
           res.progress = { stage: "inbox", total: queue.top, count: batch.length, last: true };
         } else if (batch.length) {
           res.progress = { stage: "history", total: this.historyTotal ?? null, count: batch.length };
+        }
+        if (queue.inboxOnly) {
+          // The rest of the window is still to be listed, not finished: the next call lists it without these.
+          this.handed.set(target.path, new Set(batch));
+          this.queued.delete(target.path);
+          res.more = true;
+          return res;
         }
         if (rest.length) this.queued.set(target.path, { uids: rest, top: 0 });
         else {
@@ -915,8 +956,8 @@ export class ImapProvider implements MailProvider {
   }
 
   /**
-   * Summaries for a batch of UIDs in the open mailbox: one fetch for headers, structure, size and flags, then one per kind
-   * of text part for the first lines of each message. Nothing here downloads a whole message.
+   * Summaries for a batch of UIDs in the open mailbox: one fetch for headers, structure, size and flags. Previews are not
+   * part of it, so the page can go out as soon as this returns; `fetchPreviews` brings them right after.
    */
   private async summarize(c: ImapClient, uids: number[], target: SyncTarget, gmail: boolean, validity: string, res: StepResult): Promise<void> {
     if (uids.length === 0) return;
@@ -927,26 +968,19 @@ export class ImapProvider implements MailProvider {
     }
     const fetched = (await c.fetchAll(uids, query, { uid: true })).sort((a, b) => a.uid - b.uid);
 
-    const byPart = new Map<string, number[]>();
-    for (const fm of fetched) {
-      const key = describeStructure(fm.bodyStructure).text?.key;
-      if (key) byPart.set(key, [...(byPart.get(key) ?? []), fm.uid]);
-    }
-    const previews = new Map<number, Buffer>();
-    for (const [key, group] of byPart) {
-      for (const part of await c.fetchAll(group, { uid: true, bodyParts: [{ key, maxLength: PREVIEW_BYTES }] }, { uid: true })) {
-        const bytes = part.bodyParts?.get(key);
-        if (bytes) previews.set(part.uid, bytes);
-      }
-    }
-
     const sigs = this.signatures.get(target.path) ?? new Map<number, string>();
     this.signatures.set(target.path, sigs);
     for (const fm of fetched) {
       try {
-        const m = await toSummary(fm, previews.get(fm.uid), target, validity, gmail, this.ctx.email);
+        const m = await toSummary(fm, target, validity, gmail, this.ctx.email);
         if (!m) continue;
         res.messages.push(m);
+        const part = describeStructure(fm.bodyStructure).text;
+        if (part) {
+          this.previewable.set(m.remoteId, { path: target.path, validity, uid: fm.uid, part });
+          res.previews.push(m.remoteId);
+          if (this.previewable.size > PREVIEWABLE_MAX) this.previewable.delete(this.previewable.keys().next().value!);
+        }
         // The store has these flags now; the next change check shouldn't announce them again.
         sigs.set(fm.uid, flagSignature(flagUpdateOf(fm, target, validity, gmail)));
         if (sigs.size > WINDOW * 2) sigs.delete(sigs.keys().next().value!);
@@ -955,6 +989,42 @@ export class ImapProvider implements MailProvider {
         console.warn(`[slipstream] imap ${target.path} uid ${fm.uid}: skipped, ${err instanceof Error ? err.message : err}`);
       }
     }
+  }
+
+  /**
+   * The first lines of each message's text part, for messages `sync` listed in `previewIds`: one FETCH per mailbox that asks
+   * for every distinct text part the batch needs, since a round trip costs far more than the bytes. A message answers only
+   * the part it was asked for; the others come back empty or not at all.
+   */
+  async fetchPreviews(remoteIds: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const byPath = new Map<string, { id: string; ref: PreviewRef }[]>();
+    for (const id of remoteIds) {
+      const ref = this.previewable.get(id);
+      if (!ref) continue;
+      byPath.set(ref.path, [...(byPath.get(ref.path) ?? []), { id, ref }]);
+    }
+    for (const [path, entries] of byPath) {
+      try {
+        await this.run((c) =>
+          withMailbox(c, path, true, async (mb) => {
+            const live = entries.filter((e) => e.ref.validity === String(mb.uidValidity));
+            if (live.length === 0) return;
+            const keys = [...new Set(live.map((e) => e.ref.part.key))];
+            const bodyParts = keys.map((key) => ({ key, maxLength: PREVIEW_BYTES }));
+            const got = await c.fetchAll(live.map((e) => e.ref.uid), { uid: true, bodyParts }, { uid: true });
+            const byUid = new Map(got.map((fm) => [fm.uid, fm]));
+            for (const { id, ref } of live) {
+              const bytes = byUid.get(ref.uid)?.bodyParts?.get(ref.part.key);
+              if (bytes) out.set(id, previewFromPart(bytes, ref.part));
+            }
+          }),
+        );
+      } finally {
+        for (const e of entries) this.previewable.delete(e.id);
+      }
+    }
+    return out;
   }
 
   /* -------- actions */

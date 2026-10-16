@@ -104,17 +104,20 @@ describe("ImapProvider over a real IMAP connection", () => {
     let st = await drain(provider, null);
     assert.equal(st.messages.length, 121);
     assert.deepEqual(st.pages.filter((p) => p.messages.length).map((p) => p.messages.length), [100, 20, 1], "the newest 100 inbox messages, the rest of the inbox, then Sent");
-    // What went over the wire: structure, size and chosen headers, then the first 2 KB of the text part. Never a whole message.
+    // What went over the wire: structure, size and chosen headers. The pages carry no text; previews are a separate pass.
+    const m5 = st.messages.find((m) => m.messageIdHeader === "<m5@example.com>")!;
+    assert.ok(!mini.fetches.flat().some((i) => /^BODY\.PEEK\[1\]/i.test(i)), "no text before the previews are asked for");
+    assert.equal(m5.bodyText, "");
+    const previews = await provider.fetchPreviews(st.pages.flatMap((p) => p.previewIds ?? []));
+    assert.equal(previews.get(m5.remoteId)?.trim(), "Body of m5", "the preview");
     const items = mini.fetches.flat().map((i) => i.toUpperCase());
     assert.ok(items.includes("BODYSTRUCTURE") && items.includes("RFC822.SIZE"));
     assert.ok(items.some((i) => i.startsWith("BODY.PEEK[HEADER.FIELDS (FROM TO CC")));
     assert.ok(items.includes("BODY.PEEK[1]<0.2048>"));
     assert.ok(!items.some((i) => /^(BODY(\.PEEK)?\[\]|RFC822|RFC822\.TEXT|BODY(\.PEEK)?\[TEXT\])$/.test(i)), "no whole messages");
-    const m5 = st.messages.find((m) => m.messageIdHeader === "<m5@example.com>")!;
     assert.equal(m5.remoteId, "INBOX:1:6");
     assert.equal(m5.unread, false);
     assert.equal(m5.subject, "Subject m5");
-    assert.equal(m5.bodyText.trim(), "Body of m5", "the preview");
     assert.equal(m5.bodyComplete, false);
     assert.equal(st.messages.at(-1)!.outgoing, true);
 
@@ -129,6 +132,44 @@ describe("ImapProvider over a real IMAP connection", () => {
 
     st = await drain(provider, st.cursor);
     assert.deepEqual([st.messages.length, st.flags.length, st.deleted.length], [0, 0, 0]);
+  });
+
+  it("asks for the previews of several kinds of message in a single FETCH, and each message gets its own part", async () => {
+    const data = generic();
+    const mixed = [
+      "Message-ID: <mixed@example.com>",
+      "From: Alice <alice@example.com>",
+      "To: me@example.com",
+      "Subject: Picture first",
+      `Date: ${new Date().toUTCString()}`,
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/mixed; boundary="m"',
+      "",
+      "--m",
+      'Content-Type: image/png; name="a.png"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      "iVBORw0KGgo=",
+      "--m",
+      "Content-Type: text/plain",
+      "",
+      "Text after the picture.",
+      "--m--",
+      "",
+    ].join("\r\n");
+    data.deliver("INBOX", mail("plain"));
+    data.deliver("INBOX", mixed);
+    const { provider, mini } = await start(data);
+    const page = await provider.sync(null);
+    assert.equal(page.previewIds?.length, 2);
+    const before = mini.fetches.length;
+    const previews = await provider.fetchPreviews(page.previewIds!);
+    const asked = mini.fetches.slice(before);
+    assert.equal(asked.length, 1, "one FETCH command");
+    assert.deepEqual(asked[0]!.filter((i) => /^BODY\.PEEK\[\d/i.test(i)).sort(), ["BODY.PEEK[1]<0.2048>", "BODY.PEEK[2]<0.2048>"]);
+    const ids = new Map(page.messages.map((m) => [m.messageIdHeader, m.remoteId]));
+    assert.equal(previews.get(ids.get("<plain@example.com>")!)?.trim(), "Body of plain");
+    assert.equal(previews.get(ids.get("<mixed@example.com>")!)?.trim(), "Text after the picture.");
   });
 
   it("uses CONDSTORE's CHANGEDSINCE", async () => {
