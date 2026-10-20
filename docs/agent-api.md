@@ -46,6 +46,16 @@ It runs Claude Opus 5.5. Your key is stored encrypted on your own disk. Runs hap
 
 Settings → Agents → **New agent**. Choose the scopes and the approval policy, then copy the token.
 
+### Claude Code and Codex, in one command
+
+```bash
+slipstream connect claude    # prints the command that adds Slipstream to Claude Code
+slipstream connect codex     # the same for Codex
+slipstream connect claude --run    # runs it for you
+```
+
+This uses the stdio bridge (below), so no token is printed or lands in your shell history. The printed command is `claude mcp add --scope user slipstream -- <node> <slipstream's cli.js> mcp`, with the full paths for your machine, or `codex mcp add slipstream -- <node> <cli.js> mcp` for Codex. `--run` needs `claude` or `codex` on your PATH and says so if it isn't there. Slipstream has to be running when the assistant uses it.
+
 ### Claude Code, Cursor and other HTTP MCP clients
 
 ```bash

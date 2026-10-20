@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center"><strong>Email at the speed of thought, for you and your agents.</strong></p>
+<p align="center"><strong>Your own Claude Code or Codex can run your inbox.</strong></p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/slipstream-mail"><img src="https://img.shields.io/npm/v/slipstream-mail?label=npm&color=0b7f66" alt="npm version"></a>
@@ -27,21 +27,32 @@
   <img src="https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/inbox-dark.png" alt="The Slipstream inbox: a split inbox with one-key triage" width="900">
 </p>
 
-Slipstream is an open-source, keyboard-first email client. It works with Gmail, Outlook and any IMAP server, and keeps your mail in a local database so every keystroke is instant. It runs on your laptop or on your team's own server. Your AI agents get the same powers you have, through MCP, an HTTP API and a CLI. You see everything they do, approve what matters, and undo the rest. And if you don't want AI at all, it stays out of your way.
+Slipstream is an open-source email client that your own Claude Code or Codex can run for you. It works with Gmail, Outlook and any IMAP server, and it runs on your own computer, with your mail in a local database. Each agent gets only the permissions you give it, anything it wants to send waits for your approval, and you can undo what it does.
+
+It is also a fast, keyboard-first client for you: every keystroke is instant, and it runs on your laptop or on your team's own server. If you don't want AI at all, it stays out of your way.
 
 ## Quick start
 
 ```bash
 npx slipstream-mail
+slipstream connect claude
 ```
 
-Slipstream opens at <http://127.0.0.1:4380> with a short setup: enter your email, follow the steps for your provider, and your inbox opens while the rest of your mail arrives. It needs Node.js 22.18 or newer. To keep the `slipstream` command around for the CLI and MCP bridge, install it once with `npm install -g slipstream-mail`. If anything seems off, `slipstream doctor` checks the install and tells you what to fix.
+The first line opens Slipstream at <http://127.0.0.1:4380> with a short setup: enter your email, follow the steps for your provider, and your inbox opens while the rest of your mail arrives. The second line prints the command that adds Slipstream to Claude Code; use `slipstream connect codex` for Codex, or add `--run` to have Slipstream run the command for you. There is no token to copy: the first time Claude Code uses the connection, Slipstream creates an agent for it, "Local MCP", which appears in Settings → Agents. It can read, triage, draft and send, and its sends wait in **Review** until you approve them. Keep Slipstream running while Claude Code or Codex uses it.
+
+Slipstream needs Node.js 22.18 or newer. The second line needs the `slipstream` command, which you get by installing Slipstream once with `npm install -g slipstream-mail`. If anything seems off, `slipstream doctor` checks the install and tells you what to fix.
 
 ## Why Slipstream
 
-Premium "fast email" clients proved that email can feel calm and quick: one key to finish a conversation, reminders that bring mail back when you need it, an inbox you actually clear. They also typically cost $25–40 a seat every month, connect only to Gmail and Microsoft 365, and run your mail through their own servers. Some add read-receipt tracking pixels to the mail you send.
+Slipstream is built so that an agent can work your inbox without taking it over.
 
-Slipstream keeps the speed and drops the rest.
+- **Your own agent.** Claude Code or Codex, signed in with your own account, works through the same commands you do.
+- **Permissions for each agent.** Every agent has its own token and scopes: read, triage, draft, send. Revoking one cuts it off at once.
+- **Approval before anything is sent.** Sending waits in Review by default, and so do large bulk deletes and settings changes.
+- **Undo.** Every agent action is attributed to the agent by name and can be undone.
+- **No code harvesting.** One-time codes are masked in the mail agents read.
+
+Underneath, it is a fast, private email client. One key finishes a conversation, your mail stays on your disk, and remote images and tracking pixels stay blocked until you allow them.
 
 |  | Slipstream |
 |---|---|

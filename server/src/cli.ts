@@ -1,9 +1,12 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { claudeCodeStdioArgs, claudeCodeStdioCommand, codexStdioArgs, codexStdioCommand, type Cli } from "../../web/src/lib/connect.ts";
 import { Agents, type Scope } from "./agents/agents.ts";
+import { findAssistantBinary } from "./agents/engines/cli.ts";
 import { LOCAL_USER_ID, Users } from "./auth/users.ts";
 import { loadConfig, readConfig } from "./config.ts";
 import { Db } from "./db/index.ts";
@@ -16,6 +19,7 @@ import { formatReport, runDoctor } from "./doctor.ts";
  *   slipstream mail.search --query "from:priya has:attachment"
  *   slipstream triage.done --threadIds '["thr_…"]'
  *   slipstream mcp            # stdio MCP for Claude Desktop/Code, Cursor, …
+ *   slipstream connect claude # the command that adds Slipstream to Claude Code (or codex); --run does it
  *   slipstream doctor         # check this install (add --json for scripts and agents)
  *
  * Connection: SLIPSTREAM_URL (default http://127.0.0.1:4380) and SLIPSTREAM_TOKEN. In local mode
@@ -99,6 +103,41 @@ async function runMcpBridge() {
   await local.start();
 }
 
+const ASSISTANTS = {
+  claude: { name: "Claude Code", args: claudeCodeStdioArgs, command: claudeCodeStdioCommand },
+  codex: { name: "Codex", args: codexStdioArgs, command: codexStdioCommand },
+} as const;
+
+/**
+ * Connect Claude Code or Codex to this Slipstream over the stdio bridge, which keeps its own token, so
+ * none is printed or lands in shell history. Prints the command; with `--run`, runs it.
+ */
+async function runConnect(args: string[]) {
+  const target = args[0] === "claude" || args[0] === "codex" ? args[0] : null;
+  const flags = args.slice(1);
+  if (!target || flags.some((f) => f !== "--run")) throw new Error("Usage: slipstream connect <claude|codex> [--run]");
+  const assistant = ASSISTANTS[target];
+  // This very program, by absolute path, as Settings → Connect shows it: the assistant doesn't share your shell's PATH.
+  const entry = fileURLToPath(import.meta.url);
+  const cli: Cli = { command: process.execPath, args: [entry] };
+  const command = assistant.command(cli);
+  if (entry.includes(`${sep}_npx${sep}`)) console.error("This copy of Slipstream runs from npx's cache, which npm clears. Install it with `npm install -g slipstream-mail` and run this again.");
+  if (!flags.includes("--run")) {
+    console.log(command);
+    console.error(`Run it to connect ${assistant.name}, or run \`slipstream connect ${target} --run\`. Slipstream has to be running when ${assistant.name} uses it.`);
+    return;
+  }
+  const bin = findAssistantBinary(target);
+  if (!bin) throw new Error(`${assistant.name} isn't installed (there is no \`${target}\` on your PATH). Install it, then run this again, or run this yourself:\n${command}`);
+  console.log(command);
+  const code = await new Promise<number>((resolve, reject) => {
+    const child = spawn(bin, assistant.args(cli), { stdio: "inherit" });
+    child.on("error", reject);
+    child.on("close", (c, signal) => resolve(c ?? (signal ? 1 : 0)));
+  });
+  process.exitCode = code;
+}
+
 async function runCommand(argv: string[]) {
   const [name, ...rest] = argv;
   const token = localToken("cli");
@@ -107,7 +146,7 @@ async function runCommand(argv: string[]) {
     const list = (json as { commands: { name: string; title: string; scope: string }[] }).commands;
     console.log("Usage: slipstream <command> [--name value …]\n");
     for (const c of list) console.log(`  ${c.name.padEnd(24)} ${c.title}  (${c.scope})`);
-    console.log("\n  slipstream mcp           Run as a stdio MCP server\n  slipstream doctor        Check this install (--json for scripts)\n  slipstream <command> --help   Show a command's inputs");
+    console.log("\n  slipstream mcp           Run as a stdio MCP server\n  slipstream connect <claude|codex> [--run]   Add Slipstream to Claude Code or Codex\n  slipstream doctor        Check this install (--json for scripts)\n  slipstream <command> --help   Show a command's inputs");
     return;
   }
   if (rest.includes("--help")) {
@@ -131,6 +170,7 @@ async function runDoctorCommand(args: string[]) {
 export async function cli(argv = process.argv.slice(2)) {
   try {
     if (argv[0] === "mcp") await runMcpBridge();
+    else if (argv[0] === "connect") await runConnect(argv.slice(1));
     else if (argv[0] === "doctor") await runDoctorCommand(argv.slice(1));
     else await runCommand(argv);
   } catch (err) {

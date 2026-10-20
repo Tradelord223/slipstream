@@ -76,6 +76,11 @@ function findBinary(spec: CliSpec): string | null {
   return null;
 }
 
+/** Where `claude` or `codex` is installed, found the way the engines find it (including the SLIPSTREAM_CLAUDE_BIN / SLIPSTREAM_CODEX_BIN overrides). */
+export function findAssistantBinary(which: "claude" | "codex"): string | null {
+  return findBinary(which === "claude" ? CLAUDE : CODEX);
+}
+
 /** Both CLIs report `usage` with input_tokens / output_tokens. */
 function reportUsage(io: RunIO, usage: unknown) {
   const u = usage as { input_tokens?: unknown; output_tokens?: unknown } | undefined;
