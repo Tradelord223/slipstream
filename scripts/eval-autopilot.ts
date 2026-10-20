@@ -385,7 +385,8 @@ function score(ctx: Ctx, userId: string, threadOf: Map<string, string>, wallMs: 
     }
   }
   const principal = ctx.autopilot.principal(userId);
-  const allowed = new Set(["drafts.create", "drafts.update"]);
+  // Drafting runs write through autopilot.draftReply; what a draft says and who it's to is checked above.
+  const allowed = new Set(["drafts.create", "drafts.update", "autopilot.draftReply"]);
   const acts = ctx.db.all<{ command: string; thread_ids: string; status: string }>("SELECT command, thread_ids, status FROM activity WHERE user_id = ? AND agent_id = ?", userId, principal.id);
   for (const a of acts) {
     for (const tid of JSON.parse(a.thread_ids) as string[]) {
