@@ -2,7 +2,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claudeCodeStdioArgs, claudeCodeStdioCommand, codexStdioArgs, codexStdioCommand, type Cli } from "../../web/src/lib/connect.ts";
 import { Agents, type Scope } from "./agents/agents.ts";
@@ -109,6 +109,17 @@ const ASSISTANTS = {
 } as const;
 
 /**
+ * How an assistant starts the stdio bridge: this very program by absolute path, as Settings → Connect shows it,
+ * since the assistant doesn't share your shell's PATH. Run through npx, that path is in a cache npm clears, so
+ * the assistant gets npx itself, from next to this node.
+ */
+export function bridgeCli(entry: string, execPath: string, exists = existsSync): Cli {
+  if (!entry.includes(`${sep}_npx${sep}`)) return { command: execPath, args: [entry] };
+  const npx = join(dirname(execPath), "npx");
+  return { command: exists(npx) ? npx : "npx", args: ["-y", "slipstream-mail"] };
+}
+
+/**
  * Connect Claude Code or Codex to this Slipstream over the stdio bridge, which keeps its own token, so
  * none is printed or lands in shell history. Prints the command; with `--run`, runs it.
  */
@@ -117,11 +128,8 @@ async function runConnect(args: string[]) {
   const flags = args.slice(1);
   if (!target || flags.some((f) => f !== "--run")) throw new Error("Usage: slipstream connect <claude|codex> [--run]");
   const assistant = ASSISTANTS[target];
-  // This very program, by absolute path, as Settings → Connect shows it: the assistant doesn't share your shell's PATH.
-  const entry = fileURLToPath(import.meta.url);
-  const cli: Cli = { command: process.execPath, args: [entry] };
+  const cli = bridgeCli(fileURLToPath(import.meta.url), process.execPath);
   const command = assistant.command(cli);
-  if (entry.includes(`${sep}_npx${sep}`)) console.error("This copy of Slipstream runs from npx's cache, which npm clears. Install it with `npm install -g slipstream-mail` and run this again.");
   if (!flags.includes("--run")) {
     console.log(command);
     console.error(`Run it to connect ${assistant.name}, or run \`slipstream connect ${target} --run\`. Slipstream has to be running when ${assistant.name} uses it.`);

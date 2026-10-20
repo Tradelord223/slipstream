@@ -85,3 +85,21 @@ describe("slipstream connect", () => {
     }
   });
 });
+
+describe("the bridge command an assistant runs", () => {
+  test("an installed or checked-out Slipstream is started by absolute path", async () => {
+    const { bridgeCli } = await import("../src/cli.ts");
+    assert.deepEqual(bridgeCli("/usr/local/lib/node_modules/slipstream-mail/dist/cli.js", "/usr/local/bin/node"), {
+      command: "/usr/local/bin/node",
+      args: ["/usr/local/lib/node_modules/slipstream-mail/dist/cli.js"],
+    });
+  });
+
+  test("run through npx, it goes through npx, since npm clears its cache", async () => {
+    const { bridgeCli } = await import("../src/cli.ts");
+    const entry = "/Users/sam/.npm/_npx/4d1c9f/node_modules/slipstream-mail/dist/cli.js";
+    assert.deepEqual(bridgeCli(entry, "/opt/node/bin/node", () => true), { command: "/opt/node/bin/npx", args: ["-y", "slipstream-mail"] });
+    assert.deepEqual(bridgeCli(entry, "/opt/node/bin/node", () => false), { command: "npx", args: ["-y", "slipstream-mail"] });
+    assert.equal(claudeCodeStdioCommand(bridgeCli(entry, "/opt/node/bin/node", () => true)), "claude mcp add --scope user slipstream -- /opt/node/bin/npx -y slipstream-mail mcp");
+  });
+});
