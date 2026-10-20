@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-20)
 
 - **Security: Codex runs see only Slipstream's tools.** When your own Codex runs Autopilot or the assistant, Slipstream now also turns off Codex plugins and apps, memories, sub-agents, image generation, goals, skills, browser use and computer use. Before this, MCP servers that came from Codex plugins could start alongside Slipstream's tools, so a mail agent could reach, for example, a connected trading or database plugin. If Slipstream can't get the list of features from `codex features list`, it doesn't start Codex and tells you; the list is remembered until Codex is upgraded. Codex still reads your global `~/.codex/AGENTS.md`.
 - **`slipstream connect claude` and `slipstream connect codex`** print the command that adds Slipstream to Claude Code or Codex over the stdio bridge, with no token to copy; `--run` runs it for you. The command uses the `node` on your PATH rather than a versioned install path, so it survives a Node upgrade, and Settings → Connect shows the same one. Run through `npx slipstream-mail`, it runs `npx -y slipstream-mail@<version> mcp`, pinned to the version you are running. Claude Code and Codex added this way share one "Local MCP" agent. The README now leads with this. See [docs/agent-api.md](docs/agent-api.md#claude-code-and-codex-in-one-command).
