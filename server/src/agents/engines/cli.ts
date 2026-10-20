@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import type { AppContext } from "../../context.ts";
@@ -44,7 +44,7 @@ const CODEX: CliSpec = {
   label: "Codex",
   binName: "codex",
   envVar: "SLIPSTREAM_CODEX_BIN",
-  note: "Runs your own Codex with your ChatGPT sign-in; usage counts against your plan. Its shell, hooks and your own Codex config are switched off, so Slipstream's tools are all it has.",
+  note: "Runs your own Codex with your ChatGPT sign-in; usage counts against your plan. Its shell, hooks, plugins, apps, memories, sub-agents, browser and computer use, and your own Codex config are switched off, so Slipstream's tools are all it has. It still reads your global ~/.codex/AGENTS.md.",
   installHint: "Codex isn't installed. Install it with: npm install -g @openai/codex (or brew install --cask codex).",
   loginHint: "Codex isn't signed in. Run codex login in a terminal and sign in with ChatGPT.",
 };
@@ -328,26 +328,48 @@ async function claudeTurn(io: RunIO, message: string, bin: string): Promise<Turn
 
 /**
  * Codex features that would give the mail agent more than Slipstream's tools: plugin and app MCP servers (a
- * person's trading or database plugins, say), plugin installs, memories, sub-agents, image generation, goals and
- * skills. Seen with Codex 0.163.0, where --ignore-user-config left plugin MCP servers running.
+ * person's trading or database plugins, say), plugin installs, memories, sub-agents, image generation, goals,
+ * skills, and browser and computer use. Seen with Codex 0.163.0, where --ignore-user-config left plugin MCP
+ * servers running.
  */
-const CODEX_ISOLATE = ["plugins", "apps", "remote_plugin", "memories", "multi_agent", "collaboration_modes", "image_generation", "goals", "skill_search", "skill_mcp_dependency_install"];
-const codexFeatures = new Map<string, Set<string>>();
+const CODEX_ISOLATE = ["plugins", "apps", "remote_plugin", "memories", "multi_agent", "collaboration_modes", "image_generation", "goals", "skill_search", "skill_mcp_dependency_install", "browser_use", "computer_use", "in_app_local_automation"];
 
-/** The CODEX_ISOLATE features this Codex has. It refuses to start on a feature name it doesn't know, so ask it first. */
-async function codexIsolation(bin: string): Promise<string[]> {
-  let known = codexFeatures.get(bin);
+/** Which Codex features each Codex install has, by binary path, size and modification time, so an upgrade in place asks again. */
+type CodexFeatureCache = Map<string, Set<string>>;
+
+function codexCacheKey(bin: string): string | null {
+  try {
+    const real = realpathSync(bin);
+    const { mtimeMs, size } = statSync(real);
+    return `${real}:${mtimeMs}:${size}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The CODEX_ISOLATE features this Codex has, or why it couldn't be asked. Codex refuses to start on a feature name
+ * it doesn't know, so ask it first. Failing closed: without the list the turn can't switch the right features off,
+ * and running it anyway would leave plugins and apps on.
+ */
+async function codexIsolation(bin: string, cache: CodexFeatureCache): Promise<{ disable: string[] } | { error: string }> {
+  const key = codexCacheKey(bin);
+  let known = key ? cache.get(key) : undefined;
   if (!known) {
     const p = await probe(bin, ["features", "list"]);
     // Each line is "<name> <stage> <enabled>"; a removed feature can't be switched.
-    known = new Set(p.code === 0 ? p.out.split("\n").filter((l) => !/\sremoved\s/.test(l)).map((l) => l.trim().split(/\s+/)[0]!).filter(Boolean) : []);
-    // An older Codex without `features` has none of these; ask again next turn only if the probe itself failed.
-    if (p.code !== null && !p.timedOut) codexFeatures.set(bin, known);
+    const names = p.code === 0 ? p.out.split("\n").filter((l) => !/\sremoved\s/.test(l)).map((l) => l.trim().split(/\s+/)[0]!).filter(Boolean) : [];
+    if (names.length === 0) {
+      const line = p.timedOut ? "it took too long" : p.out.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200);
+      return { error: `Slipstream couldn't check which Codex features to switch off (\`codex features list\` failed${line ? `: ${line}` : ""}), so it didn't start Codex. Update Codex or fix its config, then try again.` };
+    }
+    known = new Set(names);
+    if (key) cache.set(key, known);
   }
-  return CODEX_ISOLATE.filter((f) => known.has(f));
+  return { disable: CODEX_ISOLATE.filter((f) => known.has(f)) };
 }
 
-async function codexTurn(io: RunIO, message: string, bin: string): Promise<TurnOutcome> {
+async function codexTurn(io: RunIO, message: string, bin: string, features: CodexFeatureCache): Promise<TurnOutcome> {
   const { url, token } = io.mcpAccess();
   const resume = io.loadState<{ threadId?: string }>()?.threadId;
   return withTurnDir(async (dir) => {
@@ -355,8 +377,11 @@ async function codexTurn(io: RunIO, message: string, bin: string): Promise<TurnO
     const q = JSON.stringify;
     // codex merges -c into the person's config rather than replacing mcp_servers, so --ignore-user-config
     // keeps the MCP servers in their config.toml out; auth still comes from their own login. It doesn't keep out
-    // plugin and app MCP servers or their global AGENTS.md: the feature switches below cover the first.
-    const isolate = await codexIsolation(bin);
+    // plugin and app MCP servers: the feature switches below cover those, and memories, sub-agents, browser and
+    // computer use. Codex still reads the person's global ~/.codex/AGENTS.md; no switch stops that.
+    const isolation = await codexIsolation(bin, features);
+    if ("error" in isolation) return { outcome: "failed", error: isolation.error };
+    const isolate = isolation.disable;
     const common = [
       "--json",
       "--skip-git-repo-check",
@@ -468,5 +493,6 @@ function makeEngine(ctx: AppContext, spec: CliSpec, checkLogin: (bin: string) =>
 /** Claude Code and Codex, run from the person's own installs. Local mode only: they sign in as the person at the computer. */
 export function cliEngines(ctx: AppContext): Engine[] {
   turnRoot = join(ctx.config.dataDir, "runs");
-  return [makeEngine(ctx, CLAUDE, claudeStatus, claudeTurn), makeEngine(ctx, CODEX, codexStatus, codexTurn)];
+  const codexFeatures: CodexFeatureCache = new Map();
+  return [makeEngine(ctx, CLAUDE, claudeStatus, claudeTurn), makeEngine(ctx, CODEX, codexStatus, (io, message, bin) => codexTurn(io, message, bin, codexFeatures))];
 }

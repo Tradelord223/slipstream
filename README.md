@@ -27,7 +27,7 @@
   <img src="https://raw.githubusercontent.com/Tradelord223/slipstream/main/docs/screenshots/inbox-dark.png" alt="The Slipstream inbox: a split inbox with one-key triage" width="900">
 </p>
 
-Slipstream is an open-source email client that your own Claude Code or Codex can run for you. It works with Gmail, Outlook and any IMAP server, and it runs on your own computer, with your mail in a local database. Each agent gets only the permissions you give it, anything it wants to send waits for your approval, and you can undo what it does.
+Slipstream is an open-source email client that your own Claude Code or Codex can run for you. It works with Gmail, Outlook and any IMAP server, and it runs on your own computer, with your mail in a local database. Each agent has its own token and permissions, anything it wants to send waits for your approval, and most of what it does can be undone.
 
 It is also a fast, keyboard-first client for you: every keystroke is instant, and it runs on your laptop or on your team's own server. If you don't want AI at all, it stays out of your way.
 
@@ -47,9 +47,9 @@ Slipstream needs Node.js 22.18 or newer. To have a `slipstream` command instead 
 Slipstream is built so that an agent can work your inbox without taking it over.
 
 - **Your own agent.** Claude Code or Codex, signed in with your own account, works through the same commands you do.
-- **Permissions for each agent.** Every agent has its own token and scopes: read, triage, draft, send. Revoking one cuts it off at once.
+- **Permissions for each agent.** Every agent has its own token and scopes: read, triage, draft, send and settings. Revoking one cuts it off at once.
 - **Approval before anything is sent.** Sending waits in Review by default, and so do large bulk deletes and settings changes.
-- **Undo.** Every agent action is attributed to the agent by name and can be undone.
+- **Undo.** Every agent action is attributed to the agent by name, and most can be undone. A send can be cancelled within the undo window.
 - **No code harvesting.** One-time codes are masked in the mail agents read.
 
 Underneath, it is a fast, private email client. One key finishes a conversation, your mail stays on your disk, and remote images and tracking pixels stay blocked until you allow them.
@@ -109,7 +109,7 @@ Every action in Slipstream is a command your agents can call: over MCP (Claude C
 
 - **Scoped tokens.** Each agent gets only the scopes you choose.
 - **Review queue.** Sending waits in **Review** for your approval.
-- **Attribution and undo.** Every agent action shows up under the agent's name, with Undo.
+- **Attribution and undo.** Every agent action shows up under the agent's name, and most can be undone. A send can be cancelled within the undo window.
 - **No code harvesting.** One-time codes are masked in the mail agents read, so an injected instruction can't make an agent read one out.
 
 ```bash

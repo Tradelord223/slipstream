@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { claudeCodeStdioCommand, codexStdioCommand } from "../../web/src/lib/connect.ts";
+import { selfCommand } from "../src/cli.ts";
+import { localCli } from "../src/http/mail.ts";
+import { bridgeCli } from "../src/lib/bridge.ts";
+import { packageVersion } from "../src/lib/version.ts";
 
 const cliPath = join(import.meta.dirname, "..", "src", "cli.ts");
 const root = mkdtempSync(join(tmpdir(), "slipstream-connect-"));
@@ -30,14 +34,14 @@ function connect(args: string[], env: Record<string, string> = {}) {
   return res;
 }
 
-const here = { command: process.execPath, args: [cliPath] };
+const here = bridgeCli(cliPath);
 
 describe("slipstream connect", () => {
   test("claude prints the stdio command, with no token, and the same string Settings builds", () => {
     const res = connect(["claude"]);
     assert.equal(res.status, 0);
     assert.equal(res.stdout.trim(), claudeCodeStdioCommand(here));
-    assert.equal(res.stdout.trim(), `claude mcp add --scope user slipstream -- ${process.execPath} ${cliPath} mcp`);
+    assert.equal(res.stdout.trim(), `claude mcp add --scope user slipstream -- ${here.command} ${cliPath} mcp`);
     assert.doesNotMatch(res.stdout, /ss_agent_|Bearer/);
   });
 
@@ -45,7 +49,7 @@ describe("slipstream connect", () => {
     const res = connect(["codex"]);
     assert.equal(res.status, 0);
     assert.equal(res.stdout.trim(), codexStdioCommand(here));
-    assert.equal(res.stdout.trim(), `codex mcp add slipstream -- ${process.execPath} ${cliPath} mcp`);
+    assert.equal(res.stdout.trim(), `codex mcp add slipstream -- ${here.command} ${cliPath} mcp`);
   });
 
   test("the builders quote paths with spaces and fall back to the slipstream command", () => {
@@ -56,8 +60,8 @@ describe("slipstream connect", () => {
 
   test("--run runs the printed command with the assistant's own binary and passes its exit code on", () => {
     const expected = {
-      claude: ["mcp", "add", "--scope", "user", "slipstream", "--", process.execPath, cliPath, "mcp"],
-      codex: ["mcp", "add", "slipstream", "--", process.execPath, cliPath, "mcp"],
+      claude: ["mcp", "add", "--scope", "user", "slipstream", "--", here.command, cliPath, "mcp"],
+      codex: ["mcp", "add", "slipstream", "--", here.command, cliPath, "mcp"],
     };
     for (const target of ["claude", "codex"] as const) {
       const { bin, log } = fakeAssistant(target);
@@ -66,8 +70,10 @@ describe("slipstream connect", () => {
       assert.equal(ok.status, 0);
       assert.deepEqual(JSON.parse(readFileSync(log, "utf8").trim()), expected[target]);
       assert.match(ok.stdout, new RegExp(`^${target} mcp add`));
+      assert.doesNotMatch(ok.stderr, /remove it first/);
       const failed = connect([target, "--run"], { ...env, FAKE_EXIT: "3" });
       assert.equal(failed.status, 3);
+      assert.match(failed.stderr, /If Slipstream is already added, remove it first with `claude mcp remove slipstream --scope user` \(or `codex mcp remove slipstream`\) and run this again\./);
     }
   });
 
@@ -87,19 +93,50 @@ describe("slipstream connect", () => {
 });
 
 describe("the bridge command an assistant runs", () => {
-  test("an installed or checked-out Slipstream is started by absolute path", async () => {
-    const { bridgeCli } = await import("../src/cli.ts");
-    assert.deepEqual(bridgeCli("/usr/local/lib/node_modules/slipstream-mail/dist/cli.js", "/usr/local/bin/node"), {
-      command: "/usr/local/bin/node",
-      args: ["/usr/local/lib/node_modules/slipstream-mail/dist/cli.js"],
-    });
+  // A machine with Homebrew's layout: node and npx are links into a versioned Cellar that the next upgrade deletes.
+  const cellarNode = "/opt/homebrew/Cellar/node/26.12.0/bin/node";
+  const npxScript = "/opt/homebrew/Cellar/node/26.12.0/lib/node_modules/npm/bin/npx-cli.js";
+  const links: Record<string, string> = { "/opt/homebrew/bin/node": cellarNode, "/opt/homebrew/bin/npx": npxScript, [cellarNode]: cellarNode };
+  const lookup = (table: Record<string, string>) => (p: string) => {
+    if (!(p in table)) throw new Error(`ENOENT ${p}`);
+    return table[p]!;
+  };
+  const where = { path: "/usr/bin:/opt/homebrew/bin", realpath: lookup(links), version: "0.2.0" };
+  const npxEntry = "/Users/sam/.npm/_npx/4d1c9f/node_modules/slipstream-mail/dist/cli.js";
+  const installed = "/opt/homebrew/lib/node_modules/slipstream-mail/dist/cli.js";
+
+  test("an installed or checked-out Slipstream is started by absolute path, with the node on PATH rather than the versioned one", () => {
+    assert.deepEqual(bridgeCli(installed, cellarNode, where), { command: "/opt/homebrew/bin/node", args: [installed] });
   });
 
-  test("run through npx, it goes through npx, since npm clears its cache", async () => {
-    const { bridgeCli } = await import("../src/cli.ts");
-    const entry = "/Users/sam/.npm/_npx/4d1c9f/node_modules/slipstream-mail/dist/cli.js";
-    assert.deepEqual(bridgeCli(entry, "/opt/node/bin/node", () => true), { command: "/opt/node/bin/npx", args: ["-y", "slipstream-mail"] });
-    assert.deepEqual(bridgeCli(entry, "/opt/node/bin/node", () => false), { command: "npx", args: ["-y", "slipstream-mail"] });
-    assert.equal(claudeCodeStdioCommand(bridgeCli(entry, "/opt/node/bin/node", () => true)), "claude mcp add --scope user slipstream -- /opt/node/bin/npx -y slipstream-mail mcp");
+  test("falls back to the running node when no PATH entry is it", () => {
+    assert.deepEqual(bridgeCli(installed, cellarNode, { ...where, path: "/usr/bin:relative/bin" }), { command: cellarNode, args: [installed] });
+    assert.deepEqual(bridgeCli(installed, cellarNode, { ...where, realpath: lookup({}) }), { command: cellarNode, args: [installed] });
+  });
+
+  test("run through npx, it runs npx's script with node, pinned to this version, since npm clears the cache", () => {
+    const cli = bridgeCli(npxEntry, cellarNode, where);
+    assert.deepEqual(cli, { command: "/opt/homebrew/bin/node", args: [npxScript, "-y", "slipstream-mail@0.2.0"] });
+    assert.equal(claudeCodeStdioCommand(cli), `claude mcp add --scope user slipstream -- /opt/homebrew/bin/node ${npxScript} -y slipstream-mail@0.2.0 mcp`);
+  });
+
+  test("run through npx with no npx script to be found, it asks the PATH for npx", () => {
+    const noNpx = { ...where, realpath: lookup({ "/opt/homebrew/bin/node": cellarNode, [cellarNode]: cellarNode }) };
+    assert.deepEqual(bridgeCli(npxEntry, cellarNode, noNpx), { command: "npx", args: ["-y", "slipstream-mail@0.2.0"] });
+    const wrapper = { ...where, realpath: lookup({ ...links, "/opt/homebrew/bin/npx": "/opt/homebrew/bin/npx" }) };
+    assert.deepEqual(bridgeCli(npxEntry, cellarNode, wrapper), { command: "npx", args: ["-y", "slipstream-mail@0.2.0"] });
+    assert.deepEqual(bridgeCli(npxEntry, cellarNode, { ...noNpx, version: "unknown" }), { command: "npx", args: ["-y", "slipstream-mail"] });
+  });
+
+  test("slipstream connect and Settings → Connect build the same command", () => {
+    const settings = localCli();
+    assert.deepEqual(settings, bridgeCli(cliPath));
+    assert.equal(claudeCodeStdioCommand(settings), connect(["claude"]).stdout.trim());
+    assert.match(packageVersion(), /^\d+\.\d+\.\d+/);
+  });
+
+  test("hints name the command that works from where the program runs", () => {
+    assert.equal(selfCommand(installed), "slipstream");
+    assert.equal(selfCommand(npxEntry), "npx slipstream-mail");
   });
 });
