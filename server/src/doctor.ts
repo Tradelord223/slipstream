@@ -8,6 +8,7 @@ import type { Config } from "./config.ts";
 import { migrations } from "./db/schema.ts";
 import { cacheUsage, limitBytes, type Query } from "./mail/cache.ts";
 import { SecretBox } from "./lib/crypto.ts";
+import { packageVersion } from "./lib/version.ts";
 
 /**
  * `slipstream doctor`: checks an install without starting it and says, in plain words, what's wrong and how to fix it.
@@ -282,18 +283,4 @@ function portFree(host: string, port: number): Promise<boolean> {
     s.once("error", () => resolve(false));
     s.listen(port, host, () => s.close(() => resolve(true)));
   });
-}
-
-/** The installed version, from the nearest package.json (dist/ in a build, server/src/ in the repo). */
-function packageVersion(): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 4; i++) {
-    const p = join(dir, "package.json");
-    if (existsSync(p)) {
-      const pkg = JSON.parse(readFileSync(p, "utf8")) as { name?: string; version?: string };
-      if (pkg.name === "slipstream-mail") return pkg.version ?? "unknown";
-    }
-    dir = dirname(dir);
-  }
-  return "unknown";
 }

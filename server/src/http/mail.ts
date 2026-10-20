@@ -8,6 +8,7 @@ import { HttpError } from "../auth/users.ts";
 import { importStatus, type AppContext, type Env } from "../context.ts";
 import type { ServerEvent } from "../events.ts";
 import { assistantSetting } from "../agents/assistant.ts";
+import { bridgeCli } from "../lib/bridge.ts";
 import { triageCommandName } from "../commands/catalog.ts";
 import { listIdentities } from "../mail/identities.ts";
 import { extractCode } from "../mail/signals.ts";
@@ -397,12 +398,12 @@ export function mailRoutes(ctx: AppContext) {
 
 /**
  * How to run this install's CLI and stdio MCP bridge from another program (Claude Desktop, Cursor):
- * absolute paths, so it works whatever that program's PATH is. Local mode only.
+ * absolute paths, so it works whatever that program's PATH is. Local mode only. The same command `slipstream connect` prints.
  */
-function localCli(): { command: string; args: string[] } | null {
+export function localCli(): { command: string; args: string[] } | null {
   const here = dirname(fileURLToPath(import.meta.url));
   for (const candidate of [join(here, "cli.js"), join(here, "../dist/cli.js"), join(here, "../../dist/cli.js"), join(here, "../cli.ts")]) {
-    if (existsSync(candidate)) return { command: process.execPath, args: [candidate] };
+    if (existsSync(candidate)) return bridgeCli(candidate);
   }
   return null;
 }
