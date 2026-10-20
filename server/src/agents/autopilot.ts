@@ -7,6 +7,7 @@ import { isNoReplyAddress } from "../mail/classify.ts";
 import { maskCodes } from "../mail/signals.ts";
 import type { Agent } from "./agents.ts";
 import { assistantEnabled } from "./assistant.ts";
+import { AUTOPILOT_RUN_SLOTS } from "./cloud.ts";
 import { ENGINE_IDS, type EngineId } from "./engines/types.ts";
 
 /**
@@ -291,9 +292,15 @@ export class Autopilot {
     }
   }
 
+  /** A batch is being sorted, or every Autopilot run slot is taken (drafting runs use them too): new mail waits for the next pass. */
   private busy(userId: string) {
-    for (const [runId, r] of this.runs) if (r.userId === userId && r.kind === "decide" && this.ctx.cloud.isActive(runId)) return true;
-    return false;
+    let going = 0;
+    for (const [runId, r] of this.runs) {
+      if (r.userId !== userId || !this.ctx.cloud.isActive(runId)) continue;
+      if (r.kind === "decide") return true;
+      going += 1;
+    }
+    return going >= AUTOPILOT_RUN_SLOTS;
   }
 
   /** Conversations with a new incoming message since Autopilot last looked at them. */
@@ -375,7 +382,8 @@ export class Autopilot {
       this.clearError(userId);
     } catch (err) {
       this.ctx.db.run(`UPDATE autopilot_items SET stage = 'failed' WHERE id IN (${marks}) AND stage = 'deciding'`, ...ids);
-      this.fail(userId, err instanceof Error ? err.message : String(err));
+      // A slot taken while the batch was being prepared isn't a failure: the batch waits for the run that holds it to finish.
+      if (!(err instanceof HttpError && err.status === 429)) this.fail(userId, err instanceof Error ? err.message : String(err));
     }
     this.emit(userId);
   }
@@ -604,8 +612,8 @@ export class Autopilot {
       if (r.queue?.length && this.settings(userId).draftReplies) await this.startDrafts(userId, r.queue);
     }
     this.emit(userId);
-    // More may be waiting.
-    if (r.kind === "decide") void this.tickUser(userId).catch((e) => console.error("[slipstream] autopilot:", e));
+    // More may be waiting, and a run slot just came free.
+    void this.tickUser(userId).catch((e) => console.error("[slipstream] autopilot:", e));
   }
 
   private async startDrafts(userId: string, itemIds: string[]) {

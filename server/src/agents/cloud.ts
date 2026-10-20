@@ -29,6 +29,8 @@ export const CLOUD_MODEL = "claude-opus-5-5";
  * run on an engine Slipstream drives itself; a typical mail task uses a small fraction of it.
  */
 export const RUN_TOKEN_LIMIT = 1_500_000;
+/** Runs Autopilot may have going at once (sorting, drafting and learning a voice all count), apart from the person's own. */
+export const AUTOPILOT_RUN_SLOTS = 2;
 const BUDGET_STOP = "Reached this run's budget";
 
 const configSchema = z.object({
@@ -291,7 +293,7 @@ export class CloudAgent {
       throw new HttpError(402, "Agents reached this month's budget. Raise it in Settings → Models & accounts.");
     const mine = [...this.active.values()].filter((r) => r.userId === userId);
     if (origin === "autopilot") {
-      if (mine.filter((r) => r.origin === "autopilot").length >= 2) throw new HttpError(429, "Autopilot is already busy.");
+      if (mine.filter((r) => r.origin === "autopilot").length >= AUTOPILOT_RUN_SLOTS) throw new HttpError(429, "Autopilot is already busy.");
     } else if (mine.filter((r) => r.origin !== "autopilot").length >= 3) throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
   }
 

@@ -155,6 +155,9 @@ async function run(ctx: Ctx): Promise<number> {
   ctx.users.ensureLocalUser();
   // The prompt greets the person by name, so use the file's.
   ctx.db.run("UPDATE users SET name = ?, email = ? WHERE id = ?", file.user.name, file.user.email, userId);
+  // Autopilot runs only while the built-in assistant is on. Its default is on only once a key or default model is set up,
+  // which a Claude Code or Codex run doesn't need, so switch it on the way the person does in Settings → AI.
+  ctx.db.run("INSERT INTO settings (user_id, key, value) VALUES (?, 'assistant', ?) ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value", userId, JSON.stringify("on"));
 
   const engine = ctx.cloud.engines.get(engineId);
   if (!engine) throw new SetupError(`${engineId} isn't available on this build.`);
