@@ -256,6 +256,10 @@ describe("Codex engine", () => {
     assert.ok(r.argv.includes("--skip-git-repo-check"));
     assert.ok(r.argv.includes("--ignore-user-config"), "the person's other MCP servers and instructions stay out");
     for (const feature of ["shell_tool", "unified_exec", "hooks"]) assert.ok(r.argv.join(" ").includes(`--disable ${feature}`), `${feature} is off`);
+    // Plugin and app MCP servers, memories and sub-agents are off too, but only features this Codex lists:
+    // it refuses an unknown name, and a removed one can't be switched.
+    for (const feature of ["plugins", "apps", "memories", "multi_agent"]) assert.ok(r.argv.join(" ").includes(`--disable ${feature}`), `${feature} is off`);
+    for (const feature of ["goals", "plugin_hooks"]) assert.ok(!r.argv.join(" ").includes(`--disable ${feature}`), `${feature} isn't passed`);
     assert.ok(r.argv.includes("--ignore-rules"));
     assert.equal(flag("-m"), "gpt-5.5");
     assert.equal(resolveReal(flag("-C")), resolveReal(r.cwd));

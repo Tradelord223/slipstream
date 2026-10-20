@@ -321,6 +321,27 @@ async function claudeTurn(io: RunIO, message: string, bin: string): Promise<Turn
   });
 }
 
+/**
+ * Codex features that would give the mail agent more than Slipstream's tools: plugin and app MCP servers (a
+ * person's trading or database plugins, say), plugin installs, memories, sub-agents, image generation, goals and
+ * skills. Seen with Codex 0.163.0, where --ignore-user-config left plugin MCP servers running.
+ */
+const CODEX_ISOLATE = ["plugins", "apps", "remote_plugin", "memories", "multi_agent", "collaboration_modes", "image_generation", "goals", "skill_search", "skill_mcp_dependency_install"];
+const codexFeatures = new Map<string, Set<string>>();
+
+/** The CODEX_ISOLATE features this Codex has. It refuses to start on a feature name it doesn't know, so ask it first. */
+async function codexIsolation(bin: string): Promise<string[]> {
+  let known = codexFeatures.get(bin);
+  if (!known) {
+    const p = await probe(bin, ["features", "list"]);
+    // Each line is "<name> <stage> <enabled>"; a removed feature can't be switched.
+    known = new Set(p.code === 0 ? p.out.split("\n").filter((l) => !/\sremoved\s/.test(l)).map((l) => l.trim().split(/\s+/)[0]!).filter(Boolean) : []);
+    // An older Codex without `features` has none of these; ask again next turn only if the probe itself failed.
+    if (p.code !== null && !p.timedOut) codexFeatures.set(bin, known);
+  }
+  return CODEX_ISOLATE.filter((f) => known.has(f));
+}
+
 async function codexTurn(io: RunIO, message: string, bin: string): Promise<TurnOutcome> {
   const { url, token } = io.mcpAccess();
   const resume = io.loadState<{ threadId?: string }>()?.threadId;
@@ -328,7 +349,9 @@ async function codexTurn(io: RunIO, message: string, bin: string): Promise<TurnO
     // Every -c value is a TOML string; a JSON string literal is a valid one.
     const q = JSON.stringify;
     // codex merges -c into the person's config rather than replacing mcp_servers, so --ignore-user-config
-    // keeps their other MCP servers (and instructions) out; auth still comes from their own login.
+    // keeps the MCP servers in their config.toml out; auth still comes from their own login. It doesn't keep out
+    // plugin and app MCP servers or their global AGENTS.md: the feature switches below cover the first.
+    const isolate = await codexIsolation(bin);
     const common = [
       "--json",
       "--skip-git-repo-check",
@@ -340,6 +363,7 @@ async function codexTurn(io: RunIO, message: string, bin: string): Promise<TurnO
       "unified_exec",
       "--disable",
       "hooks",
+      ...isolate.flatMap((feature) => ["--disable", feature]),
       "--ignore-rules",
       "-c",
       `sandbox_mode=${q("read-only")}`,
