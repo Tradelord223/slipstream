@@ -14,6 +14,15 @@ export function isAutomatedSender(addr: Address): boolean {
   return AUTOMATED_LOCAL.test(local);
 }
 
+// The no-reply family only (not notifications@, info@ ...). The web composer keeps a copy in web/src/lib/compose.ts.
+const NO_REPLY_LOCAL = /^(no[-_]?reply|do[-_]?not[-_]?reply)\d*([+._-].*)?$/i;
+
+/** An address that doesn't take replies: no-reply@, noreply2@, do_not_reply+tag@ ... */
+export function isNoReplyAddress(email: string): boolean {
+  const at = email.lastIndexOf("@");
+  return at > 0 && NO_REPLY_LOCAL.test(email.slice(0, at));
+}
+
 export interface ClassifyInput {
   from: Address;
   bulk?: boolean;

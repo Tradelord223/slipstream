@@ -3,6 +3,7 @@ import { after, before, describe, test } from "node:test";
 import { editRatio, ownText } from "../src/agents/autopilot.ts";
 import type { Engine, EngineStatus, RunIO } from "../src/agents/engines/types.ts";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
+import type { Actor } from "../src/commands/registry.ts";
 import { addIdentity } from "../src/mail/identities.ts";
 import type { AccountRow } from "../src/mail/store.ts";
 import { addAccount, makeEnv, msg, type TestEnv } from "./helpers.ts";
@@ -136,6 +137,24 @@ describe("Autopilot", () => {
     const before = runs();
     await settle();
     assert.equal(runs(), before, "nothing new, no run");
+  });
+
+  test("never drafts a reply to a no-reply address, and says why", async () => {
+    ingest([msg({ from: { name: "Quarrystone Bank", email: "no-reply@quarrystonebank.test" }, subject: "Your statement is ready", bodyText: "Your March statement is ready to view.", remoteThreadId: "statement" })]);
+    await settle();
+    const t = thread("statement");
+    const decided = item(t.id);
+    assert.equal(decided.stage, "decided");
+    assert.equal(decided.draft_id, null);
+    assert.deepEqual(JSON.parse(decided.decision).warnings, ["No draft: no-reply@quarrystonebank.test doesn't accept replies."]);
+    const drafts = () => env.ctx.db.get<{ n: number }>("SELECT count(*) AS n FROM drafts WHERE thread_id = ?", t.id)!.n;
+    assert.equal(drafts(), 0);
+    // Even if the model asks for one anyway.
+    const actor: Actor = { kind: "agent", user: env.ctx.users.get(LOCAL_USER_ID)!, agent: env.ctx.autopilot.principal(LOCAL_USER_ID) };
+    const res = (await env.ctx.commands.execute(actor, "autopilot.draftReply", { threadId: t.id, body: "Thanks!" })) as { result: { draftId: string | null } };
+    assert.equal(res.result.draftId, null);
+    assert.equal(drafts(), 0);
+    assert.equal(JSON.parse(item(t.id).decision).warnings.length, 1, "the reason is recorded once");
   });
 
   test("the prompt fences email text so it can't pose as Slipstream's own markup", async () => {

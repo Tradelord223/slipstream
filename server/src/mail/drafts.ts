@@ -3,6 +3,7 @@ import { HttpError } from "../auth/users.ts";
 import type { AppContext } from "../context.ts";
 import { newId } from "../lib/crypto.ts";
 import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
+import { isNoReplyAddress } from "./classify.ts";
 import { resolveFrom } from "./identities.ts";
 
 /** Drafts, Undo Send and Send Later, shared by the dashboard and agents. */
@@ -86,6 +87,12 @@ export function shapeDraft(ctx: AppContext, d: DraftRow) {
 
 export function getDraft(ctx: AppContext, userId: string, id: string) {
   return shapeDraft(ctx, draftRow(ctx, userId, id));
+}
+
+/** One plain line per no-reply recipient (to, cc or bcc). Agents and people are told; nothing is blocked. */
+export function noReplyWarnings(d: { to: { email: string }[]; cc: { email: string }[]; bcc: { email: string }[] }): string[] {
+  const emails = new Set([...d.to, ...d.cc, ...d.bcc].map((a) => a.email.toLowerCase()));
+  return [...emails].filter(isNoReplyAddress).map((e) => `${e} doesn't accept replies.`);
 }
 
 export function listDrafts(ctx: AppContext, userId: string) {

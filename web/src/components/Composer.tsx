@@ -11,7 +11,7 @@ import { RecipientField } from "./RecipientField.tsx";
 import {
   attachFiles, closeCompose, compose, composeBus, discardDraft, edit, getEditor, insertSnippet, removeAttachment, sendCompose, sendLater, setFrom, useCompose,
 } from "../store/compose.ts";
-import { showFromPicker } from "../lib/compose.ts";
+import { noReplyNote, showFromPicker } from "../lib/compose.ts";
 import { useSession } from "../store/session.ts";
 import type { Account } from "../types.ts";
 import { toast } from "../store/toasts.ts";
@@ -43,6 +43,7 @@ function ComposerBody({ placement }: { placement: Placement }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const isReply = s.kind !== "new";
+  const noReply = noReplyNote([...s.to, ...s.cc, ...s.bcc]);
 
   // Commands that need this component's UI arrive over a tiny bus.
   useEffect(() => {
@@ -168,6 +169,7 @@ function ComposerBody({ placement }: { placement: Placement }) {
         />
         {s.showCc && <RecipientField label="Cc" value={s.cc} onChange={(cc) => edit({ cc })} autoFocus />}
         {s.showBcc && <RecipientField label="Bcc" value={s.bcc} onChange={(bcc) => edit({ bcc })} autoFocus />}
+        <div role="status">{noReply && <p className="composer-note">{noReply}</p>}</div>
         {subjectVisible && (
           <div className="recipient-row">
             <label className="recipient-label" htmlFor="compose-subject">

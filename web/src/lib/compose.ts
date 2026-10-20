@@ -39,6 +39,20 @@ export function replyTarget(messages: Message[], mine: Set<string>): Message {
   return messages[messages.length - 1]!;
 }
 
+// A copy of isNoReplyAddress in server/src/mail/classify.ts (the web build doesn't import server code): keep them the same.
+const NO_REPLY_LOCAL = /^(no[-_]?reply|do[-_]?not[-_]?reply)\d*([+._-].*)?$/i;
+
+function isNoReplyAddress(email: string): boolean {
+  const at = email.lastIndexOf("@");
+  return at > 0 && NO_REPLY_LOCAL.test(email.slice(0, at));
+}
+
+/** A plain line naming each recipient that doesn't take replies, or "" when there are none. */
+export function noReplyNote(recipients: Address[]): string {
+  const emails = new Set(recipients.map((a) => a.email.toLowerCase()));
+  return [...emails].filter(isNoReplyAddress).map((e) => `${e} doesn't accept replies.`).join(" ");
+}
+
 /** The From picker shows once there is a choice: several accounts, or an account with other addresses. */
 export function showFromPicker(accounts: Account[]): boolean {
   return accounts.length > 1 || accounts.some((a) => (a.identities?.length ?? 0) > 0);
