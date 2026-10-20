@@ -3,6 +3,8 @@ import { after, before, describe, test } from "node:test";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
 import type { Actor } from "../src/commands/registry.ts";
 import { isAutomatedSender, isNoReplyAddress } from "../src/mail/classify.ts";
+import { noReplyWarnings } from "../src/mail/drafts.ts";
+import { noReplyNote } from "../../web/src/lib/compose.ts";
 import { addAccount, makeEnv, type TestEnv } from "./helpers.ts";
 
 /** Addresses that can't take a reply: recognised, and called out when a draft is addressed to one. */
@@ -33,6 +35,20 @@ describe("isNoReplyAddress", () => {
   });
 });
 
+describe("the composer's copy of the no-reply check", () => {
+  // web/src/lib/compose.ts keeps its own copy of the pattern (the web build can't import server code).
+  const positives = ["no-reply@x.test", "noreply@x.test", "no_reply@x.test", "do-not-reply@x.test", "donotreply@x.test", "do_not_reply@x.test", "NoReply@X.test", "noreply2@x.test", "noreply+abc123@x.test", "no-reply.billing@x.test", "noreply-alerts@x.test"];
+  const lookalikes = ["reply@x.test", "norelpy@x.test", "noreplyhelp@x.test", "no.one@x.test", "notifications@x.test", "ana.noreply@x.test", "replyno@x.test", "", "noreply"];
+
+  test("agrees with the server on every address, and words the note the same way", () => {
+    for (const email of [...positives, ...lookalikes]) {
+      const addr = { name: "", email };
+      assert.equal(noReplyNote([addr]) !== "", isNoReplyAddress(email), email);
+      assert.equal(noReplyNote([addr]), noReplyWarnings({ to: [addr], cc: [], bcc: [] }).join(" "), email);
+    }
+  });
+});
+
 describe("drafts warn about no-reply recipients", () => {
   let env: TestEnv;
   let accountId: string;
@@ -55,6 +71,23 @@ describe("drafts warn about no-reply recipients", () => {
 
   test("a draft to a person has no warnings", async () => {
     assert.deepEqual((await create({ to: ["ana@kettleby.test", "notifications@x.test"] })).warnings, []);
+  });
+
+  test("drafts.update reports them too", async () => {
+    const d = await create({ to: ["ana@kettleby.test"] });
+    const res = (await env.ctx.commands.execute(human, "drafts.update", { draftId: d.id, to: ["noreply@x.test"] })) as { result: { warnings: string[] } };
+    assert.deepEqual(res.result.warnings, ["noreply@x.test doesn't accept replies."]);
+    const clean = (await env.ctx.commands.execute(human, "drafts.update", { draftId: d.id, to: ["ana@kettleby.test"] })) as { result: { warnings: string[] } };
+    assert.deepEqual(clean.result.warnings, []);
+  });
+
+  test("an agent's send that waits for approval shows the person the same line", async () => {
+    const bot: Actor = { kind: "agent", user: human.user, agent: env.ctx.agents.create(LOCAL_USER_ID, "no-reply-bot", ["read", "draft", "send"]).agent };
+    const d = await create({ to: ["no-reply@quarrystonebank.com"] });
+    const res = (await env.ctx.commands.execute(bot, "drafts.send", { draftId: d.id })) as { status: string; approvalId: string };
+    assert.equal(res.status, "pending_approval");
+    const { preview } = env.ctx.db.get<{ preview: string }>("SELECT preview FROM approvals WHERE id = ?", res.approvalId)!;
+    assert.match(preview, /^Note: no-reply@quarrystonebank\.com doesn't accept replies\.$/m);
   });
 
   test("drafts.send reports them and still sends", async () => {

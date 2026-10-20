@@ -620,7 +620,7 @@ export function buildCatalog(): Command[] {
           bodyHtml: i.bodyHtml ?? (i.body !== undefined ? textToHtml(i.body) : d.bodyHtml),
           fromEmail: i.fromEmail,
         });
-        return { result: draft, summary: `Edited the draft "${draft.subject || "(no subject)"}"` };
+        return { result: { ...draft, warnings: noReplyWarnings(draft) }, summary: `Edited the draft "${draft.subject || "(no subject)"}"` };
       },
     }),
     defineCommand({
@@ -672,6 +672,7 @@ export function buildCatalog(): Command[] {
           `To: ${list(d.to)}`,
           d.cc.length ? `Cc: ${list(d.cc)}` : "",
           d.bcc.length ? `Bcc: ${list(d.bcc)}` : "",
+          ...noReplyWarnings(d).map((w) => `Note: ${w}`),
           `Subject: ${d.subject || "(no subject)"}`,
           i.sendAt ? `Send at: ${new Date(i.sendAt).toISOString()}` : "",
         ]
