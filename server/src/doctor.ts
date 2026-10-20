@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, statSync, statfsSync } from "node:fs";
+import { existsSync, statSync, statfsSync } from "node:fs";
 import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import type { Config } from "./config.ts";
 import { migrations } from "./db/schema.ts";
