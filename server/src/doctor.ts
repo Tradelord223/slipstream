@@ -8,6 +8,7 @@ import type { Config } from "./config.ts";
 import { migrations } from "./db/schema.ts";
 import { cacheUsage, limitBytes, type Query } from "./mail/cache.ts";
 import { SecretBox } from "./lib/crypto.ts";
+import { serviceFile } from "./lib/service.ts";
 import { packageVersion } from "./lib/version.ts";
 
 /**
@@ -47,6 +48,9 @@ export interface DoctorOptions {
   portFree?: (host: string, port: number) => Promise<boolean>;
   env?: NodeJS.ProcessEnv;
   now?: number;
+  /** Where to look for the start-at-login file. Injected in tests. */
+  platform?: NodeJS.Platform;
+  home?: string;
 }
 
 export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promise<DoctorReport> {
@@ -154,6 +158,15 @@ export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promi
   else if (!(await (opts.portFree ?? portFree)(config.host, config.port)))
     add({ id: "server", status: "fail", title: `Port ${config.port} is taken, and it isn't Slipstream`, fix: `Start Slipstream on another port: SLIPSTREAM_PORT=4381 slipstream` });
   else add({ id: "server", status: "info", title: "Slipstream isn't running", detail: `Start it with \`slipstream\`; it opens at ${base}.` });
+
+  // Starting at login
+  const file = config.mode === "local" ? serviceFile(config.port, opts.platform, opts.home) : null;
+  if (file)
+    add(
+      existsSync(file)
+        ? { id: "service", status: "info", title: "Starts at login", detail: `${file.replace(opts.home ?? homedir(), "~")} brings it back if it stops.` }
+        : { id: "service", status: "info", title: "Doesn't start at login", fix: "Run: slipstream service install" },
+    );
 
   // Team servers
   if (config.mode === "team") {
@@ -267,7 +280,7 @@ function size(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-async function probeHealth(url: string): Promise<"slipstream" | "other" | "none"> {
+export async function probeHealth(url: string): Promise<"slipstream" | "other" | "none"> {
   try {
     const res = await fetch(url, { headers: { "x-slipstream": "1" }, signal: AbortSignal.timeout(2_000) });
     const body = (await res.json().catch(() => null)) as { ok?: boolean } | null;

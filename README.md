@@ -38,9 +38,19 @@ npx slipstream-mail
 npx slipstream-mail connect claude
 ```
 
-The first line opens Slipstream at <http://127.0.0.1:4380> with a short setup: enter your email, follow the steps for your provider, and your inbox opens while the rest of your mail arrives. The second line, run in another terminal, prints the command that adds Slipstream to Claude Code; use `connect codex` for Codex, or add `--run` to have Slipstream run the command for you. There is no token to copy: the first time Claude Code uses the connection, Slipstream creates an agent for it, "Local MCP", which appears in Settings → Agents. It can read, triage, draft and send, and its sends wait in **Review** until you approve them. Keep Slipstream running while Claude Code or Codex uses it.
+The first line opens Slipstream at <http://127.0.0.1:4380> with a short setup: enter your email, follow the steps for your provider, and your inbox opens while the rest of your mail arrives. The second line, run in another terminal, prints the command that adds Slipstream to Claude Code; use `connect codex` for Codex, or add `--run` to have Slipstream run the command for you. There is no token to copy: the first time Claude Code uses the connection, Slipstream creates an agent for it, "Local MCP", which appears in Settings → Agents. It can read, triage, draft and send, and its sends wait in **Review** until you approve them. Slipstream has to be running while Claude Code or Codex uses it; "Keep it running" below makes that automatic.
 
 Slipstream needs Node.js 22.18 or newer. To have a `slipstream` command instead of `npx slipstream-mail`, install it once with `npm install -g slipstream-mail`. If anything seems off, `npx slipstream-mail doctor` checks the install and tells you what to fix.
+
+### Keep it running
+
+To have Slipstream start when you log in and start again if it ever stops, stop it with Ctrl-C and run:
+
+```bash
+npx slipstream-mail service install
+```
+
+This works on macOS and Linux. `service status` shows whether it is running and where its log is, `service uninstall` removes it, and running `service install` again after an upgrade moves the service to the new version. To give Slipstream its own window and Dock icon, open <http://127.0.0.1:4380> in Chrome and use the **Install** button in the address bar, or in Safari choose **File → Add to Dock**.
 
 ## Why Slipstream
 

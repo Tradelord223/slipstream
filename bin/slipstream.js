@@ -11,7 +11,12 @@ if (args.length !== process.argv.length - 2) process.env.SLIPSTREAM_DEMO = "1";
 const sub = args[0];
 if (!sub || sub === "serve") {
   const { start } = await import("../dist/server.js");
-  await start();
+  await start().catch((err) => {
+    // By name, not instanceof: a stale dist that predates StartupError must not turn a startup error into a TypeError.
+    if (err?.name !== "StartupError") throw err;
+    console.error(err.message);
+    process.exit(1);
+  });
 } else {
   // Everything else talks to a running Slipstream: commands, and `mcp` (stdio bridge for AI assistants).
   const { cli } = await import("../dist/cli.js");

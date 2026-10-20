@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, describe, test } from "node:test";
 import { LOCAL_USER_ID } from "../src/auth/users.ts";
 import { loadConfig, readConfig, type Config } from "../src/config.ts";
@@ -11,7 +11,7 @@ import { Db } from "../src/db/index.ts";
 import { formatReport, runDoctor, type DoctorOptions } from "../src/doctor.ts";
 import { addAccount, makeEnv } from "./helpers.ts";
 
-const offline: DoctorOptions = { health: async () => "none", portFree: async () => true, env: {} };
+const offline: DoctorOptions = { health: async () => "none", portFree: async () => true, env: {}, platform: "darwin", home: join(tmpdir(), "slipstream-doctor-no-home") };
 const byId = (r: Awaited<ReturnType<typeof runDoctor>>, id: string) => r.checks.find((c) => c.id === id);
 
 describe("slipstream doctor", () => {
@@ -171,6 +171,31 @@ describe("slipstream doctor", () => {
     const good = await runDoctor(loadConfig({ ...base, publicUrl: "https://mail.fernpoint.co" }), { ...offline, env: { LITESTREAM_REPLICA_URL: "s3://bucket/slipstream", SLIPSTREAM_SECRET: "x" } });
     assert.equal(byId(good, "public-url")!.status, "ok");
     assert.equal(byId(good, "backups")!.status, "ok");
+  });
+
+  test("says whether it starts at login, from the launch agent or unit for this port", async () => {
+    const home = freshDir();
+    const dir = freshDir();
+    const config = readConfig({ dataDir: dir, dbPath: join(dir, "slipstream.db"), port: 4391 });
+    const without = await runDoctor(config, { ...offline, home });
+    assert.equal(byId(without, "service")!.status, "info");
+    assert.equal(byId(without, "service")!.title, "Doesn't start at login");
+    assert.equal(byId(without, "service")!.fix, "Run: slipstream service install");
+    assert.equal(without.summary.fail + without.summary.warn, 0);
+
+    for (const [platform, file] of [
+      ["darwin", join(home, "Library", "LaunchAgents", "com.slipstream-mail.4391.plist")],
+      ["linux", join(home, ".config", "systemd", "user", "slipstream-4391.service")],
+    ] as const) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "x");
+      const r = await runDoctor(config, { ...offline, home, platform });
+      assert.equal(byId(r, "service")!.title, "Starts at login");
+      assert.equal(byId(r, "service")!.fix, undefined);
+    }
+    // Nowhere to put one on other systems, and team servers run under Docker or systemd themselves.
+    assert.equal(byId(await runDoctor(config, { ...offline, home, platform: "win32" }), "service"), undefined);
+    assert.equal(byId(await runDoctor({ ...config, mode: "team", publicUrl: "https://mail.fernpoint.co" }, { ...offline, home }), "service"), undefined);
   });
 
   test("the CLI prints JSON for scripts and exits 1 only when something fails, and creates nothing", async () => {

@@ -10,8 +10,9 @@ import { findAssistantBinary } from "./agents/engines/cli.ts";
 import { LOCAL_USER_ID, Users } from "./auth/users.ts";
 import { loadConfig, readConfig } from "./config.ts";
 import { Db } from "./db/index.ts";
-import { formatReport, runDoctor } from "./doctor.ts";
+import { formatReport, probeHealth, runDoctor } from "./doctor.ts";
 import { bridgeCli } from "./lib/bridge.ts";
+import { installService, serviceStatus, uninstallService } from "./lib/service.ts";
 
 /**
  * The command line and the stdio MCP bridge. Both talk to a running Slipstream over its agent API,
@@ -22,6 +23,7 @@ import { bridgeCli } from "./lib/bridge.ts";
  *   slipstream mcp            # stdio MCP for Claude Desktop/Code, Cursor, …
  *   slipstream connect claude # the command that adds Slipstream to Claude Code (or codex); --run does it
  *   slipstream doctor         # check this install (add --json for scripts and agents)
+ *   slipstream service install # start it at login and restart it if it stops (uninstall, status)
  *
  * Connection: SLIPSTREAM_URL (default http://127.0.0.1:4380) and SLIPSTREAM_TOKEN. In local mode
  * a token is created on first use and kept in the data directory.
@@ -67,7 +69,7 @@ async function call(path: string, token: string, body?: unknown): Promise<{ stat
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new Error(`Can't reach Slipstream at ${baseUrl()}. Start it with \`${self}\` (or \`npm start\` in the repo).`);
+    throw new Error(`Can't reach Slipstream at ${baseUrl()}. Start it with \`${self}\` (or \`npm start\` in the repo), or run \`${self} service install\` to keep it running.`);
   }
   return { status: res.status, json: await res.json().catch(() => null) };
 }
@@ -149,7 +151,7 @@ async function runCommand(argv: string[]) {
     const list = (json as { commands: { name: string; title: string; scope: string }[] }).commands;
     console.log(`Usage: ${self} <command> [--name value …]\n`);
     for (const c of list) console.log(`  ${c.name.padEnd(24)} ${c.title}  (${c.scope})`);
-    console.log(`\n  ${self} mcp           Run as a stdio MCP server\n  ${self} connect <claude|codex> [--run]   Add Slipstream to Claude Code or Codex\n  ${self} doctor        Check this install (--json for scripts)\n  ${self} <command> --help   Show a command's inputs`);
+    console.log(`\n  ${self} mcp           Run as a stdio MCP server\n  ${self} connect <claude|codex> [--run]   Add Slipstream to Claude Code or Codex\n  ${self} doctor        Check this install (--json for scripts)\n  ${self} service <install|uninstall|status>   Start Slipstream at login and restart it if it stops\n  ${self} <command> --help   Show a command's inputs`);
     return;
   }
   if (rest.includes("--help")) {
@@ -170,11 +172,24 @@ async function runDoctorCommand(args: string[]) {
   if (report.summary.fail > 0) process.exitCode = 1;
 }
 
+/** Start at login: a launch agent on macOS, a systemd user unit on Linux. Local installs only; team servers run under Docker or systemd themselves. */
+async function runService(args: string[]) {
+  const action = args[0];
+  if (args.length !== 1 || (action !== "install" && action !== "uninstall" && action !== "status")) throw new Error(`Usage: ${self} service <install|uninstall|status>`);
+  const config = readConfig();
+  if (config.mode !== "local") throw new Error("Starting at login is for Slipstream on your own computer. Team servers run under Docker or systemd; see docs/self-hosting.md.");
+  const options = { self, port: config.port, dataDir: config.dataDir, probe: probeHealth };
+  if (action === "install") await installService({ ...options, entry: fileURLToPath(import.meta.url) });
+  else if (action === "uninstall") uninstallService(options);
+  else await serviceStatus(options);
+}
+
 export async function cli(argv = process.argv.slice(2)) {
   try {
     if (argv[0] === "mcp") await runMcpBridge();
     else if (argv[0] === "connect") await runConnect(argv.slice(1));
     else if (argv[0] === "doctor") await runDoctorCommand(argv.slice(1));
+    else if (argv[0] === "service") await runService(argv.slice(1));
     else await runCommand(argv);
   } catch (err) {
     console.error(err instanceof Error ? err.message : err);

@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { existsSync } from "node:fs";
+import type { Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Users } from "./auth/users.ts";
@@ -68,18 +69,60 @@ async function seedDemo(ctx: AppContext): Promise<void> {
   if (marco) ctx.db.run("UPDATE threads SET snoozed_until = ? WHERE id = ?", Date.now() + 2 * 60_000, marco.id);
 }
 
+/** A startup failure with a message meant for the person running Slipstream; the CLI prints it without a stack trace. */
+export class StartupError extends Error {
+  override name = "StartupError";
+}
+
+/** Serve `fetch` and resolve once the port is ours, or reject with the listen error (EADDRINUSE and friends). */
+async function listen(fetch: (req: Request, env: unknown) => Response | Promise<Response>, hostname: string, port: number): Promise<Server> {
+  const server = serve({ fetch, hostname, port }) as Server;
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.once("listening", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  return server;
+}
+
 export async function start(config = loadConfig()) {
   // Everything Slipstream writes is private mail data: owner-only files.
   process.umask(0o077);
-  const ctx = createContext(config);
+  // Own the port before touching the data dir: opening the database migrates it and creates secret.key, and a second copy
+  // pointed at the same data must not do that to a database a running copy is using. Until the app is ready the server
+  // answers 503 to everything, /api/health included, so a health probe doesn't call a half-started copy ready.
+  let app: ReturnType<typeof createApp> | undefined;
+  let server: Server;
+  try {
+    server = await listen((req, env) => (app ? app.fetch(req, env) : Response.json({ ok: false, error: "Slipstream is starting." }, { status: 503 })), config.host, config.port);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const at = config.mode === "local" ? `http://127.0.0.1:${config.port}` : `${config.host}:${config.port}`;
+    throw new StartupError(
+      code === "EADDRINUSE"
+        ? `Slipstream is already running at ${at} (or another program is using port ${config.port}). Stop it, or set PORT to use another port.`
+        : `Slipstream couldn't listen on ${at}: ${(err as Error).message}`,
+      { cause: err },
+    );
+  }
+  let ctx: AppContext;
+  try {
+    ctx = createContext(config);
+    const here = dirname(fileURLToPath(import.meta.url));
+    const staticDir = [join(here, "web"), join(here, "../../dist/web")].find((d) => existsSync(join(d, "index.html")));
+    app = createApp(ctx, staticDir);
+  } catch (err) {
+    // The port is ours but the data isn't usable (a failed migration, a bad secret.key): let go of it rather than serve 503 forever.
+    server.close();
+    throw err;
+  }
   if (config.mode === "local") ctx.users.ensureLocalUser();
   if (config.demo) await seedDemo(ctx);
   // A demo mailbox left from before the demo became developer-only goes once the person has real mail.
   await retireDemoMailboxes(ctx);
 
-  const here = dirname(fileURLToPath(import.meta.url));
-  const staticDir = [join(here, "web"), join(here, "../../dist/web")].find((d) => existsSync(join(d, "index.html")));
-  const app = createApp(ctx, staticDir);
   ctx.sync.start();
   ctx.webhooks.start();
   ctx.cloud.startScheduler();
@@ -119,9 +162,12 @@ export async function start(config = loadConfig()) {
   }, 10_000);
   bundleTimer.unref();
 
-  const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port });
   // Local mode: a loopback listener that only serves MCP + OAuth, for Tailscale Serve/Funnel or a tunnel.
+  // The app works without it, so a taken port is a warning, not a reason to stop.
   const remote = config.mode === "local" ? serve({ fetch: createPublicApp(ctx).fetch, hostname: "127.0.0.1", port: remotePort(ctx) }) : null;
+  remote?.on("error", (err) =>
+    console.error(`[slipstream] The remote (MCP/OAuth) listener on 127.0.0.1:${remotePort(ctx)} is off: ${err.message}. Set SLIPSTREAM_REMOTE_PORT to use another port.`),
+  );
   const stopWatching = watchRemoteOrigin(ctx);
   const where = config.mode === "local" ? `http://127.0.0.1:${config.port}` : config.publicUrl;
   console.log(`\n  Slipstream is running (${config.mode} mode)\n  → ${where}\n  data: ${config.dataDir}\n`);
@@ -148,7 +194,7 @@ export async function start(config = loadConfig()) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   start().catch((err) => {
-    console.error(err);
+    console.error(err instanceof StartupError ? err.message : err);
     process.exit(1);
   });
 }

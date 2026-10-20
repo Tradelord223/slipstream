@@ -11,6 +11,10 @@ Slipstream holds the keys to people's mailboxes. This page covers who it defends
 - **Cross-site requests:** API calls need a custom `x-slipstream` header. Browsers can't send it cross-origin without a CORS preflight, and Slipstream never approves one.
 - **Origin check:** requests with a foreign `Origin` are refused.
 
+**Another account on the same computer.**
+
+- **Not defended in local mode.** The checks above stop websites, not programs. A program run by another user account on the same computer can reach 127.0.0.1 and use your local Slipstream as you, with full access to your mail. Run local mode only on a computer whose other accounts you trust, and on a shared computer use team mode with sign-in. With `slipstream service install`, Slipstream runs for as long as you are logged in, so this applies for that whole time.
+
 **A malicious email tries to run code, track you, or phish through the UI.**
 
 - **Sanitizing:** HTML bodies are sanitized with DOMPurify, which removes scripts, forms, frames and event handlers.

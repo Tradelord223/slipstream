@@ -11,7 +11,7 @@ interface Where {
 }
 
 /** A PATH entry named `node` that is this very node, e.g. /opt/homebrew/bin/node rather than a versioned Cellar path that the next upgrade deletes. */
-function stableNode(execPath: string, path: string, realpath: (p: string) => string): string {
+export function stableNode(execPath: string, path: string, realpath: (p: string) => string): string {
   try {
     const self = realpath(execPath);
     for (const dir of path.split(delimiter).filter(isAbsolute)) {
