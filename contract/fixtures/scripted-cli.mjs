@@ -20,6 +20,10 @@ if (argv[0] === "login" && argv[1] === "status") {
   console.log("Logged in using ChatGPT");
   process.exit(0);
 }
+if (argv[0] === "features" && argv[1] === "list") {
+  console.log("plugins stable true\napps stable true\nmemories stable true");
+  process.exit(0);
+}
 
 let url;
 let token;

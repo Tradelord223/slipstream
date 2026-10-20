@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -36,7 +36,7 @@ before(async () => {
 
 after(() => void mcp.close());
 
-const ENV_KEYS = ["SLIPSTREAM_CLAUDE_BIN", "SLIPSTREAM_CODEX_BIN", "FAKE_LOG", "FAKE_MODE", "FAKE_LOGGED_IN"];
+const ENV_KEYS = ["SLIPSTREAM_CLAUDE_BIN", "SLIPSTREAM_CODEX_BIN", "FAKE_LOG", "FAKE_MODE", "FAKE_LOGGED_IN", "FAKE_FEATURES"];
 
 function setup(env: Record<string, string> = {}) {
   dir = mkdtempSync(join(tmpdir(), "slipstream-cli-test-"));
@@ -54,7 +54,7 @@ afterEach(() => {
 });
 
 // The fakes take their instructions from these; Slipstream passes only what it's told to.
-process.env.SLIPSTREAM_CLI_ENV = "FAKE_LOG,FAKE_MODE,FAKE_LOGGED_IN";
+process.env.SLIPSTREAM_CLI_ENV = "FAKE_LOG,FAKE_MODE,FAKE_LOGGED_IN,FAKE_FEATURES";
 const dataDir = mkdtempSync(join(tmpdir(), "slipstream-cli-data-"));
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 
@@ -258,8 +258,8 @@ describe("Codex engine", () => {
     for (const feature of ["shell_tool", "unified_exec", "hooks"]) assert.ok(r.argv.join(" ").includes(`--disable ${feature}`), `${feature} is off`);
     // Plugin and app MCP servers, memories and sub-agents are off too, but only features this Codex lists:
     // it refuses an unknown name, and a removed one can't be switched.
-    for (const feature of ["plugins", "apps", "memories", "multi_agent"]) assert.ok(r.argv.join(" ").includes(`--disable ${feature}`), `${feature} is off`);
-    for (const feature of ["goals", "plugin_hooks"]) assert.ok(!r.argv.join(" ").includes(`--disable ${feature}`), `${feature} isn't passed`);
+    for (const feature of ["plugins", "apps", "memories", "multi_agent", "browser_use", "computer_use"]) assert.ok(r.argv.join(" ").includes(`--disable ${feature}`), `${feature} is off`);
+    for (const feature of ["goals", "plugin_hooks", "in_app_local_automation"]) assert.ok(!r.argv.join(" ").includes(`--disable ${feature}`), `${feature} isn't passed`);
     assert.ok(r.argv.includes("--ignore-rules"));
     assert.equal(flag("-m"), "gpt-5.5");
     assert.equal(resolveReal(flag("-C")), resolveReal(r.cwd));
@@ -273,6 +273,50 @@ describe("Codex engine", () => {
     assert.equal(r.config?.["mcp_servers.slipstream.bearer_token_env_var"], "SLIPSTREAM_TOKEN");
     assert.ok(r.tokenInEnv, "the token reaches the child through its environment");
     assert.ok(!r.argv.some((a) => a.includes(TOKEN)), "no token on argv");
+  });
+
+  it("doesn't start Codex when it can't be asked which features to switch off", async () => {
+    for (const FAKE_FEATURES of ["fail", "empty"]) {
+      setup({ FAKE_FEATURES });
+      const io = fakeIO({ mcp: { url: mcpUrl, token: TOKEN } });
+      const out = await engine("cli:codex").turn(io, "hi");
+      assert.equal(out.outcome, "failed");
+      const error = out.outcome === "failed" ? out.error : "";
+      assert.match(error, /couldn't check which Codex features to switch off \(`codex features list` failed/);
+      assert.match(error, /so it didn't start Codex/);
+      if (FAKE_FEATURES === "fail") assert.match(error, /unrecognized subcommand/);
+      assert.deepEqual(records(), [], "codex exec never ran");
+      assert.equal(mcpCalls.length, 0);
+    }
+  });
+
+  it("asks which features it has once, and again after an upgrade in place", async () => {
+    setup();
+    const probes = () => readFileSync(logPath + ".features", "utf8").trim().split("\n").length;
+    const io = fakeIO({ mcp: { url: mcpUrl, token: TOKEN } });
+    const e = engine("cli:codex");
+    assert.equal((await e.turn(io, "one")).outcome, "done");
+    assert.equal((await e.turn(io, "two")).outcome, "done");
+    assert.equal(records().length, 2);
+    assert.equal(probes(), 1, "a good answer is cached");
+
+    const copy = join(dir, "codex.mjs");
+    copyFileSync(join(FIXTURES, "fake-codex.mjs"), copy);
+    process.env.SLIPSTREAM_CODEX_BIN = copy;
+    const upgraded = engine("cli:codex");
+    await upgraded.turn(io, "three");
+    appendFileSync(copy, "\n// upgraded\n");
+    await upgraded.turn(io, "four");
+    assert.equal(probes(), 3, "a changed binary is asked again");
+  });
+
+  it("asks again after a failed probe instead of caching it", async () => {
+    setup({ FAKE_FEATURES: "fail" });
+    const io = fakeIO({ mcp: { url: mcpUrl, token: TOKEN } });
+    const e = engine("cli:codex");
+    assert.equal((await e.turn(io, "one")).outcome, "failed");
+    delete process.env.FAKE_FEATURES;
+    assert.equal((await e.turn(io, "two")).outcome, "done");
   });
 
   it("marks a failed tool call", async () => {

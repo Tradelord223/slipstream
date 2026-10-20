@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // A stand-in for the `codex` binary: records how it was called, reads the MCP settings from its -c
 // overrides and SLIPSTREAM_TOKEN, calls the MCP server like the real CLI would, and streams `exec --json`
-// events. Test controls via env: FAKE_LOG, FAKE_LOGGED_IN=0, FAKE_MODE=normal|hang|stubborn|fail|limit|error|toolerror.
+// events. Test controls via env: FAKE_LOG, FAKE_LOGGED_IN=0, FAKE_MODE=normal|hang|stubborn|fail|limit|error|toolerror,
+// FAKE_FEATURES=fail|empty (`features list` exits 1 / prints nothing). `features list` calls go to <FAKE_LOG>.features, not FAKE_LOG.
 import { appendFileSync, readdirSync } from "node:fs";
 // Ignore SIGTERM before anything else, so the test can never stop us before we're stubborn.
 if (process.env.FAKE_MODE === "stubborn") process.on("SIGTERM", () => {});
@@ -15,8 +16,14 @@ if (argv[0] === "--version") {
   process.exit(0);
 }
 if (argv[0] === "features" && argv[1] === "list") {
-  // Some of the switches the engine turns off, one removed feature, and no "goals", like an older Codex.
-  console.log(["plugins stable true", "apps stable true", "memories stable true", "multi_agent stable true", "plugin_hooks removed false", "shell_tool stable true"].join("\n"));
+  if (process.env.FAKE_LOG) appendFileSync(process.env.FAKE_LOG + ".features", "list\n");
+  if (process.env.FAKE_FEATURES === "fail") {
+    process.stderr.write("error: unrecognized subcommand 'features'\n");
+    process.exit(1);
+  }
+  if (process.env.FAKE_FEATURES === "empty") process.exit(0);
+  // Some of the switches the engine turns off (not in_app_local_automation), one removed feature, and no "goals", like an older Codex.
+  console.log(["plugins stable true", "apps stable true", "memories stable true", "multi_agent stable true", "browser_use stable true", "computer_use stable true", "plugin_hooks removed false", "shell_tool stable true"].join("\n"));
   process.exit(0);
 }
 if (argv[0] === "login" && argv[1] === "status") {
