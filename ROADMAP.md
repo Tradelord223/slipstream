@@ -36,7 +36,7 @@
 - Sending from Gmail aliases and Outlook aliases. Gmail's alias list is read with the access Slipstream already asks for, but nobody has sent real mail from an alias yet. Outlook (Microsoft Graph) sending from an alias isn't confirmed for personal accounts, so Outlook and IMAP aliases are added by hand.
 - Tailscale Funnel on a real tailnet.
 - The cloud agent against the live Managed Agents API. Tests use a local stand-in.
-- Every engine against its live provider: ChatGPT sign-in, the four API keys, and real Claude Code and Codex runs. Tests use stand-ins for each API and scripted CLIs that call Slipstream's real MCP endpoint.
+- Every engine against its live provider: ChatGPT sign-in, the four API keys, and real Codex runs. Tests use stand-ins for each API and scripted CLIs that call Slipstream's real MCP endpoint. A real Claude Code (2.1.304, Sonnet) was checked on 2026-10-20 against the demo mailbox through `slipstream mcp`: it searched, read, marked done, drafted and undid, its send waited for approval, and one-time codes stayed masked. Real mail accounts weren't part of that check.
 - Autopilot's decision quality on a real model. `scripts/eval-autopilot.ts` measures it; it hasn't been run against a paid model yet.
 - Everyday helpers on real inboxes. The code, delivery, sign-in and urgent rules are tested on about a hundred written examples, including look-alikes that must not match, but not yet on years of real mail.
 - Company logos against real company sites. The fetcher is tested against local stand-ins only.
