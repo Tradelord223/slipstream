@@ -14,6 +14,11 @@ if (argv[0] === "--version") {
   console.log("codex-cli 0.159.0");
   process.exit(0);
 }
+if (argv[0] === "features" && argv[1] === "list") {
+  // Some of the switches the engine turns off, one removed feature, and no "goals", like an older Codex.
+  console.log(["plugins stable true", "apps stable true", "memories stable true", "multi_agent stable true", "plugin_hooks removed false", "shell_tool stable true"].join("\n"));
+  process.exit(0);
+}
 if (argv[0] === "login" && argv[1] === "status") {
   const loggedIn = process.env.FAKE_LOGGED_IN !== "0";
   console.log(loggedIn ? "Logged in using ChatGPT" : "Not logged in");
