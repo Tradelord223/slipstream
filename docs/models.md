@@ -30,7 +30,7 @@ If Claude Code or Codex is installed and signed in on the computer running Slips
 
 - **What it can touch:** each turn runs in a fresh, empty, private folder, with Slipstream's MCP server as its only connection.
   - **Claude Code:** built-in tools are off, and only Slipstream's tools are allowed.
-  - **Codex:** its shell, hooks and command rules are switched off, and it runs read-only, without your own Codex config or other MCP servers.
+  - **Codex:** its shell, hooks and command rules are switched off, and it runs read-only, without your own Codex config or other MCP servers. Codex plugins and apps, memories, sub-agents, browser use and computer use are off too. Codex still reads your global `~/.codex/AGENTS.md`. If Slipstream can't ask your Codex which features it has (`codex features list`), it doesn't start Codex and says so.
 - **The connection:** a token that works only on Slipstream's MCP endpoint, only for that turn, and is revoked when the turn ends.
 - **What it sees of Slipstream's environment:** only what it needs to find its own sign-in, locale and proxy.
 - **Billing:** API keys in Slipstream's environment are not passed to the program, so it uses your plan rather than billing an API account.

@@ -54,7 +54,7 @@ slipstream connect codex     # the same for Codex
 slipstream connect claude --run    # runs it for you
 ```
 
-This uses the stdio bridge (below), so no token is printed or lands in your shell history. The printed command is `claude mcp add --scope user slipstream -- <node> <slipstream's cli.js> mcp`, with the full paths for your machine, or `codex mcp add slipstream -- <node> <cli.js> mcp` for Codex. `--run` needs `claude` or `codex` on your PATH and says so if it isn't there. Slipstream has to be running when the assistant uses it.
+This uses the stdio bridge (below), so no token is printed or lands in your shell history. The printed command is `claude mcp add --scope user slipstream -- <node> <slipstream's cli.js> mcp`, with the full paths for your machine, or `codex mcp add slipstream -- <node> <cli.js> mcp` for Codex. Run through `npx slipstream-mail`, the printed command instead runs `npx -y slipstream-mail@<version> mcp` (as node plus npx's own script, since npm clears the npx cache and the assistant has no PATH), pinned to the version you are running so the bridge matches the server. Claude Code and Codex added this way share one agent, "Local MCP", so its scopes and approvals apply to both. `--run` needs `claude` or `codex` on your PATH and says so if it isn't there. Slipstream has to be running when the assistant uses it.
 
 ### Claude Code, Cursor and other HTTP MCP clients
 
@@ -94,7 +94,7 @@ slipstream drafts.create --threadId thr_… --body "Sounds good — Thursday wor
 slipstream mail.read --help               # a command's input schema
 ```
 
-`drafts.create` and `drafts.send` results carry `warnings`, a list of plain sentences. When a recipient is a no-reply address (`no-reply@`, `noreply@`, `do-not-reply@` ...) it has one line, such as `no-reply@example.com doesn't accept replies.` A warning never blocks the draft or the send.
+`drafts.create` and `drafts.update` results, and a `drafts.send` that runs, carry `warnings`, a list of plain sentences. When a recipient is a no-reply address (`no-reply@`, `noreply@`, `do-not-reply@` ...) it has one line, such as `no-reply@example.com doesn't accept replies.` A warning never blocks the draft or the send. A send that waits for approval doesn't run yet, so it has no `warnings`; the approval's preview in **Review** shows the same line as a note.
 
 ### Searching all of a person's mail
 
