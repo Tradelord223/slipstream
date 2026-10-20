@@ -6,7 +6,7 @@ import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
 import { htmlToReviewText, htmlToText, stripQuoted, textToHtml } from "../lib/text.ts";
 import type { TriageKind } from "../mail/actions.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
-import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, sendDraft, updateDraft } from "../mail/drafts.ts";
+import { cancelSend, createDraft, deleteDraft, draftRecipients, getDraft, listDrafts, noReplyWarnings, sendDraft, updateDraft } from "../mail/drafts.ts";
 import { listIdentities, ownAddresses, replyIdentity, resolveFrom } from "../mail/identities.ts";
 import { isPersonalMailDomain } from "../mail/logos.ts";
 import { searchRemote } from "../mail/remote-search.ts";
@@ -597,7 +597,7 @@ export function buildCatalog(): Command[] {
           bodyHtml: i.bodyHtml ?? textToHtml(i.body ?? ""),
           fromEmail,
         });
-        return { result: draft, summary: `Drafted "${draft.subject || "(no subject)"}"`, threadIds: i.threadId ? [i.threadId] : [], inverse: { command: "drafts.delete", input: { draftId: draft.id } } };
+        return { result: { ...draft, warnings: noReplyWarnings(draft) }, summary: `Drafted "${draft.subject || "(no subject)"}"`, threadIds: i.threadId ? [i.threadId] : [], inverse: { command: "drafts.delete", input: { draftId: draft.id } } };
       },
     }),
     defineCommand({
@@ -683,7 +683,7 @@ export function buildCatalog(): Command[] {
         const d = getDraft(ctx, actor.user.id, i.draftId);
         const res = sendDraft(ctx, actor.user.id, i.draftId, { sendAt: i.sendAt, followUpDays: i.followUpDays, instant: false, markDone: false });
         return {
-          result: res,
+          result: { ...res, warnings: noReplyWarnings(d) },
           summary: `${i.sendAt ? "Scheduled" : "Sent"} "${d.subject || "(no subject)"}" to ${d.to.map((a) => a.email).join(", ")}`,
           threadIds: d.threadId ? [d.threadId] : [],
           inverse: { command: "drafts.cancelSend", input: { draftId: d.id } },

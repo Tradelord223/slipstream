@@ -84,6 +84,8 @@ slipstream drafts.create --threadId thr_… --body "Sounds good — Thursday wor
 slipstream mail.read --help               # a command's input schema
 ```
 
+`drafts.create` and `drafts.send` results carry `warnings`, a list of plain sentences. When a recipient is a no-reply address (`no-reply@`, `noreply@`, `do-not-reply@` ...) it has one line, such as `no-reply@example.com doesn't accept replies.` A warning never blocks the draft or the send.
+
 ### Searching all of a person's mail
 
 `mail.search` looks at what Slipstream has on this machine: summaries (headers and a short preview) of the last 30 days, and the full text of the newest inbox mail and anything opened lately. `mail.searchAll` (scope `read`) asks each account's own provider instead, so it finds older mail and words deep inside a message.

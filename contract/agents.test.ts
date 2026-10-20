@@ -107,6 +107,7 @@ describe("approvals", () => {
     assert.equal(draft.status, 200);
     assert.equal(draft.body.result.to[0].email, "sam@fernpoint.co");
     assert.match(draft.body.result.subject, /^Re: /);
+    assert.deepEqual(draft.body.result.warnings, [], "a reply to a person has no warnings");
 
     const send = await a("/api/v1/drafts.send", { draftId: draft.body.result.id });
     assert.equal(send.status, 202);

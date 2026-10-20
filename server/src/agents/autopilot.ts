@@ -3,6 +3,7 @@ import { HttpError } from "../auth/users.ts";
 import { defineCommand, type Actor, type Command } from "../commands/registry.ts";
 import type { AppContext } from "../context.ts";
 import { newId } from "../lib/crypto.ts";
+import { isNoReplyAddress } from "../mail/classify.ts";
 import { maskCodes } from "../mail/signals.ts";
 import type { Agent } from "./agents.ts";
 import { assistantEnabled } from "./assistant.ts";
@@ -613,7 +614,7 @@ export class Autopilot {
       .filter((it): it is ItemRow => {
         if (!it?.decision || it.stage !== "decided" || it.draft_id) return false;
         const d = JSON.parse(it.decision) as Decision;
-        return d.needsReply && d.action !== "done";
+        return d.needsReply && d.action !== "done" && !this.noReplySender(it);
       });
     const items = eligible.slice(0, DRAFT_BATCH);
     const queue = eligible.slice(DRAFT_BATCH).map((i) => i.id);
@@ -675,6 +676,20 @@ export class Autopilot {
     ].join("\n");
   }
 
+  /** True when the reply would go to a no-reply address; the decision then says why it has no draft. */
+  private noReplySender(it: ItemRow): boolean {
+    // The same message drafts.create answers: the latest one from someone else.
+    const from = this.ctx.db.get<{ from_email: string }>("SELECT from_email FROM messages WHERE thread_id = ? AND outgoing = 0 ORDER BY sent_at DESC LIMIT 1", it.thread_id)?.from_email;
+    if (!from || !isNoReplyAddress(from) || !it.decision) return false;
+    const d = JSON.parse(it.decision) as Decision;
+    const warning = `No draft: ${from} doesn't accept replies.`;
+    if (!d.warnings?.includes(warning)) {
+      d.warnings = [...(d.warnings ?? []), warning];
+      this.ctx.db.run("UPDATE autopilot_items SET decision = ? WHERE id = ?", JSON.stringify(d), it.id);
+    }
+    return true;
+  }
+
   /**
    * Autopilot's reply to a conversation it sorted: a draft to the person who wrote, never sent. The model
    * writes only the text; recipients and subject come from the conversation, so email content can't add any.
@@ -688,6 +703,10 @@ export class Autopilot {
     );
     if (!it?.decision) throw new HttpError(404, "Autopilot hasn't sorted this conversation.");
     if (it.draft_id && this.ctx.db.get("SELECT 1 AS x FROM drafts WHERE id = ? AND status = 'draft'", it.draft_id)) throw new HttpError(409, "There's already a draft for this conversation.");
+    if (this.noReplySender(it)) {
+      this.emit(userId);
+      return { result: { draftId: null, skipped: "The sender doesn't accept replies, so there is nothing to draft." }, summary: "Skipped a draft: the sender doesn't accept replies" };
+    }
     const create = this.ctx.commands.get("drafts.create");
     const outcome = await create.run(this.ctx, actor, create.input.parse({ threadId, body, replyAll: false }));
     const draft = outcome.result as { id: string };
