@@ -155,6 +155,9 @@ async function run(ctx: Ctx): Promise<number> {
   ctx.users.ensureLocalUser();
   // The prompt greets the person by name, so use the file's.
   ctx.db.run("UPDATE users SET name = ?, email = ? WHERE id = ?", file.user.name, file.user.email, userId);
+  // Autopilot runs only while the built-in assistant is on. Its default is on only once a key or default model is set up,
+  // which a Claude Code or Codex run doesn't need, so switch it on the way the person does in Settings → AI.
+  ctx.db.run("INSERT INTO settings (user_id, key, value) VALUES (?, 'assistant', ?) ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value", userId, JSON.stringify("on"));
 
   const engine = ctx.cloud.engines.get(engineId);
   if (!engine) throw new SetupError(`${engineId} isn't available on this build.`);
@@ -382,7 +385,8 @@ function score(ctx: Ctx, userId: string, threadOf: Map<string, string>, wallMs: 
     }
   }
   const principal = ctx.autopilot.principal(userId);
-  const allowed = new Set(["drafts.create", "drafts.update"]);
+  // Drafting runs write through autopilot.draftReply; what a draft says and who it's to is checked above.
+  const allowed = new Set(["drafts.create", "drafts.update", "autopilot.draftReply"]);
   const acts = ctx.db.all<{ command: string; thread_ids: string; status: string }>("SELECT command, thread_ids, status FROM activity WHERE user_id = ? AND agent_id = ?", userId, principal.id);
   for (const a of acts) {
     for (const tid of JSON.parse(a.thread_ids) as string[]) {

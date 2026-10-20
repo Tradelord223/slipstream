@@ -441,6 +441,28 @@ describe("Autopilot under pressure", () => {
     (env.ctx.autopilot as unknown as { lastFailure: Map<string, number> }).lastFailure.clear();
   });
 
+  test("a burst of new mail is all sorted while earlier batches' replies are still being drafted", async () => {
+    // Drafting outlasts sorting, so two batches' drafting runs can hold both of Autopilot's slots when the third batch is due.
+    const sortAll: Script = async (io, message) => {
+      const decisions = conversations(message).map((c) => ({ threadId: c.id, action: "keep", needsReply: true, reason: "A person asked you something", confidence: 0.9 }));
+      const r = await io.callTool("autopilot_decide", { decisions });
+      assert.equal(r.isError, false, r.text);
+    };
+    const slowDrafter: Script = async (io, message) => {
+      await new Promise((r) => setTimeout(r, 40));
+      await drafter(io, message);
+    };
+    env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sortAll, draft: slowDrafter }));
+    const burst = Array.from({ length: 41 }, (_, i) => `burst${i}`); // three sorting batches
+    ingest(burst.map((r) => person(r)));
+    await env.ctx.autopilot.tickUser(LOCAL_USER_ID);
+    await quiet(busy);
+    const o = await env.ctx.autopilot.overview(LOCAL_USER_ID);
+    assert.equal(o.problem, null, "waiting for a free slot isn't a failure");
+    for (const r of burst) assert.equal(item(thread(r).id)?.stage, "decided", `${r} was sorted`);
+    env.ctx.cloud.engines.set("loop:openai", scripted({ decide: sensible, draft: drafter }));
+  });
+
   test("Autopilot's own commands aren't offered to other agents", () => {
     const other = env.ctx.agents.create(LOCAL_USER_ID, "Helper", ["read", "triage", "draft"]).agent;
     const names = env.ctx.commands.describe({ actor: { kind: "agent", user: user(), agent: other } }).map((c) => c.name);
