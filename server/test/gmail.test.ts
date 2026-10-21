@@ -69,6 +69,12 @@ function mailbox(messages: Record<string, FakeMessage>, extra: { labels?: object
       assert.equal(call.url.searchParams.get("fields"), SUMMARY_FIELDS, "a summary asks for a field mask, not the whole message");
       return json(summaryOf(id, m));
     }
+    if (format === "metadata") {
+      // Only the headers asked for, as Gmail's metadata format does.
+      const want = call.url.searchParams.getAll("metadataHeaders").map((h) => h.toLowerCase());
+      const headers = parseMime(m.raw).all.filter(([name]) => want.includes(name.toLowerCase())).map(([name, value]) => ({ name, value }));
+      return json({ id, labelIds: m.labelIds, payload: { headers } });
+    }
     return json(
       format === "raw"
         ? { id, threadId: m.threadId, labelIds: m.labelIds, raw: m.raw.toString("base64url"), internalDate: m.internalDate ?? "1791277200000" }
@@ -98,6 +104,67 @@ describe("Gmail ownership", () => {
     const page = await gmail.sync(null);
     assert.equal(page.messages.find((m) => m.remoteId === "forged")!.outgoing, false);
     assert.equal(page.messages.find((m) => m.remoteId === "aliased")!.outgoing, true);
+  });
+});
+
+describe("Gmail's own sorting", () => {
+  const newsletter = (extra: string[] = []) =>
+    Buffer.from(
+      [
+        "From: Deals <deals@shop.example.org>",
+        "To: me@example.com",
+        "Subject: Sale",
+        "Message-ID: <n1@x>",
+        "Date: Tue, 06 Oct 2026 09:00:00 +0000",
+        "List-Id: Shop deals <Deals.Shop.Example.org>",
+        "List-Unsubscribe: <https://shop.example.org/u>",
+        "Precedence: bulk",
+        "Auto-Submitted: no",
+        "X-Other: nope",
+        ...extra,
+        "Content-Type: text/plain",
+        "",
+        "Hi",
+        "",
+      ].join("\r\n"),
+    );
+
+  it("keeps the category tab as the message's provider category, and never as a label", async () => {
+    stub = mailbox({
+      promo: { threadId: "t1", labelIds: ["INBOX", "CATEGORY_PROMOTIONS", "IMPORTANT"], raw: newsletter() },
+      person: { threadId: "t2", labelIds: ["INBOX", "CATEGORY_PERSONAL"], raw: rawMail({ subject: "Lunch", messageId: "<p@x>" }) },
+      plain: { threadId: "t3", labelIds: ["INBOX"], raw: rawMail({ subject: "No tabs", messageId: "<q@x>" }) },
+    });
+    stub.on("GET", `${BASE}/profile`, { emailAddress: "me@example.com", historyId: "100" });
+    stub.on("GET", `${BASE}/messages`, { messages: [{ id: "promo" }, { id: "person" }, { id: "plain" }] });
+    const page = await newProvider().gmail.sync(null);
+    const by = Object.fromEntries(page.messages.map((m) => [m.remoteId, m]));
+    assert.equal(by.promo!.providerCategory, "promotions");
+    assert.equal(by.person!.providerCategory, "personal");
+    assert.equal(by.plain!.providerCategory, undefined);
+    assert.deepEqual(by.promo!.labels, []);
+    // The list headers come along, with the List-Id as a plain lower-case id.
+    assert.equal(by.promo!.listId, "deals.shop.example.org");
+    assert.equal(by.promo!.listUnsubscribe, "https://shop.example.org/u");
+    assert.equal(by.promo!.bulk, true);
+  });
+
+  it("learns when Gmail moves a message to another tab, or to none", async () => {
+    stub = mailbox({ m1: { threadId: "t1", labelIds: ["INBOX", "CATEGORY_SOCIAL"], raw: newsletter() }, m2: { threadId: "t2", labelIds: ["INBOX"], raw: newsletter() } });
+    stub.on("GET", `${BASE}/profile`, { emailAddress: "me@example.com", historyId: "100" });
+    stub.on("GET", `${BASE}/history`, { history: [{ labelsAdded: [{ message: { id: "m1" } }, { message: { id: "m2" } }] }], historyId: "101" });
+    const page = await newProvider().gmail.sync(JSON.stringify({ phase: "incremental", historyId: "100" }));
+    assert.deepEqual(page.flagUpdates?.map((f) => [f.remoteId, f.providerCategory]), [["m1", "social"], ["m2", null]]);
+  });
+
+  it("asks again for just the four list headers and the tab of an old message, and skips one that is gone", async () => {
+    stub = mailbox({ old: { threadId: "t1", labelIds: ["INBOX", "CATEGORY_UPDATES"], raw: newsletter() } });
+    const hints = await newProvider().gmail.fetchSortingHints([{ remoteId: "old" }, { remoteId: "gone" }]);
+    assert.deepEqual([...hints.keys()], ["old"]);
+    assert.deepEqual(hints.get("old"), { listUnsubscribe: "https://shop.example.org/u", listId: "deals.shop.example.org", bulk: true, providerCategory: "updates" });
+    const asked = stub.callsTo("GET", `${BASE}/messages/old`);
+    assert.deepEqual(asked.map((c) => c.url.searchParams.get("format")), ["metadata"], "never the whole message");
+    assert.deepEqual(asked[0]!.url.searchParams.getAll("metadataHeaders").sort(), ["Auto-Submitted", "List-Id", "List-Unsubscribe", "Precedence"]);
   });
 });
 
@@ -345,6 +412,8 @@ describe("Gmail incremental sync", () => {
         starred: true,
         folders: { inbox: false, sent: false, trash: false, spam: false },
         labels: [{ remoteId: "Label_1", name: "Clients" }],
+        // Gmail files it in no tab, so a tab it had before is cleared.
+        providerCategory: null,
       },
     ]);
     // New messages are fetched as summaries once; label-only changes use the minimal format.

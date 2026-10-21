@@ -1,11 +1,25 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api.ts";
 import { Icon } from "../../components/Icon.tsx";
+import { patternWords } from "../../components/MoveMailDialog.tsx";
 import { SplitForm, splitLibrary } from "../../components/SplitEditor.tsx";
+import { ago, plural } from "../../lib/format.ts";
+import { categoryName } from "../../lib/sorting.ts";
 import { useCounts, refreshCounts } from "../../store/counts.ts";
+import { reload } from "../../store/list.ts";
 import { refreshSession, session, useSession } from "../../store/session.ts";
+import { refreshSuggestions } from "../../store/suggestions.ts";
 import { toast } from "../../store/toasts.ts";
-import type { Split } from "../../types.ts";
+import type { CategoryRule, Split } from "../../types.ts";
+import { Switch } from "../autopilot/Switch.tsx";
+
+/** Pull the tabs, counts and lists back in line with the server after a tab or a correction changed. */
+async function refreshAfterChange() {
+  await refreshSession();
+  refreshCounts(true);
+  void refreshSuggestions(true);
+  reload(true);
+}
 
 export function SplitsSettings() {
   const splits = useSession((s) => s.splits);
@@ -35,12 +49,31 @@ export function SplitsSettings() {
     if (other) void reorder(id, other.id);
   };
 
+  /** Show or hide a tab, or make it hide while empty: the switch moves at once and goes back if the server says no. */
+  const change = async (s: Split, patch: { hidden?: boolean; hideWhenEmpty?: boolean }) => {
+    const before = session.get().splits;
+    session.set({ splits: before.map((x) => (x.id === s.id ? { ...x, ...patch } : x)) });
+    try {
+      await api.updateSplit(s.id, patch);
+      refreshCounts(true);
+    } catch (err) {
+      session.set({ splits: before });
+      toast.error(err instanceof Error ? err.message : "Couldn't change that split");
+    }
+  };
+
   const remove = async (s: Split) => {
     try {
-      await api.deleteSplit(s.id);
-      await refreshSession();
-      refreshCounts(true);
-      toast.info(`Removed ${s.name}`);
+      const res = await api.deleteSplit(s.id);
+      await refreshAfterChange();
+      const activityId = res.activityId;
+      if (!activityId) {
+        toast.info(`Removed ${s.name}`);
+        return;
+      }
+      toast.undoable(`Removed ${s.name}`, () => {
+        api.undoActivity(activityId).then(refreshAfterChange, (err: Error) => toast.error(err.message || "Couldn't undo that"));
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't remove that split");
     }
@@ -49,8 +82,7 @@ export function SplitsSettings() {
   const addLibrary = async (l: { name: string; query: string }) => {
     try {
       await api.createSplit(l.name, l.query);
-      await refreshSession();
-      refreshCounts(true);
+      await refreshAfterChange();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't add that split");
     }
@@ -59,7 +91,7 @@ export function SplitsSettings() {
   return (
     <div className="settings-list">
       <section className="panel-block" aria-label="Your splits">
-        <p className="block-lead">Splits sort your inbox into tabs. Drag to reorder, or use the arrows.</p>
+        <p className="block-lead">Splits sort your inbox into tabs. Drag to reorder, or use the arrows. Rename or hide the built-in tabs; the ones you make can be removed.</p>
         <ul className="split-list" role="list">
           {splits.map((s, i) => (
             <li
@@ -77,7 +109,7 @@ export function SplitsSettings() {
               }}
             >
               {editing === s.id ? (
-                <SplitForm initial={s} onDone={() => setEditing(null)} onCancel={() => setEditing(null)} />
+                <SplitForm initial={s} lockQuery={s.builtin} onDone={() => setEditing(null)} onCancel={() => setEditing(null)} />
               ) : (
                 <>
                   <span className="grip" aria-hidden="true">
@@ -85,11 +117,11 @@ export function SplitsSettings() {
                   </span>
                   <span className="split-main">
                     <span className="split-name">
-                      {s.name} {s.builtin && <span className="chip">Built in</span>}
+                      {s.name} {s.builtin && <span className="chip">Built in</span>} {s.hidden && <span className="chip">Hidden</span>}
                     </span>
                     <code className="split-query">{s.query}</code>
                   </span>
-                  <span className="split-count num">{counts?.splits[s.id] ? `${counts.splits[s.id]!.total} conversations` : ""}</span>
+                  <span className="split-count num">{counts?.splits[s.id] ? plural(counts.splits[s.id]!.total, "conversation") : ""}</span>
                   <span className="split-tools">
                     <button className="icon-btn" aria-label={`Move ${s.name} up`} disabled={i === 0} onClick={() => nudge(s.id, -1)}>
                       <Icon name="chevron-down" className="flip" />
@@ -97,16 +129,18 @@ export function SplitsSettings() {
                     <button className="icon-btn" aria-label={`Move ${s.name} down`} disabled={i === splits.length - 1} onClick={() => nudge(s.id, 1)}>
                       <Icon name="chevron-down" />
                     </button>
+                    <button className="btn btn-sm" onClick={() => setEditing(s.id)} aria-label={`${s.builtin ? "Rename" : "Edit"} ${s.name}`}>
+                      {s.builtin ? "Rename" : "Edit"}
+                    </button>
                     {!s.builtin && (
-                      <>
-                        <button className="btn btn-sm" onClick={() => setEditing(s.id)}>
-                          Edit
-                        </button>
-                        <button className="btn btn-sm btn-danger" onClick={() => void remove(s)}>
-                          Remove
-                        </button>
-                      </>
+                      <button className="btn btn-sm btn-danger" onClick={() => void remove(s)} aria-label={`Remove ${s.name}`}>
+                        Remove
+                      </button>
                     )}
+                  </span>
+                  <span className="split-opts">
+                    <Switch label="Show as a tab" checked={!s.hidden} onChange={(on) => void change(s, { hidden: !on })} hint={s.builtin && s.hidden ? "Its mail isn't in any tab." : undefined} />
+                    <Switch label="Hide when empty" checked={s.hideWhenEmpty} onChange={(on) => void change(s, { hideWhenEmpty: on })} />
                   </span>
                 </>
               )}
@@ -114,6 +148,8 @@ export function SplitsSettings() {
           ))}
         </ul>
       </section>
+
+      <Corrections />
 
       {library.length > 0 && (
         <section className="panel-block" aria-label="Split library">
@@ -144,5 +180,84 @@ export function SplitsSettings() {
         )}
       </section>
     </div>
+  );
+}
+
+/** The senders, companies and mailing lists whose mail you moved to another tab. Removing one sorts that mail by the usual rules again. */
+function Corrections() {
+  const [rules, setRules] = useState<CategoryRule[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    setError(null);
+    api.categoryRules().then(setRules, (err: Error) => setError(err.message || "Couldn't load your corrections"));
+  }, []);
+  useEffect(load, [load]);
+
+  const refresh = () => {
+    load();
+    refreshCounts(true);
+    reload(true);
+  };
+
+  const remove = async (r: CategoryRule) => {
+    setBusy(r.id);
+    try {
+      const res = await api.deleteCategoryRule(r.id);
+      refresh();
+      const text = `Stopped moving ${patternWords(r.pattern)} to ${categoryName(r.category)}`;
+      const activityId = res.activityId;
+      if (!activityId) toast.info(text);
+      else
+        toast.undoable(text, () => {
+          api.undoActivity(activityId).then(refresh, (err: Error) => toast.error(err.message || "Couldn't undo that"));
+        });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't remove that correction");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="panel-block" aria-label="Sorting corrections">
+      <h3 className="block-title">Sorting corrections</h3>
+      <p className="block-lead">Mail from these senders, companies and mailing lists goes where you sent it. Press Shift+I on a conversation to add one.</p>
+      {error ? (
+        <p className="form-error" role="alert">
+          {error}{" "}
+          <button className="link-btn" onClick={load}>
+            Try again
+          </button>
+        </p>
+      ) : rules === null ? (
+        <div className="split-skeleton" aria-busy="true" aria-label="Loading corrections">
+          <span className="skeleton-line" style={{ width: "60%" }} />
+          <span className="skeleton-line" style={{ width: "44%" }} />
+        </div>
+      ) : rules.length === 0 ? (
+        <div className="ag-empty">
+          <div className="empty-title">No corrections yet</div>
+          <div className="empty-hint">When a conversation is in the wrong tab, press Shift+I to move its sender's mail.</div>
+        </div>
+      ) : (
+        <ul className="rule-list" role="list">
+          {rules.map((r) => (
+            <li key={r.id} className="rule-row">
+              <span className="rule-main">
+                <span className="rule-pattern ellipsis">{patternWords(r.pattern)}</span>
+                <span className="rule-meta">
+                  Goes to <strong>{categoryName(r.category)}</strong> · {ago(r.createdAt)}
+                </span>
+              </span>
+              <button className="btn btn-sm" disabled={busy === r.id} onClick={() => void remove(r)} aria-label={`Stop moving ${patternWords(r.pattern)} to ${categoryName(r.category)}`}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

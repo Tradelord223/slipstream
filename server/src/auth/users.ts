@@ -16,9 +16,13 @@ export interface Workspace {
   role: "owner" | "member";
 }
 
-const DEFAULT_SPLITS: [string, string][] = [
-  ["Important", "is:important"],
-  ["Other", "category:other"],
+/** The built-in tabs: name, search, hide when empty. Forums shows only while it holds mail; every tab can be renamed, hidden or reordered, none deleted. */
+const DEFAULT_SPLITS: [string, string, boolean][] = [
+  ["Important", "category:people", false],
+  ["Updates", "category:updates", false],
+  ["Promotions", "category:promotions", false],
+  ["Social", "category:social", false],
+  ["Forums", "category:forums", true],
 ];
 
 export class Users {
@@ -177,14 +181,15 @@ export class Users {
   }
 
   private seedSplits(userId: string) {
-    DEFAULT_SPLITS.forEach(([name, query], i) =>
+    DEFAULT_SPLITS.forEach(([name, query, hideWhenEmpty], i) =>
       this.db.run(
-        "INSERT INTO splits (id, user_id, name, query, position, builtin) VALUES (?,?,?,?,?,1)",
+        "INSERT INTO splits (id, user_id, name, query, position, builtin, hide_when_empty) VALUES (?,?,?,?,?,1,?)",
         newId("spl"),
         userId,
         name,
         query,
         i,
+        hideWhenEmpty ? 1 : 0,
       ),
     );
   }

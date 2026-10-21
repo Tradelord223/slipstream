@@ -47,15 +47,15 @@
 
 **Threads are recomputed, not patched.** After each sync page, `recomputeThread` rebuilds the thread's list row from its messages: subject, snippet, participants, counts, flags and category. That keeps the list query a single indexed scan.
 
-**Splits are saved searches.** Important and Other are built from a classifier:
+**Splits are saved searches.** The built-in tabs (Important, Updates, Promotions, Social, Forums) are searches on the category a classifier gives each conversation. They can be renamed, hidden, set to hide while empty and reordered, but not deleted:
 - **Important** is mail from people, from anyone you've written to, and from VIPs.
-- **Other** splits into news (has an unsubscribe link) and notifications (automated senders).
+- **Updates, Promotions, Social and Forums** hold the rest. Forums shows only while it holds mail. Every conversation has a category (`threads.category`: `people`, `updates`, `promotions`, `social`, `forums`) and the reason for it (`threads.category_reason`). `mail/classify.ts` `categorize()` decides: your own replies and VIPs, then your corrections (`category_rules`), then senders you have written to, then the provider's own sorting (Gmail's tabs, kept as `messages.provider_category`; Outlook's Focused counts as Important unless a machine sent it), then headers and wording, then "a person". A correction an agent made keeps the agent's name (`category_rules.created_by_*`), and its reason says so. `mail/resort.ts` sorts mail stored before 0.5.0 again, once per account, by fetching only its list headers again (`messages.headers_version` says which messages still need it).
 
-Custom splits are any query in the search language. A thread that matches a custom split leaves Important and Other.
+Custom splits are any query in the search language. A thread that matches a custom split that is showing leaves the built-in tabs; a hidden custom split holds nothing back.
 
 ## Search language
 
-`from:` `to:` `cc:` `subject:` `label:` `filename:` `has:attachment` `is:unread|read|starred|snoozed|done|muted|vip|important|unanswered|code|delivery|security|urgent` `in:inbox|sent|done|trash|spam|snoozed|all` `category:important|news|notification|other` `after:2026-01-31` `before:` `newer:7d` `older:2w` `account:me@x.com`, plus `-negation`, `a OR b` and `"exact phrases"`. Free text runs against an FTS5 index (porter stemming, diacritics folded) with prefix matching. User input is always quoted into FTS terms, so it can never inject FTS syntax.
+`from:` `to:` `cc:` `subject:` `label:` `filename:` `has:attachment` `is:unread|read|starred|snoozed|done|muted|vip|important|unanswered|code|delivery|security|urgent` `in:inbox|sent|done|trash|spam|snoozed|all` `is:bulk|noreply` `category:people|updates|promotions|social|forums` `domain:shop.com` `list:news.shop.com` `after:2026-01-31` `before:` `newer:7d` `older:2w` `account:me@x.com`, plus `-negation`, `a OR b` and `"exact phrases"`. Free text runs against an FTS5 index (porter stemming, diacritics folded) with prefix matching. User input is always quoted into FTS terms, so it can never inject FTS syntax.
 
 ## Everyday signals
 

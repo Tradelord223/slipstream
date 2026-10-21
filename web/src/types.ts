@@ -56,6 +56,48 @@ export interface Split {
   name: string;
   query: string;
   builtin: boolean;
+  /** Kept out of the tab strip; a built-in tab that is hidden leaves its mail out of every tab. */
+  hidden: boolean;
+  /** Left out of the tab strip while it holds no conversations. */
+  hideWhenEmpty: boolean;
+  position: number;
+}
+
+/** Where mail is sorted to: Important is `people`. */
+export type Category = "people" | "updates" | "promotions" | "social" | "forums";
+
+/** A tab worth making, found by counting the last 30 days of inbox mail. */
+export interface SplitSuggestion {
+  key: string;
+  kind: "list" | "domain" | "calendar" | "receipts";
+  name: string;
+  query: string;
+  count: number;
+  senders: string[];
+}
+
+/** "Move mail from this sender, domain or list to that tab", as the person made it. */
+export interface CategoryRule {
+  id: string;
+  pattern: string;
+  category: Category;
+  createdAt: number;
+}
+
+export type DescribeResult =
+  | { available: false; reason: string }
+  | { available: true; query: string; count: number; more: boolean; samples: string[] };
+
+/** Why a conversation is in its tab, and what a correction can name. */
+export interface Sorting {
+  category: Category;
+  reason: string | null;
+  reasonText: string | null;
+  sender: { name: string; email: string } | null;
+  domain: string | null;
+  listId: string | null;
+  /** The correction already in force for that sender, domain or list. */
+  rule: { id: string; pattern: string; category: Category } | null;
 }
 
 export interface Settings {
@@ -166,7 +208,10 @@ export interface Thread {
   snoozedUntil: number | null;
   remindedAt: number | null;
   followUpAt: number | null;
-  category: string;
+  category: Category;
+  /** Short code for the rule that sorted it, and its sentence ("Gmail filed it under Promotions"); null before the first sort. */
+  categoryReasonCode: string | null;
+  categoryReason: string | null;
   inInbox: boolean;
   inTrash: boolean;
   labels: string[];
@@ -229,6 +274,9 @@ export interface Message {
    * GET /api/threads/:id/bodies brings the full text from the provider. */
   bodyState: "cached" | "none";
   logoDomain: string | null;
+  /** The List-Id of the mailing list it came through, and its sender's registrable domain. */
+  listId: string | null;
+  senderDomain: string | null;
   signals: Signal[];
   attachments: Attachment[];
 }
@@ -238,6 +286,7 @@ export interface ThreadDetail {
   messages: Message[];
   draftId: string | null;
   sharedId: string | null;
+  sorting: Sorting;
 }
 
 export interface Counts {

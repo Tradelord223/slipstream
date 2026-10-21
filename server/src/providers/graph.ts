@@ -14,6 +14,7 @@ import {
   type ProviderContext,
   type ProviderQuery,
   type RemoteAction,
+  type SortingHints,
   type SyncPage,
   type SyncStageProgress,
 } from "../mail/types.ts";
@@ -43,6 +44,7 @@ const SELECT = [
   "hasAttachments",
   "categories",
   "parentFolderId",
+  "inferenceClassification",
 ].join(",");
 
 /** Well-known folders to mirror, and which Slipstream folder flag each one sets. */
@@ -92,7 +94,12 @@ interface GraphMessage {
   bodyPreview?: string;
   hasAttachments?: boolean;
   categories?: string[];
+  /** Outlook's Focused and Other tabs. */
+  inferenceClassification?: "focused" | "other";
 }
+
+/** Focused is Outlook's word for the mail it thinks matters, which sorting treats as Gmail's Personal. */
+const classificationOf = (m: GraphMessage): string | undefined => (m.inferenceClassification === "focused" ? "personal" : m.inferenceClassification === "other" ? "other" : undefined);
 
 interface DeltaResponse {
   value?: GraphMessage[];
@@ -342,7 +349,9 @@ export class GraphProvider implements MailProvider {
       folders,
       labels: (m.categories ?? []).map((name) => ({ remoteId: `cat:${name}`, name })),
       listUnsubscribe: extra?.listUnsubscribe,
+      listId: extra?.listId,
       bulk: extra?.bulk,
+      providerCategory: classificationOf(m),
       // Ours means "in Sent Items" (aliases included), never "the From header says so": anyone can write a From.
       outgoing: folders.sent,
       attachments: m.hasAttachments ? await this.attachments(m.id) : [],
@@ -408,6 +417,33 @@ export class GraphProvider implements MailProvider {
     const content = m.body?.content ?? "";
     const attachments = m.hasAttachments || (html && /cid:/i.test(content)) ? await this.attachments(messageRemoteId) : [];
     return { text: html ? "" : content, html: html ? content : undefined, attachments };
+  }
+
+  /** The list headers and Focused/Other for old messages, 20 to a $batch request; no bodies. */
+  async fetchSortingHints(refs: { remoteId: string }[]): Promise<Map<string, SortingHints>> {
+    const out = new Map<string, SortingHints>();
+    for (let i = 0; i < refs.length; i += BATCH_MAX) {
+      const chunk = refs.slice(i, i + BATCH_MAX);
+      let results: SubResult[];
+      try {
+        results = await this.run(chunk.map((r) => ({ method: "GET", url: `/me/messages/${enc(r.remoteId)}?$select=internetMessageHeaders,inferenceClassification` })));
+      } catch (err) {
+        // Every message in the chunk is gone.
+        if (err instanceof PermanentProviderError) continue;
+        throw err;
+      }
+      for (const [j, r] of results.entries()) {
+        if (r.status >= 400) continue;
+        const m = r.body as GraphMessage;
+        const head = (m.internetMessageHeaders ?? [])
+          .filter((h) => ["list-unsubscribe", "list-id", "precedence", "auto-submitted"].includes(h.name.toLowerCase()))
+          .map((h) => `${h.name}: ${h.value}`)
+          .join("\r\n");
+        const parsed = head ? await parseHeaderBlock(head, { remoteId: chunk[j]!.remoteId }) : undefined;
+        out.set(chunk[j]!.remoteId, { listUnsubscribe: parsed?.listUnsubscribe, listId: parsed?.listId, bulk: Boolean(parsed?.bulk), providerCategory: classificationOf(m) });
+      }
+    }
+    return out;
   }
 
   private async attachments(messageId: string): Promise<IncomingAttachment[]> {

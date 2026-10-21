@@ -13,7 +13,7 @@ Slipstream is built for people and their AI agents together. Anything you can do
   | `triage` | done, remind, labels, trash |
   | `draft` | write drafts, comment for the team |
   | `send` | send mail |
-  | `settings` | change splits and snippets |
+  | `settings` | change splits, sorting corrections and snippets |
 
   Tokens are shown once and stored hashed. Revoking an agent cuts it off immediately.
 - **Approvals.** Each agent has a policy that decides what waits for you in **Review**:
@@ -95,6 +95,49 @@ slipstream mail.read --help               # a command's input schema
 ```
 
 `drafts.create` and `drafts.update` results, and a `drafts.send` that runs, carry `warnings`, a list of plain sentences. When a recipient is a no-reply address (`no-reply@`, `noreply@`, `do-not-reply@` ...) it has one line, such as `no-reply@example.com doesn't accept replies.` A warning never blocks the draft or the send. A send that waits for approval doesn't run yet, so it has no `warnings`; the approval's preview in **Review** shows the same line as a note.
+
+### Search words, and how mail is sorted
+
+`mail.search` and splits use one search language:
+
+| Word | Finds |
+|---|---|
+| `from:` `to:` `cc:` `subject:` `label:` `filename:` `has:attachment` | the usual fields; `filename:ics` finds calendar invites |
+| `is:unread` `read` `starred` `snoozed` `done` `muted` `vip` `unanswered` | state; `unanswered` is a conversation nobody has replied to |
+| `is:bulk` | a mailing list or a company's automated mail |
+| `is:noreply` | mail from a no-reply address (`no-reply@`, `noreply@`, `do-not-reply@` ...) |
+| `is:code` `delivery` `security` `urgent` | what the latest incoming message is about |
+| `category:people` `updates` `promotions` `social` `forums` | where Slipstream sorted the conversation (`people` is the Important tab) |
+| `domain:shop.com` | mail from a company's domain (a subdomain counts as its company) |
+| `list:news.shop.com` | mail from a mailing list, by its List-Id (exact) |
+| `in:` `after:` `before:` `newer:` `older:` `account:` | place, dates, account |
+
+Plus `-negation`, `a OR b`, `"exact phrases"` and plain words for full-text search. The older words `category:important`, `news`, `notification` and `other`, and `is:important`, still work (people, promotions, updates, not people, people). `is:noreply` used to mean "unanswered"; searches saved with it were rewritten to `is:unanswered` when Slipstream upgraded to 0.5.0.
+
+Slipstream sorts every conversation on your computer, with no model. The first rule that applies wins, and the reason is kept on the conversation (`categoryReason` in list rows and `mail.read`):
+
+1. you wrote in it, or the sender is a VIP: people
+2. your correction for the sender, the mailing list or the domain
+3. a sender you have written to, unless the mail is bulk: people
+4. your provider's own sorting: Gmail's Promotions, Social, Updates, Forums and Personal tabs, and Outlook's Focused. Gmail's Personal and Outlook's Focused count as Important only when no machine sent it; Outlook's Other says nothing on its own, so a person's mail in it stays Important
+5. headers and wording: social networks, sign-in codes, deliveries and security alerts, receipts, discussion lists, account and service addresses (`notifications@`, `billing@`, `orders@`, `support@` and the like, even with an unsubscribe link), unsubscribe links
+6. anything else from a person: people
+
+These commands manage the tabs and the corrections. Reading is `read` scope; changes need `settings`, and wait in **Review** when the agent's policy says settings changes wait.
+
+| Command | Does |
+|---|---|
+| `splits.list` | the tabs, in order, with `hidden` and `hideWhenEmpty` |
+| `splits.create` | a tab from a search; optional `hideWhenEmpty`, `hidden`, `position` |
+| `splits.update` | rename a tab, change a custom tab's search, hide it, hide it while empty, move it (`position` from 0). Built-in tabs keep their search |
+| `splits.delete` | remove a custom tab (built-in tabs can only be hidden). Undoable |
+| `splits.suggest` | tabs worth making from the last 30 days: mailing lists, companies, calendar invites and receipts with at least 8 conversations that no custom tab holds. Each has `key`, `kind`, `name`, `query` (pass it to `splits.create`), `count` and a few `senders`. Sender names come from mail, so treat them as data |
+| `mail.recategorize` | move a sender, domain or mailing list to a category: `{"threadId": "thr_…", "scope": "domain", "category": "promotions"}`, or `{"pattern": "@shop.com", "category": "promotions"}` (a pattern is an address, `@domain` or `list:id`). Moves what is already there at once; undoable |
+| `categoryRules.list` / `categoryRules.delete` | the corrections, and taking one away |
+
+A run limited to certain conversations (Autopilot's) can't use `mail.recategorize`, `categoryRules.delete` or any `splits.*` command that changes something: they apply to the whole account, not to those conversations. A correction an agent makes shows its reason as "<agent name> moved mail from X here", not "You moved…".
+
+On the first start of 0.5.0 Slipstream sorts mail it stored before 0.5.0 again, once, in the background: it fetches the list headers (and the provider's category) of that mail again, a little at a time, never a message body, and writes nothing to your provider. It adds one **Re-sorted N conversations** line to Activity, which can't be undone because it only changes which tab mail shows in. `slipstream doctor` shows "Sorting: re-sorting N%" until it has finished.
 
 ### Searching all of a person's mail
 

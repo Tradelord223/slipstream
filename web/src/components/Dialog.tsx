@@ -14,6 +14,7 @@ export function Dialog({
   placement = "center",
   initialFocus,
   lockScrim = false,
+  trapKeys = false,
 }: {
   label: string;
   onClose: () => void;
@@ -24,6 +25,8 @@ export function Dialog({
   initialFocus?: string;
   /** A click outside doesn't close it (Escape still does), for steps that can't be redone. */
   lockScrim?: boolean;
+  /** The dialog handles its own keys: single-key shortcuts (E, #, J...) don't reach the mailbox underneath. */
+  trapKeys?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -70,7 +73,7 @@ export function Dialog({
         if (lockScrim) e.preventDefault();
         else onClose();
       }}>
-      <div ref={ref} className={`dialog ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
+      <div ref={ref} className={`dialog ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown} data-trap-keys={trapKeys || undefined}>
         <h2 id={titleId} className="sr-only">
           {label}
         </h2>

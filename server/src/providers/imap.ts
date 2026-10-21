@@ -23,6 +23,7 @@ import {
   type ProviderContext,
   type ProviderQuery,
   type RemoteAction,
+  type SortingHints,
   type SyncPage,
   type SyncStageProgress,
   type ThreadRef,
@@ -325,6 +326,12 @@ const HEADER_FIELDS = [
   "From", "To", "Cc", "Bcc", "Reply-To", "Subject", "Date", "Message-ID", "In-Reply-To", "References",
   "List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted",
 ];
+/** What the re-sort of old mail downloads again: the four headers that say a message is from a list or a machine. */
+const SORTING_HEADERS = ["List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted"];
+/** Response codes (RFC 5530) that say "try again later" rather than "no": a NO with one of these is not a refusal of the search. */
+const TRY_AGAIN_CODES = new Set(["UNAVAILABLE", "THROTTLED", "INUSE"]);
+/** Gmail's tabs as X-GM-RAW knows them. Personal comes last: it overlaps Primary, the others are exclusive. */
+const GMAIL_TABS = ["promotions", "social", "updates", "forums", "personal"];
 
 interface BoxState {
   /** bigint, as a string: JSON can't carry bigints. */
@@ -513,6 +520,7 @@ async function toSummary(
   validity: string,
   gmail: boolean,
   selfEmail: string,
+  providerCategory?: string,
 ): Promise<IncomingMessage | null> {
   const s = stateOf(fm, target, gmail);
   if (s.skip) return null;
@@ -529,6 +537,7 @@ async function toSummary(
   const { attachments } = describeStructure(fm.bodyStructure);
   // Ours means "in the Sent folder" (aliases included), never "the From header says so": anyone can write a From.
   message.outgoing = Boolean(s.folders.sent);
+  message.providerCategory = providerCategory;
   message.bodyText = "";
   message.bodyComplete = false;
   message.size = fm.size;
@@ -665,6 +674,8 @@ export class ImapProvider implements MailProvider {
   private signatures = new Map<string, Map<number, string>>();
   /** Gmail: remote ids of messages we moved out of a mailbox, to retire even if they're outside the change window. */
   private moved = new Set<string>();
+  /** Gmail: UIDs of first-sync mail whose tab has not been looked up yet; the next page carries it, so no page waits for it. */
+  private pendingTabs: { path: string; validity: string; uids: number[] }[] = [];
 
   constructor(ctx: ProviderContext, deps: ImapDeps = {}) {
     this.ctx = ctx;
@@ -750,6 +761,18 @@ export class ImapProvider implements MailProvider {
   /* -------- sync */
 
   async sync(cursorText: string | null): Promise<SyncPage> {
+    // The Gmail tabs of mail the last page handed over ride along with this page. If the page fails, they are looked up again.
+    const pending = this.pendingTabs;
+    this.pendingTabs = [];
+    try {
+      return await this.syncPage(cursorText, await this.readTabs(pending));
+    } catch (err) {
+      this.pendingTabs.unshift(...pending);
+      throw err;
+    }
+  }
+
+  private async syncPage(cursorText: string | null, carry: FlagUpdate[]): Promise<SyncPage> {
     const cursor = parseCursor(cursorText);
     const layout = await this.run((c) => this.cachedLayout(c, cursor));
     const n = layout.targets.length;
@@ -772,9 +795,10 @@ export class ImapProvider implements MailProvider {
         if (!res.more) cursor.step += 1;
         const done = cursor.step >= total;
         if (done) cursor.step = 0;
+        const flagUpdates = [...res.flagUpdates, ...carry];
         return {
           messages: res.messages,
-          flagUpdates: res.flagUpdates.length ? res.flagUpdates : undefined,
+          flagUpdates: flagUpdates.length ? flagUpdates : undefined,
           deletedRemoteIds: res.deleted.length ? res.deleted : undefined,
           cursor: serializeCursor(cursor),
           done,
@@ -785,7 +809,23 @@ export class ImapProvider implements MailProvider {
       cursor.step += 1;
     }
     cursor.step = 0;
-    return { messages: [], cursor: serializeCursor(cursor), done: true };
+    return { messages: [], flagUpdates: carry.length ? carry : undefined, cursor: serializeCursor(cursor), done: true };
+  }
+
+  /** The Gmail tabs of mail an earlier page left to look up, as updates to that mail. */
+  private async readTabs(pending: { path: string; validity: string; uids: number[] }[]): Promise<FlagUpdate[]> {
+    const updates: FlagUpdate[] = [];
+    for (const p of pending) {
+      await this.run((c) =>
+        withMailbox(c, p.path, true, async (mb) => {
+          if (String(mb.uidValidity) !== p.validity) return;
+          const tabs = await this.gmailTabs(c, p.uids);
+          // Answered for every message asked about, so one in no tab is finished too and not looked up again.
+          for (const uid of p.uids) updates.push({ remoteId: remoteIdFor(p.path, p.validity, uid), providerCategory: tabs.get(uid), tabLookedUp: true });
+        }),
+      );
+    }
+    return updates;
   }
 
   /**
@@ -927,7 +967,7 @@ export class ImapProvider implements MailProvider {
         const size = inboxPage ? queue.top : BATCH;
         const batch = queue.uids.slice(0, size);
         const rest = queue.uids.slice(size);
-        await this.summarize(c, batch, target, gmail, validity, res);
+        await this.summarize(c, batch, target, gmail, validity, res, true);
         // A page of newest mail is a block at the top of the window; Gmail's inbox page is scattered through it.
         if (batch.length && !(inboxPage && gmail)) init.low = Math.min(...batch);
         if (inboxPage) {
@@ -976,7 +1016,7 @@ export class ImapProvider implements MailProvider {
    * Summaries for a batch of UIDs in the open mailbox: one fetch for headers, structure, size and flags. Previews are not
    * part of it, so the page can go out as soon as this returns; `fetchPreviews` brings them right after.
    */
-  private async summarize(c: ImapClient, uids: number[], target: SyncTarget, gmail: boolean, validity: string, res: StepResult): Promise<void> {
+  private async summarize(c: ImapClient, uids: number[], target: SyncTarget, gmail: boolean, validity: string, res: StepResult, deferTabs = false): Promise<void> {
     if (uids.length === 0) return;
     const query: FetchQueryObject = { uid: true, flags: true, internalDate: true, size: true, bodyStructure: true, headers: HEADER_FIELDS };
     if (gmail) {
@@ -984,13 +1024,23 @@ export class ImapProvider implements MailProvider {
       query.threadId = true;
     }
     const fetched = (await c.fetchAll(uids, query, { uid: true })).sort((a, b) => a.uid - b.uid);
+    // Gmail's own sorting, one search per tab for the whole batch (All Mail only: Trash and Spam have no tabs). The first sync
+    // looks them up after the page has gone, so the inbox opens as fast as it did before.
+    let tabs = new Map<number, string>();
+    const deferred = gmail && target.role === "all" && deferTabs;
+    if (gmail && target.role === "all") {
+      if (deferred) this.pendingTabs.push({ path: target.path, validity, uids: [...uids] });
+      else tabs = await this.gmailTabs(c, uids);
+    }
 
     const sigs = this.signatures.get(target.path) ?? new Map<number, string>();
     this.signatures.set(target.path, sigs);
     for (const fm of fetched) {
       try {
-        const m = await toSummary(fm, target, validity, gmail, this.ctx.email);
+        const m = await toSummary(fm, target, validity, gmail, this.ctx.email, tabs.get(fm.uid));
         if (!m) continue;
+        // Kept in memory only: stored as not yet sorted until the lookup lands, so a restart in between loses nothing.
+        if (deferred) m.tabPending = true;
         res.messages.push(m);
         const part = describeStructure(fm.bodyStructure).text;
         if (part) {
@@ -1045,6 +1095,61 @@ export class ImapProvider implements MailProvider {
       } finally {
         for (const e of entries) this.previewable.delete(e.id);
       }
+    }
+    return out;
+  }
+
+  /**
+   * Gmail's tab for each of these UIDs in the open mailbox, found with one X-GM-RAW search per tab over the whole set (Gmail
+   * keeps the tabs as labels IMAP doesn't list). A message in no tab is left out. If Gmail refuses the search (a BAD or NO answer),
+   * the messages are sorted by their headers alone, and the sync goes on. Any other failure (a dropped connection, a timeout)
+   * says nothing about the tabs, so it throws and the caller asks again; it is never kept as "no tab".
+   */
+  private async gmailTabs(c: ImapClient, uids: number[]): Promise<Map<number, string>> {
+    const found = new Map<number, string>();
+    if (uids.length === 0) return found;
+    const set = compressUids([...uids].sort((a, b) => a - b));
+    try {
+      for (const tab of GMAIL_TABS) {
+        if (found.size === uids.length) break;
+        for (const uid of (await c.search({ gmraw: `category:${tab}`, uid: set }, { uid: true })) || []) if (!found.has(uid)) found.set(uid, tab);
+      }
+    } catch (err) {
+      const { responseStatus: status, serverResponseCode: code } = (err ?? {}) as { responseStatus?: unknown; serverResponseCode?: unknown };
+      if ((status !== "NO" && status !== "BAD") || TRY_AGAIN_CODES.has(String(code))) throw err;
+      console.warn(`[slipstream] gmail tabs for ${this.ctx.email}: ${err instanceof Error ? err.message : err}`);
+    }
+    return found;
+  }
+
+  /** The list headers and, on Gmail, the tab of messages stored before Slipstream kept them: headers only, by UID, mailbox by mailbox. */
+  async fetchSortingHints(refs: { remoteId: string }[]): Promise<Map<string, SortingHints>> {
+    const out = new Map<string, SortingHints>();
+    const byPath = new Map<string, { remoteId: string; validity: string; uid: number }[]>();
+    for (const r of refs) {
+      const ref = parseRemoteId(r.remoteId);
+      if (ref) byPath.set(ref.path, [...(byPath.get(ref.path) ?? []), { remoteId: r.remoteId, validity: ref.validity, uid: ref.uid }]);
+    }
+    if (byPath.size === 0) return out;
+    const known = this.layoutCache && Date.now() - this.layoutCache.at < LAYOUT_TTL_MS ? this.layoutCache.layout : undefined;
+    const layout = known ?? (await this.run((c) => this.layout(c)));
+    for (const [path, entries] of byPath) {
+      await this.run((c) =>
+        withMailbox(c, path, true, async (mb) => {
+          // A renumbered mailbox has new UIDs: these ones can't be found.
+          const live = entries.filter((e) => e.validity === String(mb.uidValidity));
+          if (live.length === 0) return;
+          const got = await c.fetchAll(live.map((e) => e.uid), { uid: true, headers: SORTING_HEADERS }, { uid: true });
+          const tabs = layout.gmail && path === layout.map.all ? await this.gmailTabs(c, got.map((fm) => fm.uid)) : new Map<number, string>();
+          const byUid = new Map(live.map((e) => [e.uid, e.remoteId]));
+          for (const fm of got) {
+            const remoteId = byUid.get(fm.uid);
+            if (!remoteId) continue;
+            const parsed = await parseHeaderBlock(fm.headers ?? Buffer.alloc(0), { remoteId });
+            out.set(remoteId, { listUnsubscribe: parsed.listUnsubscribe, listId: parsed.listId, bulk: Boolean(parsed.bulk), providerCategory: tabs.get(fm.uid) });
+          }
+        }),
+      );
     }
     return out;
   }

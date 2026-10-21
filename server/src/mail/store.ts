@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Db } from "../db/index.ts";
 import { newId, sha256 } from "../lib/crypto.ts";
 import { baseSubject, htmlToText, makeSnippet } from "../lib/text.ts";
-import { categorize, isBulkMessage } from "./classify.ts";
+import { categorize, isBulkMessage, isCategory, type Category, type CategoryEnv, type CategoryMessage, type Sorted } from "./classify.ts";
 import { ownAddresses } from "./identities.ts";
 import { registrableDomain } from "./logos.ts";
 import { orderSignals, scanSignals, type Signal } from "./signals.ts";
@@ -43,10 +43,41 @@ interface MessageAgg {
   outgoing: number;
   is_bulk: number;
   list_unsubscribe: string | null;
+  list_id: string | null;
+  reply_to: string | null;
+  sender_domain: string | null;
+  provider_category: string | null;
   signals: string | null;
   created_at: number;
   has_att: number;
 }
+
+/** The message columns that sorting reads. */
+const SORT_COLUMNS = "m.id, m.from_email, m.subject, m.outgoing, m.is_bulk, m.list_unsubscribe, m.list_id, m.reply_to, m.sender_domain, m.provider_category, m.signals";
+
+type SortRow = Pick<MessageAgg, "from_email" | "subject" | "outgoing" | "is_bulk" | "list_unsubscribe" | "list_id" | "reply_to" | "sender_domain" | "provider_category" | "signals">;
+
+function signalKinds(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    return (JSON.parse(raw) as { kind?: string }[]).flatMap((s) => (s.kind ? [s.kind] : []));
+  } catch {
+    return [];
+  }
+}
+
+const sortInput = (m: SortRow): CategoryMessage => ({
+  outgoing: Boolean(m.outgoing),
+  is_bulk: Boolean(m.is_bulk),
+  list_unsubscribe: m.list_unsubscribe,
+  list_id: m.list_id,
+  from_email: m.from_email,
+  reply_to: m.reply_to,
+  subject: m.subject,
+  sender_domain: m.sender_domain ?? "",
+  signals: signalKinds(m.signals),
+  provider_category: m.provider_category,
+});
 
 const json = (v: unknown) => JSON.stringify(v);
 
@@ -182,8 +213,8 @@ export class MailStore {
       `INSERT INTO messages (id, thread_id, account_id, remote_id, message_id_header, in_reply_to, refs,
         from_name, from_email, to_json, cc_json, bcc_json, reply_to, subject, sent_at, snippet, body_text, body_html,
         unread, starred, in_inbox, in_trash, in_spam, outgoing, list_unsubscribe, is_bulk, signals, created_at, sender_domain,
-        body_state, size)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        body_state, size, list_id, provider_category, headers_version)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id,
       threadId,
       account.id,
@@ -215,6 +246,9 @@ export class MailStore {
       registrableDomain(m.from.email) ?? "",
       m.bodyComplete === false ? "none" : "cached",
       m.size ?? null,
+      m.listId ?? null,
+      m.providerCategory ?? null,
+      m.tabPending ? 0 : 1,
     );
 
     this.db.run(
@@ -470,6 +504,8 @@ export class MailStore {
       msg.id,
     );
     if (f.labels) this.setMessageLabels(accountId, msg.id, f.labels);
+    if (f.providerCategory !== undefined) this.db.run("UPDATE messages SET provider_category = ? WHERE id = ?", f.providerCategory, msg.id);
+    if (f.tabLookedUp) this.db.run("UPDATE messages SET headers_version = 1 WHERE id = ? AND headers_version = 0", msg.id);
     return msg.thread_id;
   }
 
@@ -601,7 +637,7 @@ export class MailStore {
     if (!thread) return;
     const msgs = this.db.all<MessageAgg>(
       `SELECT m.id, from_name, from_email, to_json, cc_json, subject, sent_at, snippet, unread, starred, in_inbox, in_trash,
-              in_spam, outgoing, is_bulk, list_unsubscribe, signals, m.created_at,
+              in_spam, outgoing, is_bulk, list_unsubscribe, list_id, reply_to, sender_domain, provider_category, signals, m.created_at,
               EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id AND a.inline = 0) AS has_att
        FROM messages m WHERE thread_id = ? ORDER BY sent_at`,
       threadId,
@@ -630,23 +666,7 @@ export class MailStore {
     let participants = [...seen.values()].filter((p) => !own.has(p.email));
     if (participants.length === 0) participants = [...seen.values()];
 
-    const known = (email: string) =>
-      Boolean(
-        this.db.get<{ x: number }>(
-          "SELECT 1 AS x FROM contacts WHERE account_id = ? AND email = ? AND (sent_count > 0 OR vip = 1)",
-          thread.account_id,
-          email,
-        ),
-      );
-    const category = categorize(
-      msgs.map((m) => ({
-        outgoing: Boolean(m.outgoing),
-        is_bulk: Boolean(m.is_bulk),
-        list_unsubscribe: m.list_unsubscribe,
-        from_email: m.from_email,
-      })),
-      known,
-    );
+    const sorted = categorize(msgs.map(sortInput), this.categoryEnv(thread.account_id));
 
     // While a local triage action is waiting to reach the provider, the provider's view is stale:
     // keep the thread's triage flags as the user left them.
@@ -676,16 +696,17 @@ export class MailStore {
       message_count: msgs.length,
       has_attachments: msgs.some((m) => m.has_att) ? 1 : 0,
       in_sent: outbound.length > 0 ? 1 : 0,
-      category,
+      category: sorted.category,
+      category_reason: sorted.reason,
       sort_at: sortAt,
     };
 
     if (pending && pending.n > 0) {
       this.db.run(
         `UPDATE threads SET subject=?, snippet=?, participants=?, first_message_at=?, last_message_at=?, last_inbound_at=?,
-          last_outbound_at=?, message_count=?, has_attachments=?, in_sent=?, category=?, sort_at=?, signal=?, signal_at=?, updated_at=? WHERE id=?`,
+          last_outbound_at=?, message_count=?, has_attachments=?, in_sent=?, category=?, category_reason=?, sort_at=?, signal=?, signal_at=?, updated_at=? WHERE id=?`,
         base.subject, base.snippet, base.participants, base.first_message_at, base.last_message_at, base.last_inbound_at,
-        base.last_outbound_at, base.message_count, base.has_attachments, base.in_sent, base.category, base.sort_at,
+        base.last_outbound_at, base.message_count, base.has_attachments, base.in_sent, base.category, base.category_reason, base.sort_at,
         base.signal, base.signal_at, Date.now(), threadId,
       );
       return;
@@ -712,7 +733,7 @@ export class MailStore {
     this.db.run(
       `UPDATE threads SET subject=?, snippet=?, participants=?, first_message_at=?, last_message_at=?, last_inbound_at=?,
         last_outbound_at=?, message_count=?, unread_count=?, starred=?, in_inbox=?, in_trash=?, in_spam=?, has_attachments=?,
-        in_sent=?, category=?, snoozed_until=?, sort_at=?, signal=?, signal_at=?, updated_at=? WHERE id=?`,
+        in_sent=?, category=?, category_reason=?, snoozed_until=?, sort_at=?, signal=?, signal_at=?, updated_at=? WHERE id=?`,
       base.subject, base.snippet, base.participants, base.first_message_at, base.last_message_at, base.last_inbound_at,
       base.last_outbound_at, base.message_count,
       msgs.reduce((n, m) => n + (m.unread ? 1 : 0), 0),
@@ -720,8 +741,71 @@ export class MailStore {
       inboxFlag,
       msgs.every((m) => m.in_trash) ? 1 : 0,
       msgs.every((m) => m.in_spam) ? 1 : 0,
-      base.has_attachments, base.in_sent, base.category, snoozed, base.sort_at, base.signal, base.signal_at, Date.now(), threadId,
+      base.has_attachments, base.in_sent, base.category, base.category_reason, snoozed, base.sort_at, base.signal, base.signal_at, Date.now(), threadId,
     );
+  }
+
+  /**
+   * What sorting needs to know about a person and their mailbox. `memo` keeps one per account across many conversations,
+   * so a re-sort of thousands of them reads the corrections once.
+   */
+  categoryEnv(accountId: string, memo?: Map<string, CategoryEnv>): CategoryEnv {
+    const known = memo?.get(accountId);
+    if (known) return known;
+    const account = this.db.get<{ user_id: string; provider: string; preset: string | null; email: string }>("SELECT user_id, provider, preset, email FROM accounts WHERE id = ?", accountId);
+    const rules = new Map<string, Category>();
+    const ruleAgents = new Map<string, string>();
+    if (account) {
+      for (const r of this.db.all<{ pattern: string; category: string; created_by_kind: string; created_by_name: string }>(
+        "SELECT pattern, category, created_by_kind, created_by_name FROM category_rules WHERE user_id = ?",
+        account.user_id,
+      )) {
+        if (!isCategory(r.category)) continue;
+        rules.set(r.pattern, r.category);
+        if (r.created_by_kind === "agent" && r.created_by_name) ruleAgents.set(r.pattern, r.created_by_name);
+      }
+    }
+    const contact = (email: string, where: string) =>
+      Boolean(this.db.get<{ x: number }>(`SELECT 1 AS x FROM contacts WHERE account_id = ? AND email = ? AND ${where}`, accountId, email));
+    const env: CategoryEnv = {
+      // An account connected before presets were kept has none, so a gmail.com address stands in for it.
+      source:
+        account?.provider === "gmail" || account?.preset === "gmail" || /@(gmail|googlemail)\.com$/i.test(account?.email ?? "")
+          ? "gmail"
+          : account?.provider === "outlook"
+            ? "outlook"
+            : "mail",
+      vip: (email) => contact(email, "vip = 1"),
+      writtenTo: (email) => contact(email, "sent_count > 0"),
+      rules,
+      ruleAgents,
+    };
+    memo?.set(accountId, env);
+    return env;
+  }
+
+  /**
+   * Sort conversations again without touching anything else about them (not their folders, flags, labels or reminders).
+   * Returns the ids whose category or reason changed.
+   */
+  recategorize(threadIds: string[], memo = new Map<string, CategoryEnv>()): string[] {
+    const changed: string[] = [];
+    this.db.tx(() => {
+      for (const id of threadIds) {
+        const t = this.db.get<{ account_id: string; category: string; category_reason: string | null }>(
+          "SELECT account_id, category, category_reason FROM threads WHERE id = ?",
+          id,
+        );
+        if (!t) continue;
+        const rows = this.db.all<SortRow>(`SELECT ${SORT_COLUMNS} FROM messages m WHERE m.thread_id = ? ORDER BY m.sent_at`, id);
+        if (rows.length === 0) continue;
+        const sorted: Sorted = categorize(rows.map(sortInput), this.categoryEnv(t.account_id, memo));
+        if (sorted.category === t.category && sorted.reason === t.category_reason) continue;
+        this.db.run("UPDATE threads SET category = ?, category_reason = ? WHERE id = ?", sorted.category, sorted.reason, id);
+        changed.push(id);
+      }
+    });
+    return changed;
   }
 
   threadRef(threadId: string): ThreadRef & { accountId: string } {

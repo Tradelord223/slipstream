@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import type { Config } from "./config.ts";
 import { migrations } from "./db/schema.ts";
 import { cacheUsage, limitBytes, type Query } from "./mail/cache.ts";
+import { sortingStatus } from "./mail/resort.ts";
 import { SecretBox } from "./lib/crypto.ts";
 import { serviceFile } from "./lib/service.ts";
 import { packageVersion } from "./lib/version.ts";
@@ -229,6 +230,20 @@ export async function runDoctor(config: Config, opts: DoctorOptions = {}): Promi
         );
     } catch {
       // A database from before the cache existed has nothing to measure.
+    }
+    // The one-time re-sort of mail from before 0.5.0 into Important, Updates, Promotions and Social.
+    try {
+      const sorting = sortingStatus((sql, ...params) => db.prepare(sql).all(...params) as never);
+      if (sorting?.done) add({ id: "sorting", status: "ok", title: "Sorting: up to date" });
+      else if (sorting)
+        add({
+          id: "sorting",
+          status: "info",
+          title: `Sorting: re-sorting ${sorting.percent}%`,
+          detail: "Older mail is being sorted into Important, Updates, Promotions and Social in the background, a little at a time. Slipstream has to be running to finish it.",
+        });
+    } catch {
+      // A database from before sorting existed has nothing to report; it is upgraded when Slipstream starts.
     }
     const sendFailed = (db.prepare("SELECT count(*) AS n FROM drafts WHERE status = 'failed'").get() as { n: number }).n;
     if (sendFailed) add({ id: "sends", status: "warn", title: `${sendFailed === 1 ? "1 message" : `${sendFailed} messages`} failed to send`, fix: "Open Drafts to see why and send again." });

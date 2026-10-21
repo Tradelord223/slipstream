@@ -247,7 +247,7 @@ export class Autopilot {
   }
 
   /** The engine Autopilot uses now, or why it can't run. */
-  private async engine(userId: string): Promise<{ id: EngineId; label: string } | { error: string }> {
+  async engine(userId: string): Promise<{ id: EngineId; label: string } | { error: string }> {
     const s = this.settings(userId);
     const preferred = s.engine ?? this.ctx.cloud.accounts.defaultEngine(userId);
     // Someone's own Claude Code or Codex runs Autopilot only when Autopilot's own setting names it: it reads

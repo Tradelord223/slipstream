@@ -3,7 +3,7 @@ import type {
   Address, Bootstrap, ContactInfo, Contact, Counts, Discovery, Draft, Identity, SharedDetail, SharedSummary, Snippet, TeamInfo, ThreadDetail,
   ThreadPage, RemoteSearchPage, Thread, TriageKind, TriageResult, SharedComment,
   CloudConnectInput, CloudRun, CloudStatus, LabelInfo, LabelRule, Routine, RoutineInput,
-  AutopilotOverview, AutopilotPatch, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction, MessageBodies,
+  AutopilotOverview, AutopilotPatch, Category, CategoryRule, DescribeResult, Split, SplitSuggestion, ChatGPTSignIn, EngineId, EnginesOverview, KeyProvider, SenderRuleAction, MessageBodies,
 } from "./types.ts";
 
 export class ApiError extends Error {
@@ -139,10 +139,21 @@ export const api = {
   summarize: (threadId: string) => post<{ summary: string }>("/api/ai/summarize", { threadId }),
   aiDraft: (body: { threadId?: string; instruction: string; currentDraft?: string }) => post<{ text: string }>("/api/ai/draft", body),
   saveAiKey: (apiKey: string) => put<{ ok: true }>("/api/settings/ai-key", { apiKey }),
-  createSplit: (name: string, query: string) => post<{ id: string; name: string; query: string; builtin: boolean }>("/api/splits", { name, query }),
-  updateSplit: (id: string, name: string, query: string) => put<{ ok: true }>(`/api/splits/${id}`, { name, query }),
-  deleteSplit: (id: string) => del<{ ok: true }>(`/api/splits/${id}`),
+  createSplit: (name: string, query: string, opts: { hideWhenEmpty?: boolean; hidden?: boolean } = {}) => post<Split>("/api/splits", { name, query, ...opts }),
+  updateSplit: (id: string, change: { name?: string; query?: string; hidden?: boolean; hideWhenEmpty?: boolean }) =>
+    put<{ ok: true; split: Split }>(`/api/splits/${encodeURIComponent(id)}`, change),
+  /** `activityId` undoes the removal (undoActivity). */
+  deleteSplit: (id: string) => del<{ ok: true; activityId: string | null }>(`/api/splits/${encodeURIComponent(id)}`),
   orderSplits: (ids: string[]) => put<{ ok: true }>("/api/splits-order", { ids }),
+  suggestSplits: () => command<{ suggestions: SplitSuggestion[] }>("splits.suggest").then((r) => r.result.suggestions),
+  dismissSplitSuggestion: (key: string) => post<{ ok: true }>("/api/splits/suggestions/dismiss", { key }),
+  describeAvailable: () => get<{ available: boolean; reason?: string }>("/api/splits/describe"),
+  describeSplit: (description: string, signal?: AbortSignal) => request<DescribeResult>("POST", "/api/splits/describe", { description }, { signal }),
+  /** Move a sender's, domain's or mailing list's mail to a tab. `activityId` undoes it. */
+  recategorize: (category: Category, target: { threadId: string; scope: "sender" | "domain" | "list" } | { pattern: string }) =>
+    command<{ rule: CategoryRule; moved: number }>("mail.recategorize", { category, ...target }),
+  categoryRules: () => command<CategoryRule[]>("categoryRules.list").then((r) => r.result),
+  deleteCategoryRule: (id: string) => command<{ ok: true; moved: number }>("categoryRules.delete", { id }),
 
   presets: () => get<{ presets: { id: string; label: string; help: string }[] }>("/api/accounts/presets"),
   connectImap: (body: Record<string, unknown>) => post<{ id: string }>("/api/accounts/imap", body),

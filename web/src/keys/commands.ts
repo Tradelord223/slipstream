@@ -10,6 +10,9 @@ import { cachedThread, loadThread } from "../store/threads.ts";
 import { moveMessage, toggleExpandAll, toggleFocusedMessage } from "../store/threadView.ts";
 import { toast, undoLast } from "../store/toasts.ts";
 import { toggleAssistant } from "../store/assistant.ts";
+import { counts } from "../store/counts.ts";
+import { openMoveMenu, openNewSplit } from "../store/sorting.ts";
+import { visibleSplits } from "../lib/sorting.ts";
 import { closePalette, openPalette, toggleContext, toggleRail, ui } from "../store/ui.ts";
 import { copyFocusedCode, codeTarget } from "../lib/code.ts";
 import { showFromPicker, type ComposeKind } from "../lib/compose.ts";
@@ -64,11 +67,15 @@ function page(direction: 1 | -1) {
   moveFocus(direction * rows);
 }
 
+/** Tab and Shift+Tab walk the tabs that are showing, and wrap around. */
 function cycleSplit(direction: 1 | -1) {
   const r = getRoute();
-  const splits = session.get().splits;
-  if (r.name !== "mail" || r.view.kind !== "inbox" || splits.length < 2) return;
-  const cur = splits.findIndex((s) => s.id === (r.view.kind === "inbox" ? r.view.splitId : undefined));
+  if (r.name !== "mail" || r.view.kind !== "inbox") return;
+  const all = session.get().splits;
+  const activeId = r.view.splitId ?? all.find((s) => !s.hidden)?.id;
+  const splits = visibleSplits(all, counts.get().data, activeId);
+  if (splits.length < 2) return;
+  const cur = splits.findIndex((s) => s.id === activeId);
   const next = splits[(Math.max(cur, 0) + direction + splits.length) % splits.length]!;
   goView({ kind: "inbox", splitId: next.id });
 }
@@ -164,6 +171,8 @@ export const COMMANDS: CommandDef[] = [
   { id: "triage.label", title: "Label…", group: "Triage", keys: ["l"], scopes: ["list", "thread"], run: () => openPalette("label", targetIds(focusedThreadId())) },
   { id: "triage.removeLabel", title: "Remove label", group: "Triage", keys: ["y"], scopes: ["list", "thread"], run: removeLabel },
   { id: "triage.move", title: "Move to…", group: "Triage", keys: ["v"], scopes: ["list", "thread"], run: () => openPalette("move", targetIds(focusedThreadId())) },
+  { id: "triage.moveMail", title: "Move mail to another tab…", group: "Triage", keys: ["shift+i"], scopes: ["list", "thread"], when: () => focusedThreadId() !== null, run: () => { const id = focusedThreadId(); if (id) openMoveMenu(id); } },
+  { id: "triage.newSplit", title: "New split from this conversation", group: "Triage", keys: ["shift+n"], scopes: ["list", "thread"], when: () => focusedThreadId() !== null, run: () => { const id = focusedThreadId(); if (id) openNewSplit(id); } },
   { id: "list.select", title: "Select conversation", group: "Select", keys: ["x"], scopes: ["list"], run: () => { const id = list.get().focusedId; if (id) toggleSelected(id); } },
   { id: "list.extendDown", title: "Extend selection down", group: "Select", keys: ["shift+j"], scopes: ["list"], repeat: true, run: () => moveFocus(1, true) },
   { id: "list.extendUp", title: "Extend selection up", group: "Select", keys: ["shift+k"], scopes: ["list"], repeat: true, run: () => moveFocus(-1, true) },

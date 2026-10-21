@@ -6,24 +6,107 @@ import { compile } from "./mail/query.ts";
 
 /** Splits and snippets, shared by the dashboard routes and agent commands. */
 
-export function listSplits(ctx: AppContext, userId: string) {
+export interface SplitView {
+  id: string;
+  name: string;
+  query: string;
+  builtin: boolean;
+  /** Not shown as a tab. */
+  hidden: boolean;
+  /** Shown only while it holds something. */
+  hideWhenEmpty: boolean;
+  /** Where it sits in the tab strip, from 0. */
+  position: number;
+}
+
+interface SplitDbRow {
+  id: string;
+  name: string;
+  query: string;
+  builtin: number;
+  hidden: number;
+  hide_when_empty: number;
+}
+
+const shapeSplit = (s: SplitDbRow, position: number): SplitView => ({
+  id: s.id,
+  name: s.name,
+  query: s.query,
+  builtin: Boolean(s.builtin),
+  hidden: Boolean(s.hidden),
+  hideWhenEmpty: Boolean(s.hide_when_empty),
+  position,
+});
+
+export function listSplits(ctx: AppContext, userId: string): SplitView[] {
   return ctx.db
-    .all<{ id: string; name: string; query: string; builtin: number }>("SELECT id, name, query, builtin FROM splits WHERE user_id = ? ORDER BY position", userId)
-    .map((s) => ({ id: s.id, name: s.name, query: s.query, builtin: Boolean(s.builtin) }));
+    .all<SplitDbRow>("SELECT id, name, query, builtin, hidden, hide_when_empty FROM splits WHERE user_id = ? ORDER BY position, rowid", userId)
+    .map(shapeSplit);
 }
 
-export function createSplit(ctx: AppContext, userId: string, name: string, query: string) {
+/** Number the tabs 0, 1, 2 ... in the order given. */
+function renumber(ctx: AppContext, ids: string[]) {
+  ids.forEach((id, i) => ctx.db.run("UPDATE splits SET position = ? WHERE id = ?", i, id));
+}
+
+export function createSplit(ctx: AppContext, userId: string, name: string, query: string, opts: { hideWhenEmpty?: boolean; hidden?: boolean; position?: number } = {}): SplitView {
   if (compile(query).where === "1") throw new HttpError(400, "That search doesn't match anything specific");
-  const position = (ctx.db.get<{ p: number }>("SELECT coalesce(max(position), -1) AS p FROM splits WHERE user_id = ?", userId)?.p ?? -1) + 1;
   const id = newId("spl");
-  ctx.db.run("INSERT INTO splits (id, user_id, name, query, position, builtin) VALUES (?,?,?,?,?,0)", id, userId, name, query, position);
-  return { id, name, query, builtin: false };
+  ctx.db.tx(() => {
+    ctx.db.run(
+      "INSERT INTO splits (id, user_id, name, query, position, builtin, hidden, hide_when_empty) VALUES (?,?,?,?,?,0,?,?)",
+      id, userId, name, query, 1_000_000, opts.hidden ? 1 : 0, opts.hideWhenEmpty ? 1 : 0,
+    );
+    const ids = listSplits(ctx, userId).map((s) => s.id).filter((x) => x !== id);
+    ids.splice(opts.position === undefined ? ids.length : Math.min(Math.max(opts.position, 0), ids.length), 0, id);
+    renumber(ctx, ids);
+  });
+  return listSplits(ctx, userId).find((s) => s.id === id)!;
 }
 
-export function deleteSplit(ctx: AppContext, userId: string, id: string) {
-  const s = ctx.db.get<{ name: string; query: string }>("SELECT name, query FROM splits WHERE id = ? AND user_id = ? AND builtin = 0", id, userId);
+/**
+ * Change a tab. Every tab can be renamed, hidden, made to hide while empty and moved; only a custom tab has a search of its own to
+ * change. Returns the tab as it was and as it is now.
+ */
+export function updateSplit(
+  ctx: AppContext,
+  userId: string,
+  id: string,
+  change: { name?: string; query?: string; hidden?: boolean; hideWhenEmpty?: boolean; position?: number },
+): { before: SplitView; split: SplitView } {
+  const before = listSplits(ctx, userId).find((s) => s.id === id);
+  if (!before) throw new HttpError(404, "Split not found");
+  if (change.query !== undefined && change.query !== before.query) {
+    if (before.builtin) throw new HttpError(400, "A built-in tab keeps its search. You can rename it, hide it or move it.");
+    if (compile(change.query).where === "1") throw new HttpError(400, "That search doesn't match anything specific");
+  }
+  ctx.db.tx(() => {
+    ctx.db.run(
+      "UPDATE splits SET name = ?, query = ?, hidden = ?, hide_when_empty = ? WHERE id = ?",
+      change.name ?? before.name,
+      change.query ?? before.query,
+      (change.hidden ?? before.hidden) ? 1 : 0,
+      (change.hideWhenEmpty ?? before.hideWhenEmpty) ? 1 : 0,
+      id,
+    );
+    if (change.position !== undefined) {
+      const ids = listSplits(ctx, userId).map((s) => s.id).filter((x) => x !== id);
+      ids.splice(Math.min(Math.max(change.position, 0), ids.length), 0, id);
+      renumber(ctx, ids);
+    }
+  });
+  return { before, split: listSplits(ctx, userId).find((s) => s.id === id)! };
+}
+
+/** Remove a custom tab. Returns it as it was, so it can be put back. */
+export function deleteSplit(ctx: AppContext, userId: string, id: string): SplitView {
+  const s = listSplits(ctx, userId).find((x) => x.id === id);
   if (!s) throw new HttpError(404, "Split not found");
-  ctx.db.run("DELETE FROM splits WHERE id = ?", id);
+  if (s.builtin) throw new HttpError(400, "A built-in tab can't be removed. You can hide it instead.");
+  ctx.db.tx(() => {
+    ctx.db.run("DELETE FROM splits WHERE id = ?", id);
+    renumber(ctx, listSplits(ctx, userId).map((x) => x.id));
+  });
   return s;
 }
 

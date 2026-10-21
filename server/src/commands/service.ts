@@ -51,6 +51,9 @@ export interface ApprovalHandler {
   reject: (userId: string, input: unknown) => void;
 }
 
+/** Commands that change the whole account's sorting or tabs, whatever conversation they are given: corrections and splits. */
+const ACCOUNT_WIDE = /^(mail\.recategorize|categoryRules\.|splits\.)/;
+
 export type ActivityListener = (actor: Actor, command: string, input: unknown, threadIds: string[]) => void;
 
 export class Commands {
@@ -140,6 +143,8 @@ export class Commands {
     if (limits?.threadIds) {
       const outside = this.threadsOf(actor.user.id, input).filter((t) => !limits.threadIds!.includes(t));
       if (outside.length) throw new HttpError(403, "This run can only work on the conversations it was given.");
+      // A command that changes how the whole account is sorted or split names no conversation, so the check above can't see it.
+      if (ACCOUNT_WIDE.test(cmd.name) && !cmd.readOnly) throw new HttpError(403, "This run can only work on the conversations it was given, not on settings that apply to the whole account.");
     }
 
     if (actor.kind === "agent" && !opts.approvalId && cmd.approval) {
@@ -341,6 +346,9 @@ export class Commands {
     const original = this.byName.get(row.command);
     if (actor.kind === "agent" && original && !actor.agent.scopes.includes(original.scope))
       throw new HttpError(403, `Undoing ${row.command} needs the "${original.scope}" scope.`);
+    // An undo runs its inverse directly, past execute's limits, so a limited run (Autopilot's) can't undo anything it wasn't given.
+    const limits = actor.kind === "agent" ? actor.agent.run : undefined;
+    if (limits?.threadIds || (limits?.commands && !limits.commands.includes("undo"))) throw new HttpError(403, "This run can't undo actions.");
 
     let threadIds: string[] = [];
     if (row.undo_token) threadIds = triage.revert(actor.user.id, row.undo_token);

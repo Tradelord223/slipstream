@@ -12,6 +12,7 @@ import type { Webhooks } from "./agents/webhooks.ts";
 import type { CloudAgent } from "./agents/cloud.ts";
 import type { Autopilot } from "./agents/autopilot.ts";
 import type { SenderLogos } from "./mail/logos.ts";
+import type { Resorter } from "./mail/resort.ts";
 import type { Actor } from "./commands/registry.ts";
 
 /** A mail-file import that is running now, so a reloaded client can tell the account is still filling. */
@@ -48,6 +49,8 @@ export interface AppContext {
   cloud: CloudAgent;
   autopilot: Autopilot;
   logos: SenderLogos;
+  /** The one-time re-sort of mail stored before 0.5.0. */
+  resort: Resorter;
   /** Running imports by job id (several can fill one account); an entry exists only while its job does. */
   imports: Map<string, ImportProgress>;
 }

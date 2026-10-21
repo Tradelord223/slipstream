@@ -8,7 +8,7 @@ Turn it on from **Autopilot** in the sidebar. It runs on the model you choose in
 
 1. **Your sender rules first.** "Always clear mail from `@news.example`" or "always keep `ana@example.com`" decide on their own, with no model.
 2. **Everything else goes to the model, in batches** of up to 20 conversations. For each one it gets:
-   - what Slipstream already knows from the headers: newsletter or notification, whether you've written to the sender before, whether you replied in the thread;
+   - what Slipstream already knows from the headers: which tab it sorts into (people, updates, promotions, social or forums), whether you've written to the sender before, whether you replied in the thread;
    - the latest message, marked as untrusted text.
 
    It records one decision per conversation:
@@ -48,7 +48,7 @@ The page also shows how it's doing over the last 30 days:
 Email is written by strangers, and some of it will try to steer an assistant. Autopilot's limits are enforced by Slipstream, not by asking the model nicely:
 
 - **It can't send, forward or change settings.** Autopilot is its own agent with only read, triage and draft access.
-- **Each run can touch only its own conversations.** A sorting run can read the conversations in its batch and record decisions about them, and nothing else. A drafting run can read its conversations and reply to them. The server refuses any other command or conversation.
+- **Each run can touch only its own conversations.** A sorting run can read the conversations in its batch and record decisions about them, and nothing else. A drafting run can read its conversations and reply to them. The server refuses any other command or conversation, and any command that changes the whole account's tabs or sorting corrections.
 - **Everything it does is reversible.** Done, remind and labels can all be undone, from the Autopilot page or from Activity.
 - **Email text is fenced.** Messages are marked as data, never instructions, and their text can't pose as Slipstream's own markup.
 - **Labels are checked.** Labels it invents are dropped unless your rules name them.

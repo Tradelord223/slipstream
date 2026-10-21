@@ -9,7 +9,9 @@ import { LOCAL_USER_ID } from "../src/auth/users.ts";
 import { loadConfig, readConfig, type Config } from "../src/config.ts";
 import { Db } from "../src/db/index.ts";
 import { formatReport, runDoctor, type DoctorOptions } from "../src/doctor.ts";
-import { addAccount, makeEnv } from "./helpers.ts";
+import type { AccountRow } from "../src/mail/store.ts";
+import { sortTask } from "../src/mail/resort.ts";
+import { addAccount, makeEnv, msg } from "./helpers.ts";
 
 const offline: DoctorOptions = { health: async () => "none", portFree: async () => true, env: {}, platform: "darwin", home: join(tmpdir(), "slipstream-doctor-no-home") };
 const byId = (r: Awaited<ReturnType<typeof runDoctor>>, id: string) => r.checks.find((c) => c.id === id);
@@ -100,6 +102,28 @@ describe("slipstream doctor", () => {
       assert.equal(byId(r, "key")!.status, "ok");
       assert.equal(byId(r, "server")!.status, "ok");
       assert.equal(byId(r, "accounts")!.title, "1 mail account in good shape");
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test("reports whether the one-time re-sort of older mail is done", async () => {
+    const env = makeEnv();
+    try {
+      const id = addAccount(env.ctx, LOCAL_USER_ID, "jordan@fernpoint.co", "imap");
+      const account = env.ctx.db.get<AccountRow>("SELECT * FROM accounts WHERE id = ?", id)!;
+      const from = { name: "Ana", email: "ana@acme.io" };
+      env.ctx.store.ingest(account, { messages: [msg({ from }), msg({ from }), msg({ from }), msg({ from })], cursor: null, done: true });
+      // Two of them were stored by 0.4.0, which kept no list headers.
+      env.ctx.db.run("UPDATE messages SET headers_version = 0 WHERE rowid IN (SELECT rowid FROM messages LIMIT 2)");
+      const open = await runDoctor(env.ctx.config, offline);
+      assert.equal(byId(open, "sorting")!.title, "Sorting: re-sorting 50%");
+      assert.equal(byId(open, "sorting")!.status, "info");
+      assert.equal(open.summary.fail + open.summary.warn, 0, "it is not a problem, only news");
+      env.ctx.db.run("INSERT INTO maintenance (task, ran_at) VALUES (?, ?)", sortTask(id), Date.now());
+      const done = await runDoctor(env.ctx.config, offline);
+      assert.equal(byId(done, "sorting")!.title, "Sorting: up to date");
+      assert.equal(byId(done, "sorting")!.status, "ok");
     } finally {
       env.cleanup();
     }

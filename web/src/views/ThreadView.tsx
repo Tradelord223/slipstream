@@ -8,6 +8,7 @@ import { Icon } from "../components/Icon.tsx";
 import { Keys } from "../components/Keycap.tsx";
 import { LabelChip } from "../components/labels/LabelChip.tsx";
 import { MessageCard } from "../components/MessageCard.tsx";
+import { WhyChip } from "../components/WhyChip.tsx";
 import { useDismiss, useViewport } from "../lib/hooks.ts";
 import { act } from "../store/actions.ts";
 import { ensureBodies } from "../store/bodies.ts";
@@ -19,6 +20,7 @@ import { codeMessage } from "../lib/code.ts";
 import { logosFor, useLogoPolicy, useSession } from "../store/session.ts";
 import { useThread } from "../store/threads.ts";
 import { enterThread, toggleMessage, useThreadView } from "../store/threadView.ts";
+import { openMoveMenu, openNewSplit } from "../store/sorting.ts";
 import { openPalette, toggleContext, useUi } from "../store/ui.ts";
 import type { ThreadDetail } from "../types.ts";
 import type { ComposeKind } from "../lib/compose.ts";
@@ -111,6 +113,7 @@ export function ThreadView({ id, showContext }: { id: string; showContext: boole
             <div className="thread-inner">
               <h1 className="thread-subject">{detail.thread.subject || "(no subject)"}</h1>
               <div className="thread-labels">
+                <WhyChip threadId={detail.thread.id} sorting={detail.sorting} />
                 {detail.thread.labels.map((l) => (
                   <LabelChip key={l} name={l} />
                 ))}
@@ -247,6 +250,8 @@ function MoreMenu({ detail, up = false, className = "icon-btn" }: { detail: Thre
         <div className={`menu menu-right ${up ? "menu-up" : ""}`} role="menu">
           <MenuItem label={detail.thread.unread ? "Mark read" : "Mark unread"} keys="u" onPick={pick(() => void act.toggleRead())} />
           <MenuItem label="Move to…" keys="v" onPick={pick(() => openPalette("move", [detail.thread.id]))} />
+          <MenuItem label="Move mail to another tab…" keys="shift+i" onPick={pick(() => openMoveMenu(detail.thread.id))} />
+          <MenuItem label="New split from this conversation…" keys="shift+n" onPick={pick(() => openNewSplit(detail.thread.id))} />
           {viewport === "mobile" && <MenuItem label={detail.thread.starred ? "Remove star" : "Star"} keys="s" onPick={pick(() => void act.star())} />}
           {viewport === "mobile" && <MenuItem label="Label…" keys="l" onPick={pick(() => openPalette("label", [detail.thread.id]))} />}
           <MenuItem label="Mute" keys="shift+m" onPick={pick(() => void act.mute())} />

@@ -166,6 +166,8 @@ function SharedThread({ id }: { id: string }) {
     isBulk: false,
     bodyState: "cached",
     logoDomain: null,
+    listId: null,
+    senderDomain: null,
     signals: [],
     attachments: [],
   }));

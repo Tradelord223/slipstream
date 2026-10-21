@@ -1,0 +1,407 @@
+/* ---- Sorting: the why chip, the move menu, new split from a conversation, suggestions ------------------ */
+
+.thread-labels {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.why-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: var(--hover);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.why-chip:hover {
+  background: var(--press);
+  color: var(--text);
+}
+.why-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.why-chip svg {
+  flex: none;
+  opacity: 0.7;
+}
+
+/* A short phone scrolls the dialog's body rather than clipping it. */
+.move-dialog > div,
+.split-dialog > div {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Shared by the move menu and the new-split dialog. */
+.move-group {
+  display: grid;
+  gap: 6px;
+}
+.move-label,
+.add-title {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.move-from {
+  margin: 0 0 12px;
+  color: var(--text-2);
+}
+.move-from strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.move-dialog .move-group + .move-group,
+.move-dialog .move-from + .move-group {
+  margin-top: 14px;
+}
+.move-state {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 0 4px;
+  color: var(--text-2);
+}
+.move-note {
+  margin: 12px 0 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.move-dialog .form-error {
+  margin-top: 12px;
+}
+
+.move-scopes,
+.choices {
+  display: grid;
+  gap: 4px;
+}
+.move-scope,
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  text-align: left;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.move-scope:hover,
+.choice:hover {
+  border-color: var(--text-3);
+}
+.move-scope[aria-checked="true"],
+.choice[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+}
+.move-scope:focus-visible,
+.choice:focus-visible,
+.move-cat:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.radio-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+[aria-checked="true"] > .radio-dot {
+  border-color: var(--accent);
+}
+[aria-checked="true"] > .radio-dot::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.move-scope-text,
+.choice-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+.move-scope-detail,
+.choice-detail {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.choice-title {
+  font-weight: 550;
+}
+.choice-count {
+  flex: none;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.move-cats {
+  display: grid;
+  gap: 2px;
+}
+.move-cat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: var(--r-control);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--t-fast) var(--ease);
+}
+.move-cat:hover,
+.move-cat:focus-visible {
+  background: var(--hover);
+}
+.move-cat[disabled] {
+  opacity: 0.55;
+  cursor: default;
+}
+.move-cat[aria-busy="true"] {
+  opacity: 1;
+  background: var(--accent-soft);
+}
+
+.split-dialog .split-form {
+  gap: 14px;
+}
+
+/* The "+" dialog. */
+.add-dialog {
+  width: 480px;
+}
+.add-body {
+  display: grid;
+  gap: 18px;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -16px;
+  padding: 2px 16px 2px;
+}
+.add-section {
+  display: grid;
+  gap: 8px;
+}
+.add-samples {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.add-samples span {
+  min-width: 0;
+}
+.library-main {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+.suggested {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.suggested .library-item {
+  flex: 1;
+  min-width: 0;
+}
+.library-skel {
+  display: block;
+  height: 44px;
+  border-radius: var(--r-control);
+  background: var(--line-soft);
+}
+.describe-row {
+  display: flex;
+  gap: 8px;
+}
+.describe-row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The one quiet offer at the end of the tab strip. */
+.suggest-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.suggest-tabs {
+  flex: 0 1 auto;
+  margin-left: 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  height: 22px;
+}
+.suggest-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.suggest-text strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.suggest-count {
+  flex: none;
+  color: var(--text-3);
+}
+.suggest-add {
+  flex: none;
+  padding: 0 4px;
+  min-height: 24px;
+  border-radius: 4px;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.suggest-add:hover {
+  background: var(--accent-soft);
+}
+.suggest-add:focus-visible,
+.suggest-x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.suggest-add[disabled],
+.suggest-x[disabled] {
+  opacity: 0.5;
+}
+.suggest-x {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  color: var(--text-3);
+}
+.suggest-bar {
+  flex: none;
+  padding: 0 8px 0 14px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.suggest-bar .suggest-text {
+  flex: 1;
+}
+.suggest-bar .suggest-add {
+  min-height: 44px;
+  padding: 0 10px;
+}
+.suggest-bar .suggest-x {
+  width: 44px;
+  height: 44px;
+}
+
+/* Settings → Splits. */
+.split-row {
+  flex-wrap: wrap;
+}
+.split-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  flex: 1 1 100%;
+  padding-left: 28px;
+  cursor: default;
+}
+.split-skeleton {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0;
+}
+.rule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.rule-row:last-child {
+  border-bottom: 0;
+}
+.rule-main {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+.rule-pattern {
+  font-weight: 550;
+}
+.rule-meta {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.rule-meta strong {
+  color: var(--text-2);
+  font-weight: 550;
+}
+
+@media (max-width: 719px) {
+  .why-chip {
+    min-height: 44px;
+    height: auto;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+  .move-cat,
+  .mobile-bar .menu-item {
+    min-height: 44px;
+  }
+  .add-dialog {
+    width: calc(100vw - 24px);
+  }
+  .split-opts {
+    padding-left: 0;
+    gap: 0 12px;
+  }
+  .move-cat .keys {
+    display: none;
+  }
+  .describe-row .field,
+  .describe-row .btn {
+    min-height: 44px;
+  }
+  .rule-row .btn {
+    min-height: 44px;
+  }
+  .split-tools .icon-btn,
+  .split-tools .btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .suggested .icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

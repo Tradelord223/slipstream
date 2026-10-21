@@ -62,10 +62,10 @@ describe("store, splits and triage", () => {
     )!;
     assert.equal(t.message_count, 2);
     assert.equal(t.in_sent, 1);
-    assert.equal(t.category, "important");
+    assert.equal(t.category, "people");
   });
 
-  test("bulk mail lands in Other; people land in Important", async () => {
+  test("bulk mail lands in Promotions; people land in Important", async () => {
     env.ctx.store.ingest(account, {
       messages: [msg({ from: news, subject: "Issue 9", listUnsubscribe: "<https://news.test/u>", remoteThreadId: "nl9" })],
       cursor: null,
@@ -77,11 +77,11 @@ describe("store, splits and triage", () => {
       const r = await (await env.api(`/api/threads?view=split&split=${id}`)).json();
       return (r.threads as { subject: string }[]).map((t) => t.subject);
     };
-    assert.ok((await list("Other")).includes("Issue 9"));
+    assert.ok((await list("Promotions")).includes("Issue 9"));
     assert.ok(!(await list("Important")).includes("Issue 9"));
   });
 
-  test("custom splits pull their threads out of Important and Other", async () => {
+  test("custom splits pull their threads out of Important and the other built-in tabs", async () => {
     await env.api("/api/splits", { method: "POST", json: { name: "Acme", query: "from:@acme.test" } });
     const boot = await (await env.api("/api/bootstrap")).json();
     const important = boot.splits.find((s: { name: string }) => s.name === "Important").id;

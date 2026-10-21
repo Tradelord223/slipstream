@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { useViewport } from "../lib/hooks.ts";
 import { SEARCH_HINTS } from "../lib/searchHints.ts";
+import { defaultSplit, visibleSplits } from "../lib/sorting.ts";
 import { viewTitle } from "../lib/views.ts";
 import { act } from "../store/actions.ts";
 import { useCounts } from "../store/counts.ts";
@@ -17,6 +19,7 @@ import { Icon } from "./Icon.tsx";
 import { Keys } from "./Keycap.tsx";
 import { MenuButton } from "./PageHeader.tsx";
 import { AddSplitDialog } from "./SplitEditor.tsx";
+import { SuggestionLine } from "./SuggestionLine.tsx";
 
 
 export function MailHeader({ view }: { view: MailView }) {
@@ -24,42 +27,47 @@ export function MailHeader({ view }: { view: MailView }) {
   const splits = useSession((s) => s.splits);
   const filter = useList((s) => s.filter);
   const searchOpen = useUi((s) => s.searchOpen) || view.kind === "search";
+  const wide = useViewport() === "desktop";
 
   const menu = <MenuButton />;
 
   if (selected.size > 0) return <BulkBar count={selected.size} leading={menu} />;
 
+  const tabs = view.kind === "inbox" && defaultSplit(splits) !== undefined;
   return (
-    <header className="mail-header">
-      {menu}
-      {searchOpen ? (
-        <SearchField view={view} />
-      ) : (
-        <>
-          {view.kind === "inbox" && splits.length > 0 ? (
-            <SplitTabs view={view} />
-          ) : view.kind === "label" ? (
-            <LabelHeading name={view.name} />
-          ) : (
-            <h1 className="view-title">{viewTitle(view, splits)}</h1>
-          )}
-          <span className="grow" />
-          {view.kind === "label" && <LabelRuleButton name={view.name} />}
-          {filter !== "all" && (
-            <button className="filter-chip" onClick={clearFilter} aria-label="Clear filter">
-              {filter === "unread" ? "Unread only" : "Starred only"}
-              <Icon name="x" size={12} />
+    <>
+      <header className="mail-header">
+        {menu}
+        {searchOpen ? (
+          <SearchField view={view} />
+        ) : (
+          <>
+            {tabs && view.kind === "inbox" ? (
+              <SplitTabs view={view} suggest={wide} />
+            ) : view.kind === "label" ? (
+              <LabelHeading name={view.name} />
+            ) : (
+              <h1 className="view-title">{viewTitle(view, splits)}</h1>
+            )}
+            <span className="grow" />
+            {view.kind === "label" && <LabelRuleButton name={view.name} />}
+            {filter !== "all" && (
+              <button className="filter-chip" onClick={clearFilter} aria-label="Clear filter">
+                {filter === "unread" ? "Unread only" : "Starred only"}
+                <Icon name="x" size={12} />
+              </button>
+            )}
+            <button className="search-trigger" onClick={() => ui.set({ searchOpen: true })} aria-label="Search">
+              <Icon name="search" />
+              <span className="search-trigger-label">Search</span>
+              <Keys binding="/" />
             </button>
-          )}
-          <button className="search-trigger" onClick={() => ui.set({ searchOpen: true })} aria-label="Search">
-            <Icon name="search" />
-            <span className="search-trigger-label">Search</span>
-            <Keys binding="/" />
-          </button>
-          <AssistantButton />
-        </>
-      )}
-    </header>
+            <AssistantButton />
+          </>
+        )}
+      </header>
+      {tabs && !wide && !searchOpen && <SuggestionLine placement="bar" />}
+    </>
   );
 }
 
@@ -117,11 +125,13 @@ function BulkBar({ count, leading }: { count: number; leading: React.ReactNode }
   );
 }
 
-function SplitTabs({ view }: { view: Extract<MailView, { kind: "inbox" }> }) {
-  const splits = useSession((s) => s.splits);
+function SplitTabs({ view, suggest }: { view: Extract<MailView, { kind: "inbox" }>; suggest: boolean }) {
+  const all = useSession((s) => s.splits);
   const counts = useCounts();
   const [adding, setAdding] = useState(false);
-  const activeId = view.splitId ?? splits[0]?.id;
+  const activeId = view.splitId ?? defaultSplit(all)?.id;
+  // Hidden tabs stay out, and so do "hide when empty" tabs with nothing in them; the tab you are on always stays.
+  const splits = visibleSplits(all, counts, activeId);
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
@@ -155,6 +165,7 @@ function SplitTabs({ view }: { view: Extract<MailView, { kind: "inbox" }> }) {
           <Icon name="plus" size={15} />
         </button>
       </div>
+      {suggest && <SuggestionLine placement="tabs" />}
       {adding && <AddSplitDialog onClose={() => setAdding(false)} />}
     </>
   );

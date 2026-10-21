@@ -17,6 +17,7 @@ import {
   type ProviderIdentity,
   type ProviderQuery,
   type RemoteAction,
+  type SortingHints,
   type SyncPage,
 } from "../mail/types.ts";
 import { jsonBody, OAuthSession } from "./oauth.ts";
@@ -26,6 +27,8 @@ const LIST_PAGE = 500;
 /** First-sync pages: small, so the dashboard sees mail after the first few requests and progress moves. */
 const INITIAL_PAGE = 100;
 const FETCH_CONCURRENCY = 8;
+/** The re-sort of old mail asks for headers at this many messages at once: it is never in a hurry. */
+const SORTING_CONCURRENCY = 4;
 /** History pages read per sync call before handing control back to the engine. */
 const HISTORY_PAGES_PER_CALL = 20;
 const BATCH_MODIFY_MAX = 1000;
@@ -34,6 +37,16 @@ const HISTORY_TYPES = ["messageAdded", "messageDeleted", "labelAdded", "labelRem
 /** Gmail system labels that never become Slipstream labels. User labels are the ones labels.list reports as type "user". */
 const SYSTEM_LABELS = new Set(["INBOX", "SENT", "TRASH", "SPAM", "UNREAD", "STARRED", "IMPORTANT", "CHAT", "DRAFT"]);
 const isSystemLabel = (id: string) => SYSTEM_LABELS.has(id) || id.startsWith("CATEGORY_");
+
+/** Gmail's tabs are labels (CATEGORY_PROMOTIONS ...) that never become Slipstream labels; they are kept as the message's provider category. */
+const CATEGORY_LABELS: Record<string, string> = {
+  CATEGORY_PERSONAL: "personal",
+  CATEGORY_PROMOTIONS: "promotions",
+  CATEGORY_SOCIAL: "social",
+  CATEGORY_UPDATES: "updates",
+  CATEGORY_FORUMS: "forums",
+};
+const categoryOf = (labelIds: string[] | undefined): string | undefined => labelIds?.map((id) => CATEGORY_LABELS[id]).find(Boolean);
 
 interface GmailLabel {
   id: string;
@@ -308,6 +321,31 @@ export class GmailProvider implements MailProvider {
     return { messages, next: list.nextPageToken };
   }
 
+  /** The list headers and the category tab of old messages: Gmail's metadata format with only those headers, never a body. */
+  async fetchSortingHints(refs: { remoteId: string }[]): Promise<Map<string, SortingHints>> {
+    const out = new Map<string, SortingHints>();
+    await mapLimit(refs, SORTING_CONCURRENCY, async ({ remoteId }) => {
+      let m: GmailMessage;
+      try {
+        m = await this.api<GmailMessage>(
+          "GET",
+          withQuery(`/messages/${enc(remoteId)}`, {
+            format: "metadata",
+            metadataHeaders: ["List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted"],
+            fields: "id,labelIds,payload/headers",
+          }),
+        );
+      } catch (err) {
+        if (err instanceof GmailHttpError && err.status === 404) return;
+        throw err;
+      }
+      const head = (m.payload?.headers ?? []).map((h) => `${h.name}: ${h.value}`).join("\r\n");
+      const parsed = head ? await parseHeaderBlock(head, { remoteId }) : undefined;
+      out.set(remoteId, { listUnsubscribe: parsed?.listUnsubscribe, listId: parsed?.listId, bulk: Boolean(parsed?.bulk), providerCategory: categoryOf(m.labelIds) });
+    });
+    return out;
+  }
+
   private async fetchFlags(id: string): Promise<FlagUpdate | null> {
     let m: GmailMessage;
     try {
@@ -318,7 +356,8 @@ export class GmailProvider implements MailProvider {
     }
     if (isSkipped(m.labelIds)) return null;
     const { folders, unread, starred, labels } = await this.mapLabels(m.labelIds ?? []);
-    return { remoteId: m.id, unread, starred, folders, labels };
+    // A message in no Gmail tab (tabs switched off) reports null, so a category it had before is cleared.
+    return { remoteId: m.id, unread, starred, folders, labels, providerCategory: categoryOf(m.labelIds) ?? null };
   }
 
   private async toSummary(m: GmailMessage): Promise<IncomingMessage | null> {
@@ -337,6 +376,7 @@ export class GmailProvider implements MailProvider {
     });
     // Ours means "carries the SENT label" (aliases included), never "the From header says so": anyone can write a From.
     message.outgoing = folders.sent;
+    message.providerCategory = categoryOf(m.labelIds);
     // Gmail's snippet is HTML-escaped text; it stands in for the body until the message is opened.
     message.bodyText = decodeEntities(m.snippet ?? "");
     message.bodyComplete = false;

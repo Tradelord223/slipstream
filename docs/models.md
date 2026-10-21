@@ -41,7 +41,7 @@ If Claude Code or Codex is installed and signed in on the computer running Slips
 
 Paste a key in **Models & accounts**, or set it in Slipstream's environment: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `OPENROUTER_API_KEY`. Saved keys are encrypted on your own disk. Each card lists the models your key can use; Slipstream asks the provider rather than hard-coding names.
 
-**Limits.** Each turn pauses after 25 tool calls; send a follow-up to let it continue. When a provider reports what a run cost (the managed Claude agent and OpenRouter), the per-run and monthly budgets in Models & accounts apply. OpenAI, Anthropic and Google report usage in tokens instead, so runs on those keys stop at 1.5 million tokens; set a spending limit in the provider's console as well. Every run shows the tokens it used.
+**Limits.** Each turn pauses after 25 tool calls; send a follow-up to let it continue. When a provider reports what a run cost (the managed Claude agent and OpenRouter), the per-run and monthly budgets in Models & accounts apply. OpenAI, Anthropic and Google report usage in tokens instead, so runs on those keys stop at 1.5 million tokens; set a spending limit in the provider's console as well. Every run shows the tokens it used. Describing a tab in words counts against the same monthly budget, and refuses once it is spent.
 
 ## What Slipstream doesn't do
 

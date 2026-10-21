@@ -1,14 +1,15 @@
 import type { ListParams } from "../api.ts";
 import type { Split } from "../types.ts";
 import type { MailView } from "../store/route.ts";
+import { defaultSplit } from "./sorting.ts";
 
 /** The query the server needs for a mailbox. null means the view isn't a thread list (drafts). */
 export function viewParams(view: MailView, splits: Split[], account: string | null): ListParams | null {
   const base = account ? { account } : {};
   switch (view.kind) {
     case "inbox": {
-      if (splits.length === 0) return { view: "inbox", ...base };
-      const split = splits.find((s) => s.id === view.splitId) ?? splits[0]!;
+      const split = splits.find((s) => s.id === view.splitId) ?? defaultSplit(splits);
+      if (!split) return { view: "inbox", ...base };
       return { view: "split", split: split.id, ...base };
     }
     case "reminders": return { view: "search", q: "in:snoozed", ...base };
@@ -23,7 +24,7 @@ export function viewParams(view: MailView, splits: Split[], account: string | nu
 
 export function viewTitle(view: MailView, splits: Split[]): string {
   switch (view.kind) {
-    case "inbox": return (splits.find((s) => s.id === view.splitId) ?? splits[0])?.name ?? "Inbox";
+    case "inbox": return (splits.find((s) => s.id === view.splitId) ?? defaultSplit(splits))?.name ?? "Inbox";
     case "reminders": return "Reminders";
     case "done": return "Done";
     case "sent": return "Sent";

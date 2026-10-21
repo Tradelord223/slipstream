@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, describe, test } from "node:test";
 import { claudeCodeStdioCommand, codexStdioCommand } from "../../web/src/lib/connect.ts";
 import { selfCommand } from "../src/cli.ts";
 import { localCli } from "../src/http/mail.ts";
 import { bridgeCli } from "../src/lib/bridge.ts";
+import { serviceFile } from "../src/lib/service.ts";
 import { packageVersion } from "../src/lib/version.ts";
 
 const cliPath = join(import.meta.dirname, "..", "src", "cli.ts");
@@ -50,6 +51,33 @@ describe("slipstream connect", () => {
     assert.equal(res.status, 0);
     assert.equal(res.stdout.trim(), codexStdioCommand(here));
     assert.equal(res.stdout.trim(), `codex mcp add slipstream -- ${here.command} ${cliPath} mcp`);
+  });
+
+  test("with Slipstream set to start at login, it points at the service's own copy and says so", () => {
+    const home = mkdtempSync(join(root, "home-"));
+    const file = serviceFile(4380, process.platform, home);
+    if (!file) return; // Starting at login isn't supported on this platform.
+    // The service's copy of the app, as an npx-based install leaves it under the data folder.
+    const bin = join(home, "data", "service", "com.slipstream-mail.4380", "node_modules", "slipstream-mail", "bin", "slipstream.js");
+    mkdirSync(dirname(bin), { recursive: true });
+    writeFileSync(bin, "");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      process.platform === "darwin"
+        ? `<plist><dict><key>ProgramArguments</key><array><string>/usr/bin/node</string><string>${bin}</string><string>serve</string></array></dict></plist>`
+        : `[Service]\nExecStart="/usr/bin/node" "${bin}" "serve"\n`,
+    );
+    const res = connect(["claude"], { HOME: home });
+    assert.equal(res.status, 0);
+    assert.equal(res.stdout.trim(), claudeCodeStdioCommand(bridgeCli(bin)));
+    assert.match(res.stdout, new RegExp(bin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(res.stderr, /Using the copy of Slipstream that starts at login/);
+    assert.equal(localCli(4380, home)?.args[0], bin, "Settings → Connect shows the same copy");
+
+    // The copy is gone (the service was uninstalled by hand): back to this program.
+    rmSync(bin);
+    assert.equal(connect(["claude"], { HOME: home }).stdout.trim(), claudeCodeStdioCommand(here));
   });
 
   test("the builders quote paths with spaces and fall back to the slipstream command", () => {
@@ -129,7 +157,7 @@ describe("the bridge command an assistant runs", () => {
   });
 
   test("slipstream connect and Settings → Connect build the same command", () => {
-    const settings = localCli();
+    const settings = localCli(4380, root);
     assert.deepEqual(settings, bridgeCli(cliPath));
     assert.equal(claudeCodeStdioCommand(settings), connect(["claude"]).stdout.trim());
     assert.match(packageVersion(), /^\d+\.\d+\.\d+/);

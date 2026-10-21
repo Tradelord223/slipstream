@@ -31,6 +31,8 @@ export const CLOUD_MODEL = "claude-opus-5-5";
 export const RUN_TOKEN_LIMIT = 1_500_000;
 /** Runs Autopilot may have going at once (sorting, drafting and learning a voice all count), apart from the person's own. */
 export const AUTOPILOT_RUN_SLOTS = 2;
+/** The origin of the runs that only record what a one-off model call cost (see `meter`). */
+const METERED_ORIGIN = "describe";
 const BUDGET_STOP = "Reached this run's budget";
 
 const configSchema = z.object({
@@ -289,12 +291,53 @@ export class CloudAgent {
 
   /** Spend and concurrency. Autopilot has its own two slots, so it never crowds out the person's runs. */
   private checkLimits(userId: string, origin = "assistant") {
-    if (this.spentThisMonth(userId) >= this.budgets(userId).monthlyBudgetCents)
-      throw new HttpError(402, "Agents reached this month's budget. Raise it in Settings → Models & accounts.");
+    this.assertMonthlyBudget(userId);
     const mine = [...this.active.values()].filter((r) => r.userId === userId);
     if (origin === "autopilot") {
       if (mine.filter((r) => r.origin === "autopilot").length >= AUTOPILOT_RUN_SLOTS) throw new HttpError(429, "Autopilot is already busy.");
     } else if (mine.filter((r) => r.origin !== "autopilot").length >= 3) throw new HttpError(429, "Three runs are already going. Try again when one finishes.");
+  }
+
+  private assertMonthlyBudget(userId: string) {
+    if (this.spentThisMonth(userId) >= this.budgets(userId).monthlyBudgetCents)
+      throw new HttpError(402, "Agents reached this month's budget. Raise it in Settings → Models & accounts.");
+  }
+
+  /**
+   * Meter a model call that is not a run the person sees (describing a tab): it is refused once this month's budget is spent,
+   * and its cost and tokens are written to a run of its own, which counts toward the budget as any run does but is not listed
+   * with their chats. `abort` stops the call when it goes over a limit; `overBudget()` says whether that is why it stopped.
+   */
+  meter(userId: string, engine: EngineId, label: string, abort: () => void) {
+    this.assertMonthlyBudget(userId);
+    const { runBudgetCents, monthlyBudgetCents } = this.budgets(userId);
+    const runId = newId("run");
+    const { db } = this.ctx;
+    db.run(
+      "INSERT INTO cloud_runs (id, user_id, instruction, status, created_at, engine, origin) VALUES (?,?,?,'running',?,?,?)",
+      runId, userId, label, Date.now(), engine, METERED_ORIGIN,
+    );
+    let over = false;
+    const stop = () => {
+      over = true;
+      abort();
+    };
+    return {
+      runId,
+      overBudget: () => over,
+      addCost: (cents: number) => {
+        db.run("UPDATE cloud_runs SET cost_cents = coalesce(cost_cents, 0) + ? WHERE id = ?", cents, runId);
+        const total = db.get<{ c: number }>("SELECT cost_cents AS c FROM cloud_runs WHERE id = ?", runId)?.c ?? 0;
+        if (total >= runBudgetCents || this.spentThisMonth(userId) >= monthlyBudgetCents) stop();
+      },
+      addUsage: (input: number, output: number) => {
+        db.run("UPDATE cloud_runs SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ? WHERE id = ?", input, output, runId);
+        const used = db.get<{ t: number }>("SELECT input_tokens + output_tokens AS t FROM cloud_runs WHERE id = ?", runId)?.t ?? 0;
+        if (used >= RUN_TOKEN_LIMIT) stop();
+      },
+      finish: (status: "done" | "failed" | "budget" | "stopped") =>
+        void db.run("UPDATE cloud_runs SET status = ?, finished_at = ? WHERE id = ? AND status = 'running'", status, Date.now(), runId),
+    };
   }
 
   status(userId: string) {
@@ -394,7 +437,7 @@ export class CloudAgent {
   /** The person's runs: their chats and routines. Autopilot's batches live on the Autopilot page. */
   runs(userId: string, limit = 20) {
     return this.ctx.db
-      .all<RunRow>("SELECT * FROM cloud_runs WHERE user_id = ? AND origin != 'autopilot' ORDER BY created_at DESC LIMIT ?", userId, limit)
+      .all<RunRow>("SELECT * FROM cloud_runs WHERE user_id = ? AND origin NOT IN ('autopilot', ?) ORDER BY created_at DESC LIMIT ?", userId, METERED_ORIGIN, limit)
       .map(shapeRun);
   }
 

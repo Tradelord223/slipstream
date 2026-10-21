@@ -608,8 +608,28 @@ export function uninstallService(o: ServiceOptions): void {
     t.run("systemctl", [...systemctl, "daemon-reload"]);
   }
   // Only this service's own copy, and only when it says it is one; the older <dataDir>/app layout is left alone.
-  if (was && isOurCopy(copyDir, t.label)) rmSync(copyDir, { recursive: true, force: true });
+  const removedCopy = was && isOurCopy(copyDir, t.label);
+  if (removedCopy) rmSync(copyDir, { recursive: true, force: true });
   t.log(was ? "Slipstream no longer starts at login, and the copy that was running has stopped." : "Slipstream wasn't set to start at login.");
+  // `connect` points Claude Code and Codex at that copy, which is gone now.
+  if (removedCopy) t.log(`If you connected Claude Code or Codex with \`${o.self} connect\`, it pointed at that copy. Run \`${o.self} connect claude\` (or \`codex\`) again.`);
+}
+
+/**
+ * The script the installed login service runs, when there is a service and the script is still there: the copy of Slipstream
+ * under the data folder, which npm's cache cleaning can't take away and which needs no network, or the install it was set up
+ * from. `connect` points assistants at it instead of at npx's cache.
+ */
+export function installedServiceBin(o: Pick<ServiceOptions, "port" | "platform" | "home">): string | null {
+  try {
+    const platform = o.platform ?? process.platform;
+    const file = serviceFile(o.port, platform, o.home);
+    if (!file || !existsSync(file)) return null;
+    const bin = readServiceFile(platform === "darwin" ? "launchd" : "systemd", readFileSync(file, "utf8")).program[1];
+    return bin && existsSync(bin) ? bin : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Is `a` an older version than `b`? Compared as numbers, dot by dot; anything that isn't a number says no. */

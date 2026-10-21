@@ -271,7 +271,7 @@ describe("mail sent from an alias", () => {
       "SELECT category, in_sent, last_outbound_at, last_inbound_at, participants FROM threads WHERE account_id = ?",
       acc,
     )!;
-    assert.equal(t.category, "important");
+    assert.equal(t.category, "people");
     assert.equal(t.in_sent, 1);
     assert.ok(t.last_outbound_at);
     assert.equal(t.last_inbound_at, null);

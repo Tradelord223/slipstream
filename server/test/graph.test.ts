@@ -133,6 +133,7 @@ describe("Graph delta sync", () => {
           flag: { flagStatus: "flagged" },
           isRead: true,
           categories: ["Clients", "Red category"],
+          inferenceClassification: "other",
           hasAttachments: true,
           replyTo: [{ emailAddress: { name: "Reply", address: "reply@example.org" } }],
           ccRecipients: [{ emailAddress: { name: "Bob", address: "bob@example.org" } }],
@@ -182,6 +183,9 @@ describe("Graph delta sync", () => {
     assert.equal(m1.inReplyTo, "<m0@example.org>");
     assert.deepEqual(m1.references, ["<m-1@example.org>", "<m0@example.org>"]);
     assert.equal(m1.listUnsubscribe, "https://news.example.org/u/1");
+    assert.equal(m1.listId, "news.example.org");
+    assert.equal(m1.providerCategory, "other", "Outlook's Other");
+    assert.equal(byId("s1").providerCategory, undefined);
     assert.equal(m1.bulk, true);
     assert.equal(m1.unread, false);
     assert.equal(m1.starred, true);
@@ -407,6 +411,38 @@ describe("Graph actions", () => {
       { flag: { flagStatus: "flagged" } },
       { flag: { flagStatus: "notFlagged" } },
     ]);
+  });
+
+  it("asks again for the list headers and Focused/Other of old messages, 20 to a request, and skips one that is gone", async () => {
+    stub = new FetchStub().on("POST", BATCH, (call: Call) => {
+      const { requests } = body(call) as { requests: { id: string; url: string }[] };
+      return json({
+        responses: requests.map((r) =>
+          r.url.includes("/gone?")
+            ? { id: r.id, status: 404, body: { error: { code: "ErrorItemNotFound", message: "gone" } } }
+            : {
+                id: r.id,
+                status: 200,
+                body: {
+                  inferenceClassification: r.url.includes("/f1?") ? "focused" : "other",
+                  internetMessageHeaders: [
+                    { name: "Received", value: "from mx.example.org" },
+                    { name: "List-Id", value: "Deals <deals.example.org>" },
+                    { name: "List-Unsubscribe", value: "<https://deals.example.org/u>" },
+                  ],
+                },
+              },
+        ),
+      });
+    });
+    const { graph } = newProvider();
+    const hints = await graph.fetchSortingHints([{ remoteId: "f1" }, { remoteId: "o1" }, { remoteId: "gone" }]);
+    assert.deepEqual([...hints.keys()], ["f1", "o1"]);
+    assert.deepEqual(hints.get("f1"), { listUnsubscribe: "https://deals.example.org/u", listId: "deals.example.org", bulk: true, providerCategory: "personal" });
+    assert.equal(hints.get("o1")!.providerCategory, "other");
+    const asked = (body(stub.calls[0]!).requests as { method: string; url: string }[]).map((r) => [r.method, r.url]);
+    assert.deepEqual(asked[0], ["GET", "/me/messages/f1?$select=internetMessageHeaders,inferenceClassification"]);
+    assert.equal(stub.calls.length, 1);
   });
 
   it("batches several messages and skips provisional ids", async () => {

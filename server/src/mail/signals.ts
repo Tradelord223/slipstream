@@ -53,7 +53,7 @@ export function detectSignals(m: SignalInput): Signal[] {
   if (locateCode(subject, text)) out.push({ kind: "code" });
   const security = detectSecurity(subject, text, m.fromName);
   if (security) out.push(security);
-  const delivery = detectDelivery(subject, text);
+  const delivery = detectDelivery(subject, text, m.isBulk);
   if (delivery) out.push(delivery);
   return out;
 }
@@ -230,7 +230,7 @@ const KNOWN_CARRIER_RES = KNOWN_CARRIERS.map((name) => [name, new RegExp(`(?<![A
 const NAMED_CARRIER = /(?:\b[Cc]arrier|\b[Cc]ourier|\b[Ss]hipped (?:via|with|by)|\b[Dd]elivered (?:via|by|with)|\b[Dd]elivery partner|\b[Ss]hipping partner)\s{0,3}(?:is|:|-)?\s{1,8}([A-Z][\w&'’.-]*(?:\s+[A-Z][\w&'’.-]*){0,3})/;
 const CARRIER_STOP = new Set(["Tracking", "Track", "Estimated", "Expected", "Delivery", "Order", "Shipping", "Status", "Service", "Number", "Your", "The", "Ship", "Date"]);
 
-function detectDelivery(rawSubject: string, text: string): Signal | null {
+function detectDelivery(rawSubject: string, text: string, isBulk = false): Signal | null {
   // A reply to a shipping notice isn't one.
   const subject = /^\s*(?:re|fwd?|aw|wg)\s*:/i.test(rawSubject) ? "" : rawSubject;
   const head = `${subject}\n${text.slice(0, 4000)}`;
@@ -241,17 +241,24 @@ function detectDelivery(rawSubject: string, text: string): Signal | null {
     for (const r of STATUS_RULES) {
       const hit = r.re.exec(s);
       if (!hit || NOT_YET.test(s.slice(Math.max(0, hit.index - 40), hit.index))) continue;
-      if (r.strong || hasWord) return r.status;
+      if (r.strong || hasWord) return { status: r.status, strong: r.strong };
     }
     return null;
   };
   // A tracking number on its own already says a package exists; with no status word it's shipped news.
-  const status = statusIn(subject) ?? statusIn(text.slice(0, 4000)) ?? (trackingMatch && /tracking\s{0,3}(?:number|no|id|#)/i.test(head) ? "shipped" : null);
-  if (!status) return null;
-
-  const signal: Extract<Signal, { kind: "delivery" }> = { kind: "delivery", status };
-  if (trackingMatch) signal.tracking = trackingMatch;
+  const inSubject = statusIn(subject);
+  const hit =
+    inSubject ??
+    statusIn(text.slice(0, 4000)) ??
+    (trackingMatch && /tracking\s{0,3}(?:number|no|id|#)/i.test(head) ? { status: "shipped" as const, strong: false } : null);
+  if (!hit) return null;
   const carrier = matchCarrier(head);
+  // A sale blast's body says "order now, arriving by Friday" too. From a mailing list, a status found only in the body counts
+  // when a real package backs it: a tracking number or a carrier.
+  if (isBulk && !inSubject && !hit.strong && !trackingMatch && !carrier) return null;
+
+  const signal: Extract<Signal, { kind: "delivery" }> = { kind: "delivery", status: hit.status };
+  if (trackingMatch) signal.tracking = trackingMatch;
   if (carrier) signal.carrier = carrier;
   return signal;
 }

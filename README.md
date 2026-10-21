@@ -81,7 +81,7 @@ Underneath, it is a fast, private email client. One key finishes a conversation,
 **Get through mail fast**
 
 - **Triage with one key.** `E` done, `H` remind me, `#` trash, `S` star, `U` unread, `J`/`K` to move, `Z` to undo anything. `Cmd+K` finds every command; `?` shows every shortcut, and every one is remappable.
-- **Split Inbox.** Important (people) and Other (newsletters, notifications) out of the box. Add splits for VIPs, a client, a project, anything you can search for.
+- **Split Inbox.** Important (people), Updates, Promotions and Social out of the box, sorted on your computer with no AI, and every conversation says why it is where it is. `Shift+I` moves a sender's mail to another tab for good, and `Shift+N` turns the conversation in front of you into a split. Add splits for VIPs, a client, a project, anything you can search for; Slipstream suggests them from your own mail.
 - **Remind Me.** Type "tomorrow 9am" or "next week". The conversation leaves your inbox and comes back to the top when it's time, or as soon as someone replies.
 - **Get Me To Zero.** Clear the whole backlog, or everything older than a week or a month, in one undoable step.
 - **One-key unsubscribe.** `Cmd+U` unsubscribes and files the newsletter.

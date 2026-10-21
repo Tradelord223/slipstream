@@ -8,13 +8,16 @@ import { HttpError } from "../auth/users.ts";
 import { importStatus, type AppContext, type Env } from "../context.ts";
 import type { ServerEvent } from "../events.ts";
 import { assistantSetting } from "../agents/assistant.ts";
+import { readConfig } from "../config.ts";
 import { bridgeCli } from "../lib/bridge.ts";
+import { installedServiceBin } from "../lib/service.ts";
 import { triageCommandName } from "../commands/catalog.ts";
 import { listIdentities } from "../mail/identities.ts";
 import { extractCode } from "../mail/signals.ts";
 import { unsubscribe } from "../mail/unsubscribe.ts";
 import { REMOTE_PAGE_MAX, searchRemote } from "../mail/remote-search.ts";
-import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, messageAttachments, shapeRow, threadsById, touchThread, type SplitRow, type ThreadListRow } from "../mail/views.ts";
+import { counts, getThread, LIST_COLUMNS, listQuerySchema, listThreads, messageAttachments, shapeRow, threadsById, touchThread, type ThreadListRow } from "../mail/views.ts";
+import { listSplits } from "../prefs.ts";
 import type { AccountRow } from "../mail/store.ts";
 
 const remoteSearchQuery = z.object({
@@ -351,9 +354,7 @@ export function mailRoutes(ctx: AppContext) {
       ...importStatus(ctx.imports, a.id),
       identities: listIdentities(db, a.id),
     }));
-    const splits = db
-      .all<SplitRow>("SELECT * FROM splits WHERE user_id = ? ORDER BY position", user.id)
-      .map((s) => ({ id: s.id, name: s.name, query: s.query, builtin: Boolean(s.builtin) }));
+    const splits = listSplits(ctx, user.id);
     const labels = db.all<{ name: string }>(
       `SELECT DISTINCT l.name FROM labels l JOIN accounts a ON a.id = l.account_id WHERE a.user_id = ? AND l.kind = 'user' ORDER BY l.name`,
       user.id,
@@ -388,7 +389,7 @@ export function mailRoutes(ctx: AppContext) {
         undoSendSeconds: ctx.config.undoSendSeconds,
         demo: ctx.config.demo,
         sourceUrl: ctx.config.sourceUrl,
-        cli: ctx.config.mode === "local" ? localCli() : null,
+        cli: ctx.config.mode === "local" ? localCli(ctx.config.port) : null,
       },
     });
   });
@@ -400,7 +401,10 @@ export function mailRoutes(ctx: AppContext) {
  * How to run this install's CLI and stdio MCP bridge from another program (Claude Desktop, Cursor):
  * absolute paths, so it works whatever that program's PATH is. Local mode only. The same command `slipstream connect` prints.
  */
-export function localCli(): { command: string; args: string[] } | null {
+export function localCli(port = readConfig().port, home?: string): { command: string; args: string[] } | null {
+  // The login service's own copy when there is one, as `slipstream connect` does.
+  const service = installedServiceBin({ port, home });
+  if (service) return bridgeCli(service);
   const here = dirname(fileURLToPath(import.meta.url));
   for (const candidate of [join(here, "cli.js"), join(here, "../dist/cli.js"), join(here, "../../dist/cli.js"), join(here, "../cli.ts")]) {
     if (existsSync(candidate)) return bridgeCli(candidate);

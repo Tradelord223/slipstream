@@ -12,6 +12,8 @@ export interface FakeMessage {
   flags: Set<string>;
   labels?: Set<string>;
   threadId?: string;
+  /** Gmail's tab for the message (personal, promotions, social, updates, forums): what `X-GM-RAW category:<tab>` finds. */
+  gmCategory?: string;
   internalDate: Date;
   source: Buffer;
   modseq: bigint;
@@ -40,6 +42,8 @@ export class FakeServer {
   connections: FakeConn[] = [];
   appended: { path: string; raw: Buffer; flags: string[] }[] = [];
   failAppend = false;
+  /** Make every X-GM-RAW search fail: "refuse" answers BAD as a server that doesn't know the syntax would; "drop" fails as a timeout or a reset would. */
+  failGmraw: "refuse" | "drop" | null = null;
   log: string[] = [];
   /** Whole messages handed out (a FETCH asking for the source): a first sync should never need one. */
   fullFetches = 0;
@@ -71,13 +75,14 @@ export class FakeServer {
   }
 
   /** Deliver a message into a mailbox; returns its UID. */
-  deliver(path: string, source: string | Buffer, extra: { flags?: string[]; labels?: string[]; threadId?: string; date?: Date } = {}): number {
+  deliver(path: string, source: string | Buffer, extra: { flags?: string[]; labels?: string[]; threadId?: string; date?: Date; category?: string } = {}): number {
     const box = this.boxes.get(path)!;
     const msg: FakeMessage = {
       uid: box.uidNext++,
       flags: new Set(extra.flags ?? []),
       labels: extra.labels ? new Set(extra.labels) : undefined,
       threadId: extra.threadId,
+      gmCategory: extra.category,
       internalDate: extra.date ?? new Date(),
       source: Buffer.isBuffer(source) ? source : Buffer.from(source),
       modseq: ++box.highestModseq,
@@ -292,7 +297,10 @@ export class FakeConn {
     const header = (name: string) => new RegExp(`^${name}:\\s*(.*)$`, "im").exec(m.source.toString("latin1"))?.[1]?.toLowerCase() ?? "";
     if (q.gmraw !== undefined) {
       // Gmail's own language is stood in for by its simplest part: every plain word must appear in the message.
-      if (q.gmraw === "in:inbox") {
+      const tab = /^category:(\w+)$/.exec(q.gmraw)?.[1];
+      if (tab !== undefined) {
+        if (m.gmCategory !== tab) return false;
+      } else if (q.gmraw === "in:inbox") {
         if (!m.labels?.has("\\Inbox")) return false;
       } else if (!q.gmraw.split(/\s+/).filter((w) => w && !w.includes(":") && !w.startsWith("-")).every((w) => text.includes(w.replace(/"/g, "").toLowerCase()))) return false;
     }
@@ -318,6 +326,8 @@ export class FakeConn {
     const box = this.selected();
     const maxUid = box.messages.at(-1)?.uid ?? 0;
     this.server.log.push(`search ${box.path} ${JSON.stringify(query)}`);
+    if (query.gmraw !== undefined && this.server.failGmraw === "refuse") throw Object.assign(new Error("Command failed"), { responseStatus: "BAD", responseText: "Could not parse command" });
+    if (query.gmraw !== undefined && this.server.failGmraw === "drop") throw Object.assign(new Error("Socket timeout"), { code: "ETIMEDOUT" });
     return box.messages.filter((m) => this.matches(m, query, maxUid)).map((m) => m.uid);
   }
 
@@ -353,7 +363,7 @@ export class FakeConn {
     if (!opts.uid) throw new Error("expected UID mode");
     const uidMap = new Map<number, number>();
     for (const m of this.targets(box, uids)) {
-      uidMap.set(m.uid, this.server.deliver(destination, m.source, { flags: [...m.flags], labels: m.labels && [...m.labels], threadId: m.threadId, date: m.internalDate }));
+      uidMap.set(m.uid, this.server.deliver(destination, m.source, { flags: [...m.flags], labels: m.labels && [...m.labels], threadId: m.threadId, date: m.internalDate, category: m.gmCategory }));
       this.server.expunge(box.path, m.uid);
     }
     this.server.log.push(`move ${box.path} -> ${destination} uids=${uids.join(",")}`);

@@ -64,8 +64,17 @@ export interface IncomingMessage {
   /** User labels/categories. System folders belong in `folders`. */
   labels?: { remoteId: string; name: string; color?: string }[];
   listUnsubscribe?: string;
+  /** The List-Id, lower case and without brackets. */
+  listId?: string;
   /** Sent by a mailing list or automated system (List-Id, Precedence: bulk, Auto-Submitted). */
   bulk?: boolean;
+  /** The provider's own sorting: Gmail's personal, promotions, social, updates or forums; Outlook's personal (Focused) or other. */
+  providerCategory?: string;
+  /**
+   * The provider's category will follow as a flag update (`tabLookedUp`). Until it does the message is stored as not yet sorted
+   * (headers_version 0), so a restart that loses the pending lookup is made good by the one-time re-sort.
+   */
+  tabPending?: boolean;
   /** True when the account owner sent it. */
   outgoing?: boolean;
   attachments: IncomingAttachment[];
@@ -78,6 +87,10 @@ export interface FlagUpdate {
   starred?: boolean;
   folders?: Partial<Folders>;
   labels?: { remoteId: string; name: string }[];
+  /** The provider moved the message to another category (null: it has none now). */
+  providerCategory?: string | null;
+  /** The category lookup that `tabPending` waited for has been answered (with `providerCategory`, or none): the message is sorted. */
+  tabLookedUp?: boolean;
 }
 
 export interface SyncPage {
@@ -115,6 +128,14 @@ export interface FullBody {
   text: string;
   html?: string;
   attachments: IncomingAttachment[];
+}
+
+/** What the one-time re-sort asks a provider for again: the list headers of an old message and the provider's category for it. */
+export interface SortingHints {
+  listUnsubscribe?: string;
+  listId?: string;
+  bulk: boolean;
+  providerCategory?: string;
 }
 
 export interface ThreadRef {
@@ -208,6 +229,12 @@ export interface MailProvider {
    * `next` continues the search and is opaque. Throws when the provider can't answer; the caller reports it per account.
    */
   search?(query: ProviderQuery, opts: { limit: number; pageToken?: string }): Promise<{ messages: IncomingMessage[]; next?: string }>;
+  /**
+   * The List-Unsubscribe, List-Id, Precedence and Auto-Submitted headers of messages stored before Slipstream kept them, and the
+   * provider's category for each, keyed by remote id. Headers only, never a body. A message the provider can't return is left out;
+   * a failure of the whole request throws.
+   */
+  fetchSortingHints?(refs: { remoteId: string; messageIdHeader?: string | null }[]): Promise<Map<string, SortingHints>>;
   /** The account's send-as aliases (Gmail). Throws when the provider can't say; callers keep what they have. */
   listIdentities?(): Promise<ProviderIdentity[]>;
   /** Rename a label at the provider (labels whose remoteId is still a local "name:" placeholder are skipped). */

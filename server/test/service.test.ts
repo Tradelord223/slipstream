@@ -667,11 +667,13 @@ describe("installing, uninstalling and checking the service", () => {
       assert.ok(existsSync(dataDir), "the mail stays");
       assert.ok(m.calls.includes(platform === "darwin" ? "launchctl bootout gui/501/com.slipstream-mail.4391" : "systemctl --user disable --now slipstream-4391.service"), m.calls.join("\n"));
       assert.match(lines.join("\n"), /no longer starts at login/);
+      assert.match(lines.join("\n"), /Run `slipstream connect claude` \(or `codex`\) again/, "assistants connected to the removed copy are told to connect again");
 
       const again = setup(platform, { run: fakeMachine().run });
       const spare = aCopy(again.dataDir, serviceLabel(4391));
       uninstallService(again.options);
       assert.match(again.lines.join("\n"), /wasn't set to start at login/);
+      assert.doesNotMatch(again.lines.join("\n"), /connect claude/, "nothing was removed, so nothing to reconnect");
       assert.ok(existsSync(spare), "a copy is only removed along with the service that used it");
     }
   });

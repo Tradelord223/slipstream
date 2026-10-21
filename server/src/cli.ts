@@ -12,7 +12,7 @@ import { loadConfig, readConfig } from "./config.ts";
 import { Db } from "./db/index.ts";
 import { formatReport, probeHealth, runDoctor } from "./doctor.ts";
 import { bridgeCli } from "./lib/bridge.ts";
-import { installService, serviceStatus, uninstallService } from "./lib/service.ts";
+import { installedServiceBin, installService, serviceStatus, uninstallService } from "./lib/service.ts";
 
 /**
  * The command line and the stdio MCP bridge. Both talk to a running Slipstream over its agent API,
@@ -124,7 +124,10 @@ async function runConnect(args: string[]) {
   const flags = args.slice(1);
   if (!target || flags.some((f) => f !== "--run")) throw new Error(`Usage: ${self} connect <claude|codex> [--run]`);
   const assistant = ASSISTANTS[target];
-  const cli = bridgeCli(fileURLToPath(import.meta.url), process.execPath);
+  // With Slipstream set to start at login, point at the service's own copy: npx's cache is cleared and needs the network.
+  const service = installedServiceBin({ port: readConfig().port });
+  const cli = bridgeCli(service ?? fileURLToPath(import.meta.url), process.execPath);
+  if (service) console.error(`Using the copy of Slipstream that starts at login (${service}), so ${assistant.name} keeps working offline.`);
   const command = assistant.command(cli);
   if (!flags.includes("--run")) {
     console.log(command);

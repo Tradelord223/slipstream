@@ -27,7 +27,7 @@ export function joinNames(names: string[]): string {
 
 /** Operators a provider can run for itself; the server makes the real split, this only spares a pointless wait. */
 const SENT_KEYS = new Set(["from", "to", "subject", "after", "before", "newer", "older", "since", "until", "newer_than", "older_than"]);
-const LOCAL_KEYS = new Set(["cc", "label", "category", "is", "in", "filename", "account"]);
+const LOCAL_KEYS = new Set(["cc", "label", "category", "is", "in", "filename", "account", "domain", "list"]);
 
 /** Whether a search has free words or an operator that can go to the provider. */
 export function sendsToProvider(q: string): boolean {

@@ -29,6 +29,18 @@ function listHeaders(parsed: ParsedMail): { unsubscribe?: { url?: string; mail?:
   return (parsed.headers.get("list") ?? {}) as { unsubscribe?: { url?: string; mail?: string }; id?: unknown };
 }
 
+/**
+ * The List-Id as lower case text without brackets: `<Dev.Lists.Example.org>` and a bare one both give the same id. The sender
+ * writes it and searches are built from it, so anything but letters, digits and . - _ + is not a list id at all.
+ */
+function listId(parsed: ParsedMail): string | undefined {
+  const id = listHeaders(parsed).id as { id?: unknown; name?: unknown } | undefined;
+  // With a display name mailparser files the id under `id`; a lone <id> or bare text lands under `name`.
+  const raw = typeof id?.id === "string" ? id.id : typeof id?.name === "string" ? id.name : "";
+  const clean = raw.replace(/[<>\s]/g, "").toLowerCase();
+  return /^[a-z0-9._+-]+$/.test(clean) ? clean : undefined;
+}
+
 function listUnsubscribe(parsed: ParsedMail): string | undefined {
   const obj = listHeaders(parsed).unsubscribe;
   if (!obj) return undefined;
@@ -145,6 +157,7 @@ function toIncoming(parsed: ParsedMail, opts: ParseOptions): IncomingMessage {
     folders: { inbox: false, sent: false, trash: false, spam: false, ...opts.folders },
     labels: opts.labels,
     listUnsubscribe: listUnsubscribe(parsed),
+    listId: listId(parsed),
     bulk,
     outgoing: self ? from.email === self : undefined,
     attachments: parsed.attachments.map((a, i) => ({

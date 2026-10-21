@@ -2,6 +2,7 @@ import { logoDomain } from "./logos.ts";
 import { z } from "zod";
 import { HttpError } from "../auth/users.ts";
 import type { AppContext } from "../context.ts";
+import { reasonText } from "./classify.ts";
 import { compile } from "./query.ts";
 import { maskCodes, type Signal } from "./signals.ts";
 
@@ -16,6 +17,8 @@ export interface SplitRow {
   query: string;
   position: number;
   builtin: number;
+  hidden: number;
+  hide_when_empty: number;
 }
 
 export interface ThreadListRow {
@@ -34,6 +37,8 @@ export interface ThreadListRow {
   reminded_at: number | null;
   follow_up_at: number | null;
   category: string;
+  category_reason: string | null;
+  category_source: "gmail" | "outlook" | "mail";
   in_inbox: number;
   in_trash: number;
   signal: string | null;
@@ -42,8 +47,10 @@ export interface ThreadListRow {
 }
 
 export const LIST_COLUMNS = `t.id, t.account_id, t.subject, t.snippet, t.participants, t.last_message_at, t.sort_at, t.message_count,
-  t.unread_count, t.starred, t.has_attachments, t.snoozed_until, t.reminded_at, t.follow_up_at, t.category, t.in_inbox, t.in_trash,
+  t.unread_count, t.starred, t.has_attachments, t.snoozed_until, t.reminded_at, t.follow_up_at, t.category, t.category_reason, t.in_inbox, t.in_trash,
   t.signal, t.signal_at,
+  (SELECT CASE WHEN a.provider = 'gmail' OR a.preset = 'gmail' OR lower(a.email) LIKE '%@gmail.com' OR lower(a.email) LIKE '%@googlemail.com' THEN 'gmail' WHEN a.provider = 'outlook' THEN 'outlook' ELSE 'mail' END
+     FROM accounts a WHERE a.id = t.account_id) AS category_source,
   (SELECT group_concat(l.name, char(31)) FROM thread_labels tl JOIN labels l ON l.id = tl.label_id WHERE tl.thread_id = t.id) AS labels`;
 
 export function shapeRow(r: ThreadListRow) {
@@ -68,6 +75,9 @@ export function shapeRow(r: ThreadListRow) {
     remindedAt: r.reminded_at,
     followUpAt: r.follow_up_at,
     category: r.category,
+    // Why it is in that category: a short code, and the sentence to show. Null for mail that hasn't been sorted since the codes began.
+    categoryReasonCode: r.category_reason,
+    categoryReason: reasonText(r.category_reason, r.category_source),
     inInbox: Boolean(r.in_inbox),
     inTrash: Boolean(r.in_trash),
     labels: r.labels ? r.labels.split("\u001f") : [],
@@ -76,7 +86,7 @@ export function shapeRow(r: ThreadListRow) {
     signalDetail: detail,
     signals,
     // Where /api/logos can find a company mark for this row; people never get one.
-    logoDomain: r.category !== "important" && participants[0] ? logoDomain(participants[0].email) : null,
+    logoDomain: r.category !== "people" && participants[0] ? logoDomain(participants[0].email) : null,
   };
 }
 
@@ -106,7 +116,7 @@ export function threadsById(
   return rows.map(shapeRow).map((r) => (opts.hideCodes ? hideRowCodes(r) : r));
 }
 
-/** WHERE clause for a split: its own query, scoped to the inbox, minus custom splits for the built-ins. */
+/** WHERE clause for a split: its own query, scoped to the inbox, minus the custom splits that are showing, for the built-ins. */
 export function splitWhere(split: SplitRow, all: SplitRow[], now: number, opts: { hideCodes?: boolean } = {}): { where: string; params: (string | number)[] } {
   const own = compile(split.query, now, { agent: opts.hideCodes });
   const parts = [own.where];
@@ -114,7 +124,8 @@ export function splitWhere(split: SplitRow, all: SplitRow[], now: number, opts: 
   if (!own.scoped) parts.push("t.in_inbox = 1");
   if (split.builtin) {
     for (const s of all) {
-      if (s.builtin) continue;
+      // A hidden tab doesn't take mail away from the ones that are showing.
+      if (s.builtin || s.hidden) continue;
       const other = compile(s.query, now, { agent: opts.hideCodes });
       parts.push(`NOT (${other.where})`);
       params.push(...other.params);
@@ -232,11 +243,13 @@ export function getThread(ctx: AppContext, userId: string, id: string, opts: { h
       list_unsubscribe: string | null;
       message_id_header: string | null;
       is_bulk: number;
+      list_id: string | null;
+      sender_domain: string | null;
       signals: string | null;
       body_state: string;
     }>(
       `SELECT id, from_name, from_email, to_json, cc_json, bcc_json, reply_to, subject, sent_at, snippet, body_text, body_html,
-              unread, outgoing, list_unsubscribe, message_id_header, is_bulk, signals, body_state
+              unread, outgoing, list_unsubscribe, message_id_header, is_bulk, list_id, sender_domain, signals, body_state
        FROM messages WHERE thread_id = ? ORDER BY sent_at`,
       id,
     )
@@ -258,6 +271,8 @@ export function getThread(ctx: AppContext, userId: string, id: string, opts: { h
       outgoing: Boolean(m.outgoing),
       canUnsubscribe: Boolean(m.list_unsubscribe),
       isBulk: Boolean(m.is_bulk),
+      listId: m.list_id,
+      senderDomain: m.sender_domain || null,
       logoDomain: m.is_bulk && !m.outgoing ? logoDomain(m.from_email) : null,
       signals: m.signals ? (JSON.parse(m.signals) as Signal[]) : [],
       attachments: messageAttachments(ctx, m.id),
@@ -269,7 +284,41 @@ export function getThread(ctx: AppContext, userId: string, id: string, opts: { h
     userId,
   );
   const shared = db.get<{ id: string }>("SELECT id FROM shared_threads WHERE source_thread_id = ?", id);
-  return { thread: opts.hideCodes ? hideRowCodes(shapeRow(row)) : shapeRow(row), messages, draftId: draft?.id ?? null, sharedId: shared?.id ?? null };
+  return {
+    thread: opts.hideCodes ? hideRowCodes(shapeRow(row)) : shapeRow(row),
+    messages,
+    draftId: draft?.id ?? null,
+    sharedId: shared?.id ?? null,
+    sorting: sortingOf(ctx, userId, row, messages),
+  };
+}
+
+/**
+ * What the "why is this here" chip and the move menu need: the category and why, who sent the latest incoming message, its
+ * domain and mailing list (the three things a correction can name), and the correction already in force for them, if any.
+ */
+function sortingOf(
+  ctx: AppContext,
+  userId: string,
+  row: ThreadListRow,
+  messages: { from: { name: string; email: string }; outgoing: boolean; listId: string | null; senderDomain: string | null }[],
+) {
+  const latest = messages.findLast((m) => !m.outgoing) ?? null;
+  const patterns = latest ? [latest.from.email, latest.listId ? `list:${latest.listId}` : "", latest.senderDomain ? `@${latest.senderDomain}` : ""].filter(Boolean) : [];
+  let rule: { id: string; pattern: string; category: string } | null = null;
+  for (const pattern of patterns) {
+    rule = ctx.db.get<{ id: string; pattern: string; category: string }>("SELECT id, pattern, category FROM category_rules WHERE user_id = ? AND pattern = ?", userId, pattern) ?? null;
+    if (rule) break;
+  }
+  return {
+    category: row.category,
+    reason: row.category_reason,
+    reasonText: reasonText(row.category_reason, row.category_source),
+    sender: latest ? { name: latest.from.name, email: latest.from.email } : null,
+    domain: latest?.senderDomain ?? null,
+    listId: latest?.listId ?? null,
+    rule,
+  };
 }
 
 /** A message's attachments as the dashboard lists them. */

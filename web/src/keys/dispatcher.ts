@@ -37,6 +37,8 @@ export function installKeys(): () => void {
     if (!key) return;
 
     const target = e.target;
+    // A dialog that handles its own keys (the move menu, the new-split dialog) keeps them from the mailbox underneath.
+    if (target instanceof Element && target.closest("[data-trap-keys]") && !/(^|\+)(mod|ctrl)\+/.test(key)) return;
     const editable = isEditable(target);
     const scopes = activeScopes(target);
     const inCompose = scopes[0] === "compose";

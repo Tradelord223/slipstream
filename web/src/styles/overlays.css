@@ -322,7 +322,11 @@
   border-color: var(--rose);
   color: var(--rose);
 }
+.toast {
+  max-width: 100%;
+}
 .toast-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -330,6 +334,7 @@
   color: var(--text-3);
 }
 .toast-action {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -343,6 +348,7 @@
   background: var(--accent-soft);
 }
 .toast-x {
+  flex: none;
   display: grid;
   place-items: center;
   width: 24px;
@@ -414,5 +420,17 @@
   }
   .toast {
     min-height: 44px;
+  }
+  /* A longer message wraps instead of pushing Undo off the screen. */
+  .toast-text {
+    white-space: normal;
+    padding: 6px 0;
+  }
+  .toast-action,
+  .toast-x {
+    min-height: 44px;
+  }
+  .toast-x {
+    width: 36px;
   }
 }

@@ -88,6 +88,11 @@ describe("delivery updates", () => {
     const [s] = detect("Your order has shipped", "Order SM-4471 is on its way\nShipping $9.00\nCarrier Tidewell Parcel\nTracking number TWP4471903382\nTotal $161.00");
     assert.deepEqual(s, { kind: "delivery", status: "shipped", tracking: "TWP4471903382", carrier: "Tidewell Parcel" });
   });
+  test("a sale blast that talks about orders arriving is not a delivery", () => {
+    assert.deepEqual(detect("Claim Your 30% Back", "Order today and it's arriving by Friday. Free shipping on every item."), []);
+    // The same words from a person are still read: they are rarely selling.
+    assert.equal(detect("Claim Your 30% Back", "Order today and it's arriving by Friday. Free shipping on every item.", { bulk: false })[0]?.kind, "delivery");
+  });
   test("order numbers are not tracking numbers", () => {
     const [s] = detect("Your order has shipped", "Order #SM-4471 is on its way. Invoice TC-20931.");
     assert.deepEqual(s, { kind: "delivery", status: "shipped" });
@@ -447,7 +452,7 @@ describe("the demo mailbox", () => {
   test("rows name a logo domain for company senders only", async () => {
     const list = (await (await env.api("/api/threads?view=search&q=in:all&limit=500")).json()) as { threads: { category: string; logoDomain: string | null }[] };
     assert.ok(list.threads.some((t) => t.logoDomain === "quarrystonebank.com"));
-    for (const t of list.threads) if (t.category === "important") assert.equal(t.logoDomain, null);
+    for (const t of list.threads) if (t.category === "people") assert.equal(t.logoDomain, null);
   });
 });
 

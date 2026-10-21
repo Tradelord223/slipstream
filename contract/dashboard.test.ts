@@ -21,7 +21,7 @@ describe("reading", () => {
     const b = (await h("/api/bootstrap")).body;
     assert.equal(b.mode, "local");
     assert.ok(b.accounts.length >= 1 && b.accounts[0].email);
-    assert.deepEqual(b.splits.slice(0, 2).map((s: { name: string }) => s.name), ["Important", "Other"]);
+    assert.deepEqual(b.splits.slice(0, 2).map((s: { name: string }) => s.name), ["Important", "Updates"]);
     assert.equal(typeof b.features.undoSendSeconds, "number");
   });
 

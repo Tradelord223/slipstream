@@ -15,6 +15,7 @@ import { newId, SecretBox } from "./lib/crypto.ts";
 import { Triage } from "./mail/actions.ts";
 import { COMPACT_MIN_BYTES, vacuumInBackground } from "./mail/cache.ts";
 import { SenderLogos } from "./mail/logos.ts";
+import { Resorter } from "./mail/resort.ts";
 import { MailStore } from "./mail/store.ts";
 import { SyncEngine } from "./mail/sync.ts";
 import { DEMO_IDENTITY } from "./providers/demo.ts";
@@ -42,6 +43,7 @@ export function createContext(config: Config): AppContext {
   ctx.cloud = new CloudAgent(ctx);
   ctx.autopilot = new Autopilot(ctx);
   ctx.logos = new SenderLogos(ctx);
+  ctx.resort = new Resorter(ctx);
   commands.bind(ctx);
   return ctx;
 }
@@ -161,6 +163,8 @@ export async function start(config = loadConfig()) {
     }
   }, 10_000);
   bundleTimer.unref();
+  // Mail stored before 0.5.0 is sorted again, once, a little at a time.
+  ctx.resort.start();
 
   // Local mode: a loopback listener that only serves MCP + OAuth, for Tailscale Serve/Funnel or a tunnel.
   // The app works without it, so a taken port is a warning, not a reason to stop.
@@ -180,6 +184,7 @@ export async function start(config = loadConfig()) {
     ctx.cloud.close();
     ctx.autopilot.close();
     ctx.logos.close();
+    ctx.resort.stop();
     clearInterval(rulesTimer);
     clearInterval(bundleTimer);
     backfill.abort();

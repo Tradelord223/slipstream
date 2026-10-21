@@ -28,9 +28,9 @@ function nextStep(input: Item[]): Item[] {
         decisions: blocks.map(([, id, category, name, email, subject]) => {
           const first = (name || email!).split(" ")[0];
           const domain = email!.split("@")[1] ?? email;
-          return category === "important"
+          return category === "people"
             ? { threadId: id, action: "keep", needsReply: true, summary: subject, reason: `${first} wrote to you about “${subject}” and is waiting on an answer`, confidence: 0.86 + (subject!.length % 10) / 100 }
-            : { threadId: id, action: "done", priority: "low", summary: subject, reason: `Automated ${category === "news" ? "newsletter" : "notice"} from ${domain}; nothing to do`, confidence: 0.92 };
+            : { threadId: id, action: "done", priority: "low", summary: subject, reason: `Automated ${category === "promotions" ? "newsletter" : "notice"} from ${domain}; nothing to do`, confidence: 0.92 };
         }),
       }),
     ];

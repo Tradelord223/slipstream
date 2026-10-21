@@ -2,14 +2,20 @@
  * Slipstream's search language, shared by search and by splits.
  *
  *   from:ana  to:@acme.com  subject:"q3 plan"  label:clients  has:attachment
- *   is:unread is:starred is:snoozed is:done is:vip is:muted is:important
+ *   is:unread is:starred is:snoozed is:done is:vip is:muted is:important is:unanswered
+ *   is:bulk (a mailing list, or a company's automated mail)  is:noreply (from a no-reply address)
  *   is:code is:delivery (is:package) is:security (is:signin) is:urgent   (anything the latest incoming message is about)
- *   in:inbox|sent|trash|spam|done|snoozed|all   category:news|notification|important|other
+ *   in:inbox|sent|trash|spam|done|snoozed|all   category:people|updates|promotions|social|forums
+ *   (category:important, news, notification and other still work: people, promotions, updates and not people)
+ *   domain:shop.com (the sender's company domain)  list:news.shop.com (a mailing list's List-Id, exactly)
  *   after:2026-01-31  before:2026-03-01  newer:7d  older:2w   account:me@work.com
  *   -from:ana (negation)   a OR b   "exact phrase"   free text (full-text, prefix match)
  *
  * Compiles to a WHERE clause over `threads t`.
  */
+
+import { categoryAlias } from "./classify.ts";
+import { registrableDomain } from "./logos.ts";
 
 export interface Term {
   neg: boolean;
@@ -48,7 +54,7 @@ export function parse(input: string): Clause[] {
 }
 
 const KEYS = new Set([
-  "from", "to", "cc", "subject", "label", "has", "is", "in", "category", "after", "before", "newer", "older", "account", "filename",
+  "from", "to", "cc", "subject", "label", "has", "is", "in", "category", "after", "before", "newer", "older", "account", "filename", "domain", "list",
 ]);
 const ALIASES: Record<string, string> = { newer_than: "newer", older_than: "older", since: "after", until: "before" };
 
@@ -76,6 +82,12 @@ function parseTerm(tok: string): Term | null {
 function unquote(s: string): string {
   return s.startsWith('"') && s.endsWith('"') && s.length >= 2 ? s.slice(1, -1) : s;
 }
+
+/**
+ * `key:"value"` for a value that came from mail (a List-Id, an address, a domain, a label), which anyone can write. Double quotes
+ * are dropped so the value cannot end the quoted term and add search words of its own. web/src/lib/sorting.ts keeps a copy.
+ */
+export const quotedTerm = (key: string, value: string) => `${key}:"${value.replace(/"/g, "")}"`;
 
 export interface Compiled {
   where: string;
@@ -113,6 +125,13 @@ export function parseDate(v: string): number | null {
   if (!m) return null;
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
 }
+
+/**
+ * Addresses that don't take replies, as GLOB patterns on the lower case sender (SQLite has no regular expressions): no-reply@,
+ * noreply2@, do_not_reply+tag@ ... isNoReplyAddress in classify.ts is the exact rule; a digit is followed by anything here,
+ * which only ever lets in an odd address such as noreply1x@.
+ */
+const NO_REPLY_GLOBS = ["noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "do_not_reply"].flatMap((p) => [`${p}@*`, `${p}[0-9]*@*`, `${p}[+._-]*@*`]);
 
 const like = (v: string) => `%${v.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
@@ -204,10 +223,27 @@ function termSql(term: Term, params: (string | number)[], now: number): string |
     case "account":
       params.push(lv);
       return `t.account_id IN (SELECT id FROM accounts WHERE lower(email) = ?)`;
-    case "category":
-      if (lv === "other") return `t.category != 'important'`;
-      params.push(lv);
+    case "category": {
+      const c = categoryAlias(lv);
+      // A word that names no category matches nothing. Dropping the term instead would make `-category:promo` and, through a
+      // built-in tab's NOT(...), a saved split with a typo in it empty every built-in tab.
+      if (!c) return "0";
+      if ("not" in c) {
+        params.push(c.not);
+        return `t.category != ?`;
+      }
+      params.push(c.is);
       return `t.category = ?`;
+    }
+    case "domain": {
+      // Messages keep the registrable domain of their sender (mail.shop.com is shop.com).
+      const host = lv.replace(/^@/, "");
+      params.push(registrableDomain(`x@${host}`) ?? host);
+      return msgExists(`m.sender_domain = ? AND m.outgoing = 0`);
+    }
+    case "list":
+      params.push(lv.replace(/[<>\s]/g, ""));
+      return msgExists(`m.list_id = ?`);
     case "has":
       if (lv === "attachment" || lv === "attachments") return `t.has_attachments = 1`;
       if (lv === "reply" || lv === "replied") return `t.in_sent = 1`;
@@ -221,7 +257,7 @@ function termSql(term: Term, params: (string | number)[], now: number): string |
         case "reminded": return `t.reminded_at IS NOT NULL AND t.in_inbox = 1`;
         case "done": return `t.in_inbox = 0 AND t.in_trash = 0 AND t.in_spam = 0 AND t.snoozed_until IS NULL`;
         case "muted": return `t.muted = 1`;
-        case "important": return `t.category = 'important'`;
+        case "important": return `t.category = 'people'`;
         case "code": return hasSignal("code");
         case "delivery":
         case "package": return hasSignal("delivery");
@@ -231,9 +267,12 @@ function termSql(term: Term, params: (string | number)[], now: number): string |
         case "vip":
           return `EXISTS (SELECT 1 FROM messages m JOIN contacts c ON c.account_id = m.account_id AND c.email = m.from_email
                    WHERE m.thread_id = t.id AND c.vip = 1)`;
-        case "noreply":
         case "unanswered":
           return `t.last_inbound_at IS NOT NULL AND (t.last_outbound_at IS NULL OR t.last_outbound_at < t.last_inbound_at)`;
+        case "bulk": return msgExists(`m.outgoing = 0 AND m.is_bulk = 1`);
+        case "noreply":
+          params.push(...NO_REPLY_GLOBS);
+          return msgExists(`m.outgoing = 0 AND (${NO_REPLY_GLOBS.map(() => "m.from_email GLOB ?").join(" OR ")})`);
         default: return null;
       }
     case "in":

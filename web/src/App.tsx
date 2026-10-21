@@ -10,6 +10,7 @@ import { Logo } from "./components/Icon.tsx";
 import { Rail } from "./components/Rail.tsx";
 import { RemindPopover } from "./components/RemindPopover.tsx";
 import { ShortcutsSheet } from "./components/ShortcutsSheet.tsx";
+import { SortingDialogHost } from "./components/SortingDialogs.tsx";
 import { TipsBar, Toasts } from "./components/Toasts.tsx";
 import { installKeys } from "./keys/dispatcher.ts";
 import { useViewport, useWindowWidth } from "./lib/hooks.ts";
@@ -219,6 +220,7 @@ function Shell() {
       <main className="main">{main}</main>
       <AssistantHost />
       <LabelDialogHost />
+      <SortingDialogHost />
       {accessOpen && cloudStatus?.connected && <CloudAccessDialog status={cloudStatus} onClose={() => assistant.set({ accessOpen: false })} />}
       <ComposerHost />
       <TipsBar />

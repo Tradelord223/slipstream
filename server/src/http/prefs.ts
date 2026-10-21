@@ -4,8 +4,10 @@ import { HttpError } from "../auth/users.ts";
 import type { AppContext, Env } from "../context.ts";
 import { newId } from "../lib/crypto.ts";
 import { sanitizeOutgoingHtml } from "../lib/sanitize.ts";
-import { compile } from "../mail/query.ts";
 import { assistantSetting } from "../agents/assistant.ts";
+import { describeAvailable, describeSplit } from "../mail/describe.ts";
+import { dismissSuggestion } from "../mail/suggest.ts";
+import { createSplit, updateSplit } from "../prefs.ts";
 
 /** Settings the client may read and write. Anything else is rejected. */
 const settingsSchema = z
@@ -34,7 +36,14 @@ const settingsSchema = z
   })
   .partial();
 
-const splitBody = z.object({ name: z.string().trim().min(1).max(60), query: z.string().trim().min(1).max(500) });
+const splitBody = z.object({
+  name: z.string().trim().min(1).max(60),
+  query: z.string().trim().min(1).max(500),
+  hideWhenEmpty: z.boolean().optional(),
+  hidden: z.boolean().optional(),
+});
+/** Any part of a tab; a built-in tab accepts everything but a new query. */
+const splitPatch = splitBody.partial();
 const snippetBody = z.object({
   name: z.string().trim().min(1).max(120),
   subject: z.string().max(998).nullable().optional(),
@@ -88,27 +97,19 @@ export function prefsRoutes(ctx: AppContext) {
   // ---- Splits -------------------------------------------------------------
 
   app.post("/splits", async (c) => {
-    const user = c.get("user");
     const body = splitBody.parse(await c.req.json());
-    if (compile(body.query).where === "1") throw new HttpError(400, "That search doesn't match anything specific");
-    const position = (db.get<{ p: number }>("SELECT coalesce(max(position), -1) AS p FROM splits WHERE user_id = ?", user.id)?.p ?? -1) + 1;
-    const id = newId("spl");
-    db.run("INSERT INTO splits (id, user_id, name, query, position, builtin) VALUES (?,?,?,?,?,0)", id, user.id, body.name, body.query, position);
-    return c.json({ id, name: body.name, query: body.query, builtin: false });
+    return c.json(createSplit(ctx, c.get("user").id, body.name, body.query, body));
   });
 
   app.put("/splits/:id", async (c) => {
-    const user = c.get("user");
-    const body = splitBody.parse(await c.req.json());
-    const res = db.run("UPDATE splits SET name = ?, query = ? WHERE id = ? AND user_id = ? AND builtin = 0", body.name, body.query, c.req.param("id"), user.id);
-    if (res.changes === 0) throw new HttpError(404, "Split not found");
-    return c.json({ ok: true });
+    const body = splitPatch.parse(await c.req.json());
+    return c.json({ ok: true, split: updateSplit(ctx, c.get("user").id, c.req.param("id"), body).split });
   });
 
-  app.delete("/splits/:id", (c) => {
-    const res = db.run("DELETE FROM splits WHERE id = ? AND user_id = ? AND builtin = 0", c.req.param("id"), c.get("user").id);
-    if (res.changes === 0) throw new HttpError(404, "Split not found");
-    return c.json({ ok: true });
+  // Removing a tab goes through the command registry, so it is recorded in Activity and can be undone with its activityId.
+  app.delete("/splits/:id", async (c) => {
+    const res = await ctx.commands.execute(c.get("actor"), "splits.delete", { splitId: c.req.param("id") });
+    return c.json({ ok: true, activityId: res.status === "done" ? res.activityId : null });
   });
 
   app.put("/splits-order", async (c) => {
@@ -116,6 +117,22 @@ export function prefsRoutes(ctx: AppContext) {
     const { ids } = z.object({ ids: z.array(z.string()).max(50) }).parse(await c.req.json());
     db.tx(() => ids.forEach((id, i) => db.run("UPDATE splits SET position = ? WHERE id = ? AND user_id = ?", i, id, user.id)));
     return c.json({ ok: true });
+  });
+
+  /** Not suggesting this one again. The suggestions themselves come from the splits.suggest command. */
+  app.post("/splits/suggestions/dismiss", async (c) => {
+    const { key } = z.object({ key: z.string().trim().min(1).max(400) }).parse(await c.req.json());
+    dismissSuggestion(ctx, c.get("user").id, key);
+    return c.json({ ok: true });
+  });
+
+  /** Whether a model is connected that can turn a description into a search. The box that takes a description is shown only if so. */
+  app.get("/splits/describe", async (c) => c.json(await describeAvailable(ctx, c.get("user").id)));
+
+  /** A description in words as a search, with how many conversations it holds. Saves nothing. */
+  app.post("/splits/describe", async (c) => {
+    const { description } = z.object({ description: z.string().trim().min(3).max(300) }).parse(await c.req.json());
+    return c.json(await describeSplit(ctx, c.get("user").id, description, c.req.raw.signal));
   });
 
   // ---- Snippets (personal, or shared with the workspace) -----------------
